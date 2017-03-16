@@ -1,6 +1,6 @@
 # Some simple testing tasks (sorry, UNIX only).
 
-.install-deps: requirements-dev.txt
+.install-deps: requirements-dev.txt requirements-ci.txt
 	@pip install -U -r requirements-dev.txt
 	@touch .install-deps
 
@@ -10,10 +10,9 @@ isort:
 
 flake: .flake
 
-.flake: .install-deps $(shell find tokio -type f) \
-                      $(shell find tests -type f)
+.flake: .install-deps .build $(shell find tokio -type f) $(shell find tests -type f)
 	@flake8 tokio tests
-	python setup.py check -rms;
+	python setup.py check -rms
 	@if ! isort -c -rc tokio tests; then \
             echo "Import sort errors, run 'make isort' to fix them!!!"; \
             isort --diff -rc tokio tests; \
@@ -21,26 +20,21 @@ flake: .flake
 	fi
 	@touch .flake
 
-
-.develop: .install-deps $(shell find tokio -type f) .flake
+.develop: .install-deps .build $(shell find tokio -type f)
 	@pip install -e .
 	@touch .develop
 
-test: .develop
-	@py.test -q ./tests
+test: .develop .flake
+	@py.test -s -q ./tests
 
-vtest: .develop
+vtest: .develop .flake
 	@py.test -s -v ./tests
 
-cov cover coverage:
-	tox
+build: .build
 
-cov-dev: .develop
-	@py.test --cov=tokio --cov-report=term --cov-report=html tests
-	@echo "open file://`pwd`/coverage/index.html"
-
-build:
+.build: setup.py $(shell find ext -type f)
 	@python setup.py build_rust --inplace --debug
+	@touch .build
 
 clean:
 	@rm -rf `find . -name __pycache__`

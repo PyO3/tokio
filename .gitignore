@@ -42,3 +42,4 @@ virtualenv.py
 .develop
 .gitconfig
 .flake
+.build
