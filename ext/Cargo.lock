@@ -1,0 +1,30 @@
+[root]
+name = "_ext"
+version = "0.1.0"
+dependencies = [
+ "cpython 0.1.0 (git+https://github.com/dgrunwald/rust-cpython.git)",
+]
+
+[[package]]
+name = "cpython"
+version = "0.1.0"
+source = "git+https://github.com/dgrunwald/rust-cpython.git#51f7aba1a43eeb202202a9efb7bbebb3704cd2bc"
+dependencies = [
+ "libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "libc"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "num-traits"
+version = "0.1.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[metadata]
+"checksum cpython 0.1.0 (git+https://github.com/dgrunwald/rust-cpython.git)" = "<none>"
+"checksum libc 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)" = "88ee81885f9f04bff991e306fea7c1c60a5f0f9e409e99f6b40e3311a3363135"
+"checksum num-traits 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)" = "e1cbfa3781f3fe73dc05321bed52a06d2d491eaa764c52335cf4399f046ece99"

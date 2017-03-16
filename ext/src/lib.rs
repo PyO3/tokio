@@ -1,0 +1,28 @@
+#[macro_use] extern crate cpython;
+
+use cpython::{PyObject, PyResult, Python, PyTuple, PyDict};
+
+py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
+    try!(m.add(py, "__doc__", "Asyncio event loop based on tokio"));
+    try!(m.add(py, "run", py_fn!(py, run(*args, **kwargs))));
+    try!(m.add(py, "val", py_fn!(py, val())));
+    Ok(())
+});
+
+fn run(py: Python, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<PyObject> {
+    println!("Rust says: Hello Python!");
+    for arg in args.iter(py) {
+        println!("Rust got {}", arg);
+    }
+    if let Some(kwargs) = kwargs {
+        for (key, val) in kwargs.items(py) {
+            println!("{} = {}", key, val);
+        }
+    }
+    Ok(py.None())
+}
+
+fn val(_: Python) -> PyResult<i32> {
+    Ok(42)
+}
+
