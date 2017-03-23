@@ -67,6 +67,29 @@ py_class!(pub class TokioEventLoop |py| {
     }
 
     //
+    // def call_soon(self, callback, *args):
+    //
+    // Arrange for a callback to be called as soon as possible.
+    //
+    // This operates as a FIFO queue: callbacks are called in the
+    // order in which they are registered.  Each callback will be
+    // called exactly once.
+    //
+    // Any positional arguments after the callback will be passed to
+    // the callback when it is called.
+    //
+    def call_soon(&self, *args, **kwargs) -> PyResult<handle::Handle> {
+        let _ = utils::check_min_length(py, args, 1)?;
+
+        // get params
+        let callback = args.get_item(py, 0);
+
+        handle::create_handle(
+            py, &self.remote(py),
+            callback, PyTuple::new(py, &args.as_slice(py)[1..]))
+    }
+
+    //
     // def call_later(self, delay, callback, *args)
     //
     // Arrange for a callback to be called at a given time.

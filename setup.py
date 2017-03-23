@@ -16,6 +16,7 @@ class PyTest(TestCommand):
         raise SystemExit(errno)
 
 
+setup_requires=['setuptools-rust>=0.4.2']
 install_requires = []
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
@@ -31,6 +32,7 @@ setup(**dict(
         RustExtension('tokio._ext', 'ext/Cargo.toml')],
     install_requires=install_requires,
     tests_require=tests_require,
+    setup_requires=setup_requires,
     include_package_data=True,
     zip_safe=False,
     cmdclass=dict(test=PyTest),
