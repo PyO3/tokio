@@ -20,4 +20,19 @@ def test_basic():
     print(evloop, evloop.time())
     print('starting')
     evloop.run_forever()
+    evloop.close()
+    print('done')
+
+
+def test_call_at():
+    evloop = tokio.new_event_loop()
+    time = evloop.time()
+
+    handle = evloop.call_at(time + 1.0, callback, evloop)
+    evloop.call_later(time + 0.5, cb2, handle, evloop)
+
+    print(evloop, evloop.time())
+    print('starting')
+    evloop.run_forever()
+    evloop.close()
     print('done')

@@ -149,8 +149,8 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def close(&self) -> PyResult<PyObject> {
         if let Ok(running) = self.is_running(py) {
-            if !running {
-                return Err(PyErr::new::<exc::TypeError, _>(
+            if running {
+                return Err(PyErr::new::<exc::RuntimeError, _>(
                     py, PyString::new(py, "Cannot close a running event loop")));
             }
         }
