@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 use cpython::*;
 
@@ -20,6 +22,41 @@ pub fn close_event_loop() {
     });
 }
 
+
+pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
+    let (tx, rx) = mpsc::channel();
+    let (tx_stop, rx_stop) = oneshot::channel::<bool>();
+
+    // start router
+    let _ = thread::Builder::new().name(String::from(name.to_string_lossy(py))).spawn(
+        move || {
+            CORE.with(|cell| {
+                // create tokio core
+                *cell.borrow_mut() = Some(Core::new().unwrap());
+
+                if let Some(ref mut core) = *cell.borrow_mut() {
+                    // send 'remote' to callee for TokioEventLoop
+                    let _ = tx.send(core.remote());
+
+                    // run loop
+                    let _ = core.run(rx_stop);
+                }
+            });
+        }
+    );
+
+    match rx.recv() {
+        Ok(remote) => {
+            TokioEventLoop::create_instance(
+                py, remote, Instant::now(), RefCell::new(Some(tx_stop)))
+        },
+        Err(_) =>
+            Err(PyErr::new::<exc::RuntimeError, _>(
+                py, "Can not create TokioEventLoop".to_py_object(py)))
+    }
+}
+
+
 pub fn run_event_loop(py: Python, event_loop: &TokioEventLoop) -> PyResult<PyObject> {
     CORE.with(|cell| {
         match *cell.borrow_mut() {
@@ -29,6 +66,7 @@ pub fn run_event_loop(py: Python, event_loop: &TokioEventLoop) -> PyResult<PyObj
                 let (tx, rx) = oneshot::channel::<bool>();
 
                 *(event_loop.runner(py)).borrow_mut() = Some(tx);
+
                 let _ = core.run(rx);
             }
             None => ()
@@ -113,7 +151,7 @@ py_class!(pub class TokioEventLoop |py| {
         // get params
         let callback = args.get_item(py, 1);
         let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
-        let when = *self.instant(py) + Duration::from_millis(delay);
+        let when = Duration::from_millis(delay);
 
         handle::create_timer(
             py, &self.remote(py),
@@ -138,7 +176,7 @@ py_class!(pub class TokioEventLoop |py| {
         let time = when - self.instant(py).elapsed();
 
         handle::create_timer(
-            py, &self.remote(py), *self.instant(py) + time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            py, &self.remote(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
     }
 
     //

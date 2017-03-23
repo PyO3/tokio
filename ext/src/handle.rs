@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::time::Instant;
+use std::time::Duration;
 use cpython::*;
 
 use futures::future::*;
@@ -64,7 +64,7 @@ py_class!(pub class TimerHandle |py| {
 });
 
 
-pub fn create_timer(py: Python, remote: &Remote, when: Instant,
+pub fn create_timer(py: Python, remote: &Remote, dur: Duration,
                     callback: PyObject, args: PyTuple) -> PyResult<TimerHandle> {
 
     // python TimerHandle
@@ -75,7 +75,7 @@ pub fn create_timer(py: Python, remote: &Remote, when: Instant,
 
     // start timer
     remote.spawn(move |h| {
-        let fut = Timeout::new_at(when, &h).unwrap().select2(rx).then(move |res| {
+        let fut = Timeout::new(dur, &h).unwrap().select2(rx).then(move |res| {
             // get python GIL
             let gil = Python::acquire_gil();
             let py = gil.python();
@@ -86,7 +86,11 @@ pub fn create_timer(py: Python, remote: &Remote, when: Instant,
             match res {
                 Ok(Either::A(_)) => {
                     // call python callback
-                    let _ = callback.call(py, args, None);
+                    let res = callback.call(py, args, None);
+                    match res {
+                        Err(err) => println!("error {:?}", err),
+                        _ => (),
+                    }
                 },
                 _ => ()
             };
