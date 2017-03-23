@@ -3,6 +3,14 @@ name = "_ext"
 version = "0.1.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
+[dependencies]
+log = "0.3"
+futures="0.1"
+bytes = { git = "https://github.com/carllerche/bytes.git" }
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
+tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
+tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
+
 [dependencies.cpython]
 git = "https://github.com/dgrunwald/rust-cpython.git"
 default-features = false

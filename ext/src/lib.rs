@@ -1,28 +1,19 @@
+extern crate futures;
+extern crate tokio_core;
+#[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
 
-use cpython::{PyObject, PyResult, Python, PyTuple, PyDict};
+mod handle;
+mod utils;
+mod event_loop;
+use event_loop::{TokioEventLoop, new_event_loop, run_event_loop};
+
 
 py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
-    try!(m.add(py, "__doc__", "Asyncio event loop based on tokio"));
-    try!(m.add(py, "run", py_fn!(py, run(*args, **kwargs))));
-    try!(m.add(py, "val", py_fn!(py, val())));
+    m.add(py, "__doc__", "Asyncio event loop based on tokio")?;
+    try!(m.add_class::<TokioEventLoop>(py));
+    m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
+    m.add(py, "run_event_loop", py_fn!(py, run_event_loop(event_loop: &TokioEventLoop)))?;
+
     Ok(())
 });
-
-fn run(py: Python, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<PyObject> {
-    println!("Rust says: Hello Python!");
-    for arg in args.iter(py) {
-        println!("Rust got {}", arg);
-    }
-    if let Some(kwargs) = kwargs {
-        for (key, val) in kwargs.items(py) {
-            println!("{} = {}", key, val);
-        }
-    }
-    Ok(py.None())
-}
-
-fn val(_: Python) -> PyResult<i32> {
-    Ok(42)
-}
-

@@ -30,7 +30,8 @@ test: .develop .flake
 vtest: .develop .flake
 	@py.test -s -v ./tests
 
-build: .build
+build:
+	@python setup.py build_rust --inplace --debug
 
 .build: setup.py $(shell find ext -type f)
 	@python setup.py build_rust --inplace --debug
