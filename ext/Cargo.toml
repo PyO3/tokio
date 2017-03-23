@@ -1,5 +1,5 @@
 [package]
-name = "_ext"
+name = "async_tokio"
 version = "0.1.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
@@ -12,9 +12,5 @@ tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
 
 [dependencies.cpython]
-git = "https://github.com/dgrunwald/rust-cpython.git"
+git = "https://github.com/fafhrd91/rust-cpython.git"
 default-features = false
-
-[lib]
-name = "_ext"
-crate-type = ["cdylib"]
