@@ -21,7 +21,7 @@ tests_require = install_requires + ['pytest', 'pytest-timeout']
 
 
 setup(**dict(
-    name='tokio',
+    name='async-tokio',
     version='0.0.1',
     author='Nikolay Kim',
     author_email='fafhrd91@gmail.com',
