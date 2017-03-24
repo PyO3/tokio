@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use std::cell::RefCell;
 use std::sync::mpsc;
 use std::thread;
@@ -27,7 +29,7 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
     let (tx, rx) = mpsc::channel();
     let (tx_stop, rx_stop) = oneshot::channel::<bool>();
 
-    // start router
+    // start worker thread
     let _ = thread::Builder::new().name(String::from(name.to_string_lossy(py))).spawn(
         move || {
             CORE.with(|cell| {
@@ -46,13 +48,12 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
     );
 
     match rx.recv() {
-        Ok(remote) => {
+        Ok(remote) =>
             TokioEventLoop::create_instance(
-                py, remote, Instant::now(), RefCell::new(Some(tx_stop)))
-        },
+                py, remote, Instant::now(), RefCell::new(Some(tx_stop))),
         Err(_) =>
             Err(PyErr::new::<exc::RuntimeError, _>(
-                py, "Can not create TokioEventLoop".to_py_object(py)))
+                py, "Can not start tokio Core".to_py_object(py)))
     }
 }
 
@@ -94,11 +95,19 @@ py_class!(pub class TokioEventLoop |py| {
     data instant: Instant;
     data runner: RefCell<Option<oneshot::Sender<bool>>>;
 
+    //
+    // Return the time according to the event loop's clock.
+    //
+    // This is a float expressed in seconds since event loop creation.
+    //
     def time(&self) -> PyResult<f64> {
         let time = self.instant(py).elapsed();
         Ok(time.as_secs() as f64 + (time.subsec_nanos() as f64 / 1_000_000.0))
     }
 
+    //
+    // Return the time according to the event loop's clock (milliseconds)
+    //
     def millis(&self) -> PyResult<u64> {
         let time = self.instant(py).elapsed();
         Ok(time.as_secs() * 1000 + (time.subsec_nanos() as u64 / 1_000_000))
@@ -201,8 +210,14 @@ py_class!(pub class TokioEventLoop |py| {
         })
     }
 
-    def is_closed(&self) -> PyResult<PyBool> {
-        Ok(py.True())
+    def is_closed(&self) -> PyResult<bool> {
+        CORE.with(|cell| {
+            if let None = *cell.borrow() {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
     }
 
     //
