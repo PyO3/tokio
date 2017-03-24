@@ -2,11 +2,13 @@ extern crate futures;
 extern crate tokio_core;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
+#[macro_use] extern crate lazy_static;
 
 use cpython::*;
 
 mod handle;
 mod utils;
+mod future;
 mod event_loop;
 pub use event_loop::{TokioEventLoop, new_event_loop, spawn_worker};
 

@@ -2,6 +2,30 @@ use cpython::*;
 use std::time::Duration;
 
 
+#[allow(non_snake_case)]
+pub struct Exceptions {
+    pub CancelledError: PyType,
+    pub InvalidStateError: PyType,
+    pub TimeoutError: PyType,
+}
+
+lazy_static! {
+    pub static ref EXC: Exceptions = {
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        let m = py.import("tokio.exceptions").unwrap();
+        let cancelled = m.get(py, "CancelledError").unwrap().get_type(py);
+        let invalid = m.get(py, "InvalidStateError").unwrap().get_type(py);
+        let timeout = m.get(py, "TimeoutError").unwrap().get_type(py);
+
+        Exceptions {CancelledError:cancelled,
+                    InvalidStateError:invalid,
+                    TimeoutError:timeout}
+    };
+}
+
+
 //
 // Check function arguments length
 //

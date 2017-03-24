@@ -11,6 +11,7 @@ use tokio_core::reactor::{Core, Remote};
 
 use handle;
 use utils;
+use future;
 
 
 thread_local!(
@@ -64,8 +65,8 @@ pub fn run_event_loop(py: Python, event_loop: &TokioEventLoop) -> PyResult<PyObj
             Some(ref mut core) => {
                 println!("Core: {:?}", core);
 
+                // set cancel sender
                 let (tx, rx) = oneshot::channel::<bool>();
-
                 *(event_loop.runner(py)).borrow_mut() = Some(tx);
 
                 let _ = core.run(rx);
@@ -94,6 +95,20 @@ py_class!(pub class TokioEventLoop |py| {
     data remote: Remote;
     data instant: Instant;
     data runner: RefCell<Option<oneshot::Sender<bool>>>;
+
+    //
+    // Create a Future object attached to the loop.
+    //
+    def create_future(&self) -> PyResult<future::Future> {
+        match self.remote(py).handle() {
+            Some(h) => future::create_future(py, h),
+            None =>
+                Err(PyErr::new::<exc::RuntimeError, _>(
+                    py, PyString::new(
+                        py,
+                        "Non-thread-safe operation invoked on an event loop other than the current one"))),
+        }
+    }
 
     //
     // Return the time according to the event loop's clock.
@@ -131,7 +146,7 @@ py_class!(pub class TokioEventLoop |py| {
         // get params
         let callback = args.get_item(py, 0);
 
-        handle::create_handle(
+        handle::call_soon(
             py, &self.remote(py),
             callback, PyTuple::new(py, &args.as_slice(py)[1..]))
     }
@@ -162,7 +177,7 @@ py_class!(pub class TokioEventLoop |py| {
         let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
         let when = Duration::from_millis(delay);
 
-        handle::create_timer(
+        handle::call_later(
             py, &self.remote(py),
             when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
     }
@@ -184,7 +199,7 @@ py_class!(pub class TokioEventLoop |py| {
         let when = utils::parse_seconds(py, "when", args.get_item(py, 0))?;
         let time = when - self.instant(py).elapsed();
 
-        handle::create_timer(
+        handle::call_later(
             py, &self.remote(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
     }
 

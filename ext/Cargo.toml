@@ -5,6 +5,8 @@ authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
 [dependencies]
 log = "0.3"
+dns-lookup = "0.2"
+lazy_static = "0.2"
 futures="0.1"
 bytes = { git = "https://github.com/carllerche/bytes.git" }
 tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
@@ -14,3 +16,6 @@ tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
 [dependencies.cpython]
 git = "https://github.com/fafhrd91/rust-cpython.git"
 default-features = false
+
+[lib]
+crate-type = ["cdylib"]

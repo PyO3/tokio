@@ -17,8 +17,8 @@ py_class!(pub class Handle |py| {
 });
 
 
-pub fn create_handle(py: Python, remote: &Remote,
-                     callback: PyObject, args: PyTuple) -> PyResult<Handle> {
+pub fn call_soon(py: Python, remote: &Remote,
+                 callback: PyObject, args: PyTuple) -> PyResult<Handle> {
     let handle = Handle::create_instance(py, RefCell::new(false))?;
     let handle_ref = handle.clone_ref(py);
 
@@ -64,8 +64,8 @@ py_class!(pub class TimerHandle |py| {
 });
 
 
-pub fn create_timer(py: Python, remote: &Remote, dur: Duration,
-                    callback: PyObject, args: PyTuple) -> PyResult<TimerHandle> {
+pub fn call_later(py: Python, remote: &Remote, dur: Duration,
+                  callback: PyObject, args: PyTuple) -> PyResult<TimerHandle> {
 
     // python TimerHandle
     let (cancel, rx) = oneshot::channel::<()>();
