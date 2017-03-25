@@ -22,7 +22,6 @@ def sleep(delay, result=None, *, loop=None):
         h.cancel()
 
 
-@asyncio.coroutine
 def ensure_future(coro_or_future, *, loop=None):
     """Wrap a coroutine or an awaitable in a future.
 

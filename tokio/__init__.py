@@ -4,7 +4,7 @@ try:
     import asyncio  # noqa
     from . import patch
     patch.patch_asyncio()
-except:
+except ImportError:
     pass
 
 from . import _ext
