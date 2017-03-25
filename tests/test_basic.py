@@ -1,16 +1,17 @@
 from __future__ import print_function
 import asyncio
-import tokio
 import traceback
+
+import tokio
 
 
 def stop_event_loop(name, evloop, *args):
-    print ('stop_event_loop from: %s' % name, evloop, args)
+    print('stop_event_loop from: %s' % name, evloop, args)
     print(evloop.stop())
 
 
 def cb2(name, handle, evloop):
-    print ('callback2: %s' % name, handle, 'running:', evloop.is_running())
+    print('callback2: %s' % name, handle, 'running:', evloop.is_running())
     print(handle.cancel())
     print('callback2: %s' % name, evloop.stop(), evloop.time())
 
@@ -43,9 +44,8 @@ def test_call_at():
 def test_call_soon():
     name = 'test_call_soon'
     evloop = tokio.new_event_loop()
-    time = evloop.time()
 
-    handle = evloop.call_soon(stop_event_loop, name, evloop)
+    evloop.call_soon(stop_event_loop, name, evloop)
 
     print('starting:', name, evloop, evloop.time())
     evloop.run_forever()
@@ -59,7 +59,7 @@ def create_fut(evloop):
 
 
 def cb_fut(name, fut):
-    print (name, fut)
+    print(name, fut)
     fut.set_result(1)
 
 
@@ -69,8 +69,6 @@ def cb_fut_res(fut):
 
 def test_future():
     evloop = tokio.new_event_loop()
-    time = evloop.time()
-
     evloop.call_later(0.1, create_fut, evloop)
     evloop.call_later(2.0, stop_event_loop, 'test_future', evloop)
 
@@ -98,17 +96,14 @@ def test_future_exc():
         evloop.call_later(0.5, cb_fut, fut)
 
     def cb_fut(fut):
-        print (name, fut)
+        print(name, fut)
         fut.set_result(1)
 
     def cb_fut_res(fut):
         print('future completed:', repr(fut.exception()))
         fut.result()
 
-
     evloop = tokio.new_event_loop()
-    time = evloop.time()
-
     evloop.call_later(0.01, create_fut, evloop)
     evloop.call_later(2.0, stop_event_loop, name, evloop)
 
@@ -122,7 +117,6 @@ def test_task():
     name = 'test_task'
     counter = 0
     evloop = tokio.new_event_loop()
-    time = evloop.time()
 
     async def coro():
         nonlocal counter
@@ -131,10 +125,8 @@ def test_task():
             print('coro', counter)
             await asyncio.sleep(0.5, loop=evloop)
 
-
     def start(evloop):
         asyncio.ensure_future(coro(), loop=evloop)
-
 
     evloop.call_later(0.01, start, evloop)
     evloop.call_later(3.0, stop_event_loop, name, evloop)

@@ -11,7 +11,7 @@ isort:
 flake: .flake
 
 .flake: .install-deps .build $(shell find tokio -type f) $(shell find tests -type f)
-	@flake8 tokio tests
+	@flake8 tokio tests  --exclude=./tokio/patch.py
 	python setup.py check -rms
 	@if ! isort -c -rc tokio tests; then \
             echo "Import sort errors, run 'make isort' to fix them!!!"; \
