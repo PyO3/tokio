@@ -34,7 +34,10 @@ pub fn call_soon(py: Python, remote: &Remote,
                 // call python callback
                 let res = callback.call(py, args, None);
                 match res {
-                    Err(err) => println!("error {:?}", err),
+                    Err(err) => {
+                        println!("call_soon {:?}", err);
+                        err.print(py);
+                    },
                     _ => (),
                 }
             }
@@ -88,7 +91,10 @@ pub fn call_later(py: Python, remote: &Remote, dur: Duration,
                     // call python callback
                     let res = callback.call(py, args, None);
                     match res {
-                        Err(err) => println!("error {:?}", err),
+                        Err(err) => {
+                            println!("call_later error {:?}", err);
+                            err.print(py);
+                        },
                         _ => (),
                     }
                 },

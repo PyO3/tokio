@@ -14,7 +14,8 @@ tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 tokio-timer = { git = "https://github.com/tokio-rs/tokio-timer" }
 
 [dependencies.cpython]
-git = "https://github.com/fafhrd91/rust-cpython.git"
+#git = "https://github.com/fafhrd91/rust-cpython.git"
+path = "../../tokio/rust-cpython/"
 default-features = false
 
 [lib]

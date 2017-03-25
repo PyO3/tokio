@@ -105,8 +105,25 @@ py_class!(pub class TokioEventLoop |py| {
             None =>
                 Err(PyErr::new::<exc::RuntimeError, _>(
                     py, PyString::new(
-                        py,
-                        "Non-thread-safe operation invoked on an event loop other than the current one"))),
+                        py, "Non-thread-safe operation invoked on an event loop \
+                             other than the current one"))),
+        }
+    }
+
+    //
+    // Schedule a coroutine object.
+    //
+    // Return a task object.
+    //
+    def create_task(&self, coro: PyObject) -> PyResult<future::Future> {
+        // self._check_closed()
+        match self.remote(py).handle() {
+            Some(h) => future::create_task(py, coro, h),
+            None =>
+                Err(PyErr::new::<exc::RuntimeError, _>(
+                    py, PyString::new(
+                        py, "Non-thread-safe operation invoked on an event loop \
+                             other than the current one"))),
         }
     }
 
