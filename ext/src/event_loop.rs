@@ -71,25 +71,21 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
 
 
 pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
-    CORE.with(|cell| {
+    let check = CORE.with(|cell| {
         match *cell.borrow() {
-            Some(ref core) => {
-                if core.id() != *id {
-                    Some(PyErr::new::<exc::RuntimeError, _>(
-                        py, PyString::new(
-                            py, "Non-thread-safe operation invoked on an event loop \
-                                 other than the current one")))
-                } else {
-                    None
-                }
-            }
-            None =>
-                Some(PyErr::new::<exc::RuntimeError, _>(
-                    py, PyString::new(
-                        py, "Non-thread-safe operation invoked on an event loop \
-                             other than the current one")))
+            None => false,
+            Some(ref core) => return core.id() == *id,
         }
-    })
+    });
+
+    if !check {
+        Some(PyErr::new::<exc::RuntimeError, _>(
+            py, PyString::new(
+                py, "Non-thread-safe operation invoked on an event loop \
+                     other than the current one")))
+    } else {
+        None
+    }
 }
 
 
