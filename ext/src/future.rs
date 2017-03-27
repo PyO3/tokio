@@ -1,15 +1,13 @@
 use std::cell;
 use cpython::*;
 use futures::future::*;
-use tokio_core::reactor::{Handle};
 
-use utils::Classes;
+use utils::{Classes, Handle};
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<Future> {
     Future::create_instance(
-        py,
-        _Handle{h: h},
+        py, h,
         cell::RefCell::new(State::Pending),
         cell::RefCell::new(py.None()),
         cell::RefCell::new(None),
@@ -26,15 +24,8 @@ pub enum State {
 }
 
 
-pub struct _Handle {
-    h: Handle
-}
-
-unsafe impl Send for _Handle {}
-
-
 py_class!(pub class Future |py| {
-    data _loop: _Handle;
+    data _loop: Handle;
     data _state: cell::RefCell<State>;
     data _result: cell::RefCell<PyObject>;
     data _exception: cell::RefCell<Option<PyObject>>;
@@ -156,7 +147,7 @@ py_class!(pub class Future |py| {
                 let fut = self.clone_ref(py);
 
                 // schedule callback
-                self._loop(py).h.spawn_fn(move|| {
+                self._loop(py).spawn_fn(move|| {
                     // get python GIL
                     let gil = Python::acquire_gil();
                     let py = gil.python();
@@ -208,7 +199,7 @@ py_class!(pub class Future |py| {
 
                 if let Some(callbacks) = callbacks {
                     let fut = self.clone_ref(py);
-                    self._loop(py).h.spawn_fn(move|| {
+                    self._loop(py).spawn_fn(move|| {
                         // get python GIL
                         let gil = Python::acquire_gil();
                         let py = gil.python();
@@ -279,7 +270,7 @@ py_class!(pub class Future |py| {
 
                 if let Some(callbacks) = callbacks {
                     let fut = self.clone_ref(py);
-                    self._loop(py).h.spawn_fn(move|| {
+                    self._loop(py).spawn_fn(move|| {
                         // get python GIL
                         let gil = Python::acquire_gil();
                         let py = gil.python();
@@ -355,7 +346,7 @@ py_class!(pub class Future |py| {
                 let rfut = self.clone_ref(py);
 
                 // schedule callback
-                self._loop(py).h.spawn_fn(move|| {
+                self._loop(py).spawn_fn(move|| {
                     // get python GIL
                     let gil = Python::acquire_gil();
                     let py = gil.python();
@@ -449,7 +440,7 @@ fn task_step(py: Python, fut: Future, coro: PyObject, exc: Option<PyObject>) {
             if result == py.None() {
                 // call soon
                 let fut2 = fut.clone_ref(py);
-                fut._loop(py).h.spawn_fn(move|| {
+                fut._loop(py).spawn_fn(move|| {
                     // get python GIL
                     let gil = Python::acquire_gil();
                     let py = gil.python();

@@ -1,8 +1,43 @@
+#![allow(non_upper_case_globals)]
+
 use cpython::*;
-use std::time::Duration;
 use std::os::raw::c_long;
+use std::ops::Deref;
+use std::clone::Clone;
+use std::time::Duration;
+use tokio_core::reactor;
 
 use future::Future;
+
+
+// tokio handle
+#[doc(hidden)]
+pub struct Handle {
+    pub h: reactor::Handle,
+}
+
+unsafe impl Send for Handle {}
+
+impl Handle {
+    pub fn new(h: reactor::Handle) -> Handle {
+        Handle{h: h}
+    }
+}
+
+impl Clone for Handle {
+
+    fn clone(&self) -> Handle {
+        Handle {h: self.h.clone()}
+    }
+}
+
+impl Deref for Handle {
+    type Target = reactor::Handle;
+
+    fn deref(&self) -> &reactor::Handle {
+        &self.h
+    }
+}
 
 
 #[allow(non_snake_case)]

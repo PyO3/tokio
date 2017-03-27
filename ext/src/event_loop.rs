@@ -10,7 +10,7 @@ use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, Remote};
 
 use handle;
-use utils;
+use utils::{self, Handle};
 use future;
 
 
@@ -101,7 +101,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def create_future(&self) -> PyResult<future::Future> {
         match self.remote(py).handle() {
-            Some(h) => future::create_future(py, h),
+            Some(h) => future::create_future(py, Handle::new(h)),
             None =>
                 Err(PyErr::new::<exc::RuntimeError, _>(
                     py, PyString::new(
@@ -118,7 +118,7 @@ py_class!(pub class TokioEventLoop |py| {
     def create_task(&self, coro: PyObject) -> PyResult<future::Future> {
         // self._check_closed()
         match self.remote(py).handle() {
-            Some(h) => future::create_task(py, coro, h),
+            Some(h) => future::create_task(py, coro, Handle::new(h)),
             None =>
                 Err(PyErr::new::<exc::RuntimeError, _>(
                     py, PyString::new(
