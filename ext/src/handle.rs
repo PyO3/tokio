@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 use cpython::*;
 
-use futures::future::*;
+use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::{Remote, Timeout};
 
@@ -17,6 +17,18 @@ py_class!(pub class TokioHandle |py| {
 });
 
 
+py_class!(pub class TokioTimerHandle |py| {
+    data cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
+
+    def cancel(&self) -> PyResult<PyObject> {
+        if let Some(tx) = self.cancel_handle(py).borrow_mut().take() {
+            let _ = tx.send(());
+        }
+        Ok(py.None())
+    }
+});
+
+
 pub fn call_soon(py: Python, remote: &Remote,
                  callback: PyObject, args: PyTuple) -> PyResult<TokioHandle> {
     let handle = TokioHandle::create_instance(py, RefCell::new(false))?;
@@ -24,7 +36,7 @@ pub fn call_soon(py: Python, remote: &Remote,
 
     // schedule work
     remote.spawn(move |_| {
-        let fut = result::<(), ()>(Ok(())).then(move |_| {
+        future::lazy(move || {
             // get python GIL
             let gil = Python::acquire_gil();
             let py = gil.python();
@@ -45,26 +57,12 @@ pub fn call_soon(py: Python, remote: &Remote,
             // drop ref to handle
             handle_ref.release_ref(py);
 
-            ok(())
-        });
-
-        fut
+            future::ok(())
+        })
     });
 
     Ok(handle)
 }
-
-
-py_class!(pub class TokioTimerHandle |py| {
-    data cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
-
-    def cancel(&self) -> PyResult<PyObject> {
-        if let Some(tx) = self.cancel_handle(py).borrow_mut().take() {
-            let _ = tx.send(());
-        }
-        Ok(py.None())
-    }
-});
 
 
 pub fn call_later(py: Python, remote: &Remote, dur: Duration,
@@ -87,7 +85,7 @@ pub fn call_later(py: Python, remote: &Remote, dur: Duration,
             handle_ref.release_ref(py);
 
             match res {
-                Ok(Either::A(_)) => {
+                Ok(future::Either::A(_)) => {
                     // call python callback
                     let res = callback.call(py, args, None);
                     match res {
@@ -101,7 +99,7 @@ pub fn call_later(py: Python, remote: &Remote, dur: Duration,
                 _ => ()
             };
 
-            ok(())
+            future::ok(())
         });
 
         fut

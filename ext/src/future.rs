@@ -302,6 +302,9 @@ py_class!(pub class TokioFuture |py| {
         }
     }
 
+    //
+    // awaitable
+    //
     def __iter__(&self) -> PyResult<PyObject> {
         if let State::Pending = *self._state(py).borrow() {
             Ok(self.clone_ref(py).into_object())
@@ -324,6 +327,22 @@ py_class!(pub class TokioFuture |py| {
         } else {
             self.result(py)
         }
+    }
+
+    //
+    // Python GC support
+    //
+    def __traverse__(&self, visit) {
+        if let Some(ref callbacks) = *self._callbacks(py).borrow() {
+            for callback in callbacks.iter() {
+                visit.call(callback)?;
+            }
+        }
+        Ok(())
+    }
+
+    def __clear__(&self) {
+        let _ = self._callbacks(py).borrow_mut().take();
     }
 
 });
@@ -357,8 +376,8 @@ impl TokioFuture {
             },
         }
     }
-
 }
+
 
 pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {
     let fut = create_future(py, handle.clone())?;

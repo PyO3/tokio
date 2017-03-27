@@ -66,8 +66,6 @@ pub fn run_event_loop(py: Python, event_loop: &TokioEventLoop) -> PyResult<PyObj
     CORE.with(|cell| {
         match *cell.borrow_mut() {
             Some(ref mut core) => {
-                println!("Core: {:?}", core);
-
                 // set cancel sender
                 let (tx, rx) = oneshot::channel::<bool>();
                 *(event_loop.runner(py)).borrow_mut() = Some(tx);
