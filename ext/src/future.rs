@@ -5,8 +5,8 @@ use futures::future::*;
 use utils::{Classes, Handle};
 
 
-pub fn create_future(py: Python, h: Handle) -> PyResult<Future> {
-    Future::create_instance(
+pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
+    TokioFuture::create_instance(
         py, h,
         cell::RefCell::new(State::Pending),
         cell::RefCell::new(py.None()),
@@ -24,7 +24,7 @@ pub enum State {
 }
 
 
-py_class!(pub class Future |py| {
+py_class!(pub class TokioFuture |py| {
     data _loop: Handle;
     data _state: cell::RefCell<State>;
     data _result: cell::RefCell<PyObject>;
@@ -326,9 +326,9 @@ py_class!(pub class Future |py| {
     //
 
     // coroutines related to tasks
-    data _coroutines: cell::RefCell<Option<Vec<(Future, PyObject)>>>;
+    data _coroutines: cell::RefCell<Option<Vec<(TokioFuture, PyObject)>>>;
 
-    def add_task_callback(&self, fut: Future, coro: PyObject) -> PyResult<PyObject> {
+    def add_task_callback(&self, fut: TokioFuture, coro: PyObject) -> PyResult<PyObject> {
         let co = coro.clone_ref(py);
 
         match *self._state(py).borrow() {
@@ -365,7 +365,7 @@ py_class!(pub class Future |py| {
 });
 
 
-pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Future> {
+pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {
     let fut = create_future(py, handle.clone())?;
 
     // schedule task
@@ -386,7 +386,7 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Futur
 }
 
 
-fn wakeup_task(py: Python, fut: Future, coro: PyObject, rfut: Future) {
+fn wakeup_task(py: Python, fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
     if let Err(ref mut err) = rfut.result(py) {
         task_step(py, fut, coro, Some(err.instance(py)))
     } else {
@@ -397,7 +397,7 @@ fn wakeup_task(py: Python, fut: Future, coro: PyObject, rfut: Future) {
 //
 // execute task step
 //
-fn task_step(py: Python, fut: Future, coro: PyObject, exc: Option<PyObject>) {
+fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>) {
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
         Some(exc) => coro.call_method(
@@ -451,7 +451,7 @@ fn task_step(py: Python, fut: Future, coro: PyObject, exc: Option<PyObject>) {
                     ok(())
                 });
             }
-            else if let Ok(res) = Future::downcast_from(py, result) {
+            else if let Ok(res) = TokioFuture::downcast_from(py, result) {
                 // schedule wakeup on done
                 let _ = res.add_task_callback(py, fut, coro);
 

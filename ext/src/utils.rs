@@ -7,7 +7,7 @@ use std::clone::Clone;
 use std::time::Duration;
 use tokio_core::reactor;
 
-use future::Future;
+use future::TokioFuture;
 
 
 // tokio handle
@@ -64,7 +64,7 @@ lazy_static! {
         if let Ok(asyncio) = py.import("asyncio") {
             WorkingClasses {
                 // asyncio types
-                Future: py.get_type::<Future>(),
+                Future: py.get_type::<TokioFuture>(),
 
                 CancelledError: PyType::extract(
                     py, &asyncio.get(py, "CancelledError").unwrap()).unwrap(),
@@ -84,7 +84,7 @@ lazy_static! {
         } else {
             WorkingClasses {
                 // asyncio types
-                Future: py.get_type::<Future>(),
+                Future: py.get_type::<TokioFuture>(),
 
                 CancelledError: PyErr::new_type(
                     py, "tokio.CancelledError", Some(exception.clone_ref(py)), None),

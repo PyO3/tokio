@@ -10,8 +10,8 @@ use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, Remote};
 
 use handle;
-use utils::{self, Handle};
 use future;
+use utils::{self, Handle};
 
 
 thread_local!(
@@ -99,7 +99,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Create a Future object attached to the loop.
     //
-    def create_future(&self) -> PyResult<future::Future> {
+    def create_future(&self) -> PyResult<future::TokioFuture> {
         match self.remote(py).handle() {
             Some(h) => future::create_future(py, Handle::new(h)),
             None =>
@@ -115,7 +115,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return a task object.
     //
-    def create_task(&self, coro: PyObject) -> PyResult<future::Future> {
+    def create_task(&self, coro: PyObject) -> PyResult<future::TokioFuture> {
         // self._check_closed()
         match self.remote(py).handle() {
             Some(h) => future::create_task(py, coro, Handle::new(h)),
@@ -157,7 +157,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_soon(&self, *args, **kwargs) -> PyResult<handle::Handle> {
+    def call_soon(&self, *args, **kwargs) -> PyResult<handle::TokioHandle> {
         let _ = utils::check_min_length(py, args, 1)?;
 
         // get params
@@ -186,7 +186,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_later(&self, *args, **kwargs) -> PyResult<handle::TimerHandle> {
+    def call_later(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
         let _ = utils::check_min_length(py, args, 2)?;
 
         // get params
@@ -206,7 +206,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Absolute time corresponds to the event loop's time() method.
     //
-    def call_at(&self, *args, **kwargs) -> PyResult<handle::TimerHandle> {
+    def call_at(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
         let _ = utils::check_min_length(py, args, 2)?;
 
         // get params

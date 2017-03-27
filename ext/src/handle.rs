@@ -7,7 +7,7 @@ use futures::sync::oneshot;
 use tokio_core::reactor::{Remote, Timeout};
 
 
-py_class!(pub class Handle |py| {
+py_class!(pub class TokioHandle |py| {
     data cancelled: RefCell<bool>;
 
     def cancel(&self) -> PyResult<PyObject> {
@@ -18,8 +18,8 @@ py_class!(pub class Handle |py| {
 
 
 pub fn call_soon(py: Python, remote: &Remote,
-                 callback: PyObject, args: PyTuple) -> PyResult<Handle> {
-    let handle = Handle::create_instance(py, RefCell::new(false))?;
+                 callback: PyObject, args: PyTuple) -> PyResult<TokioHandle> {
+    let handle = TokioHandle::create_instance(py, RefCell::new(false))?;
     let handle_ref = handle.clone_ref(py);
 
     // schedule work
@@ -55,7 +55,7 @@ pub fn call_soon(py: Python, remote: &Remote,
 }
 
 
-py_class!(pub class TimerHandle |py| {
+py_class!(pub class TokioTimerHandle |py| {
     data cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
 
     def cancel(&self) -> PyResult<PyObject> {
@@ -68,12 +68,12 @@ py_class!(pub class TimerHandle |py| {
 
 
 pub fn call_later(py: Python, remote: &Remote, dur: Duration,
-                  callback: PyObject, args: PyTuple) -> PyResult<TimerHandle> {
+                  callback: PyObject, args: PyTuple) -> PyResult<TokioTimerHandle> {
 
     // python TimerHandle
     let (cancel, rx) = oneshot::channel::<()>();
 
-    let handle = TimerHandle::create_instance(py, RefCell::new(Some(cancel)))?;
+    let handle = TokioTimerHandle::create_instance(py, RefCell::new(Some(cancel)))?;
     let handle_ref = handle.clone_ref(py);
 
     // start timer
