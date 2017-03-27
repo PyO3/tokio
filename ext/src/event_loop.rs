@@ -1,6 +1,6 @@
 #![allow(unused_variables)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,7 +10,7 @@ use boxfnonce::SendBoxFnOnce;
 
 use futures::future::*;
 use futures::sync::{oneshot};
-use tokio_core::reactor::{Core, Remote};
+use tokio_core::reactor::{Core, CoreId};
 
 use handle;
 use future;
@@ -22,14 +22,7 @@ thread_local!(
 );
 
 
-pub fn close_event_loop() {
-    CORE.with(|cell| {
-        cell.borrow_mut().take()
-    });
-}
-
-
-pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
+pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
     let (tx, rx) = mpsc::channel();
     let (tx_stop, rx_stop) = oneshot::channel::<bool>();
 
@@ -42,7 +35,7 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
 
                 if let Some(ref mut core) = *cell.borrow_mut() {
                     // send 'remote' to callee for TokioEventLoop
-                    let _ = tx.send((core.remote(), Handle::new(core.handle())));
+                    let _ = tx.send((core.id(), Handle::new(core.handle())));
 
                     // run loop
                     let _ = core.run(rx_stop);
@@ -52,30 +45,14 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
     );
 
     match rx.recv() {
-        Ok((remote, handle)) =>
+        Ok((id, handle)) =>
             TokioEventLoop::create_instance(
-                py, remote, handle, Instant::now(), RefCell::new(Some(tx_stop))),
+                py, id, handle, Instant::now(),
+                RefCell::new(Some(tx_stop)), Cell::new(false)),
         Err(_) =>
             Err(PyErr::new::<exc::RuntimeError, _>(
                 py, "Can not start tokio Core".to_py_object(py)))
     }
-}
-
-
-pub fn run_event_loop(py: Python, event_loop: &TokioEventLoop) -> PyResult<PyObject> {
-    CORE.with(|cell| {
-        match *cell.borrow_mut() {
-            Some(ref mut core) => {
-                // set cancel sender
-                let (tx, rx) = oneshot::channel::<bool>();
-                *(event_loop.runner(py)).borrow_mut() = Some(tx);
-
-                let _ = core.run(rx);
-            }
-            None => ()
-        };
-        Ok(py.None())
-    })
 }
 
 
@@ -84,7 +61,8 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
         let core = Core::new().unwrap();
 
         let evloop = TokioEventLoop::create_instance(
-            py, core.remote(), Handle::new(core.handle()), Instant::now(), RefCell::new(None));
+            py, core.id(),
+            Handle::new(core.handle()), Instant::now(), RefCell::new(None), Cell::new(false));
 
         *cell.borrow_mut() = Some(core);
         evloop
@@ -92,26 +70,47 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
 }
 
 
+pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
+    CORE.with(|cell| {
+        match *cell.borrow() {
+            Some(ref core) => {
+                if core.id() != *id {
+                    Some(PyErr::new::<exc::RuntimeError, _>(
+                        py, PyString::new(
+                            py, "Non-thread-safe operation invoked on an event loop \
+                                 other than the current one")))
+                } else {
+                    None
+                }
+            }
+            None =>
+                Some(PyErr::new::<exc::RuntimeError, _>(
+                    py, PyString::new(
+                        py, "Non-thread-safe operation invoked on an event loop \
+                             other than the current one")))
+        }
+    })
+}
+
+
 py_class!(pub class TokioEventLoop |py| {
-    data remote: Remote;
+    data id: CoreId;
     data handle: Handle;
     data instant: Instant;
     data runner: RefCell<Option<oneshot::Sender<bool>>>;
+    data debug: Cell<bool>;
 
     //
     // Create a Future object attached to the loop.
     //
     def create_future(&self) -> PyResult<future::TokioFuture> {
-        future::create_future(py, self.handle(py).clone())
+        if self.debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
 
-        //match self.remote(py).handle() {
-        //    Some(h) => future::create_future(py, Handle::new(h)),
-        //    None =>
-        //        Err(PyErr::new::<exc::RuntimeError, _>(
-        //            py, PyString::new(
-        //                py, "Non-thread-safe operation invoked on an event loop \
-        //                     other than the current one"))),
-        //}
+        future::create_future(py, self.handle(py).clone())
     }
 
     //
@@ -120,17 +119,13 @@ py_class!(pub class TokioEventLoop |py| {
     // Return a task object.
     //
     def create_task(&self, coro: PyObject) -> PyResult<future::TokioFuture> {
-        future::create_task(py, coro, self.handle(py).clone())
+        if self.debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
 
-        // self._check_closed()
-        //match self.remote(py).handle() {
-        //    Some(h) => future::create_task(py, coro, Handle::new(h)),
-        //    None =>
-        //        Err(PyErr::new::<exc::RuntimeError, _>(
-        //            py, PyString::new(
-        //                py, "Non-thread-safe operation invoked on an event loop \
-        //                     other than the current one"))),
-        //}
+        future::create_task(py, coro, self.handle(py).clone())
     }
 
     //
@@ -164,13 +159,19 @@ py_class!(pub class TokioEventLoop |py| {
     // the callback when it is called.
     //
     def call_soon(&self, *args, **kwargs) -> PyResult<handle::TokioHandle> {
+        if self.debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
+
         let _ = utils::check_min_length(py, args, 1)?;
 
         // get params
         let callback = args.get_item(py, 0);
 
         handle::call_soon(
-            py, &self.remote(py),
+            py, &self.handle(py),
             callback, PyTuple::new(py, &args.as_slice(py)[1..]))
     }
 
@@ -193,6 +194,12 @@ py_class!(pub class TokioEventLoop |py| {
     // the callback when it is called.
     //
     def call_later(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+        if self.debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
+
         let _ = utils::check_min_length(py, args, 2)?;
 
         // get params
@@ -201,7 +208,7 @@ py_class!(pub class TokioEventLoop |py| {
         let when = Duration::from_millis(delay);
 
         handle::call_later(
-            py, &self.remote(py),
+            py, &self.handle(py),
             when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
     }
 
@@ -213,6 +220,12 @@ py_class!(pub class TokioEventLoop |py| {
     // Absolute time corresponds to the event loop's time() method.
     //
     def call_at(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+        if self.debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
+
         let _ = utils::check_min_length(py, args, 2)?;
 
         // get params
@@ -223,7 +236,7 @@ py_class!(pub class TokioEventLoop |py| {
         let time = when - self.instant(py).elapsed();
 
         handle::call_later(
-            py, &self.remote(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            py, &self.handle(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
     }
 
     //
@@ -268,9 +281,11 @@ py_class!(pub class TokioEventLoop |py| {
                     py, PyString::new(py, "Cannot close a running event loop")));
             }
         }
-        debug!("Close {:?}", self.remote(py).id());
 
-        close_event_loop();
+        CORE.with(|cell| {
+            cell.borrow_mut().take()
+        });
+
         Ok(py.None())
     }
 
@@ -278,7 +293,20 @@ py_class!(pub class TokioEventLoop |py| {
     // Run until stop() is called
     //
     def run_forever(&self) -> PyResult<PyObject> {
-        run_event_loop(py, self)
+        CORE.with(|cell| {
+            match *cell.borrow_mut() {
+                Some(ref mut core) => {
+                    // set cancel sender
+                    let (tx, rx) = oneshot::channel::<bool>();
+                    *(self.runner(py)).borrow_mut() = Some(tx);
+
+                    let _ = core.run(rx);
+
+                    Ok(py.None())
+                }
+                None => Err(utils::no_loop_exc(py)),
+            }
+        })
     }
 
     //
@@ -304,7 +332,7 @@ py_class!(pub class TokioEventLoop |py| {
                                 let _ = done.send(true);
                             }));
 
-                            // set stop fut
+                            // stop fut
                             let (tx, rx) = oneshot::channel::<bool>();
                             *(self.runner(py)).borrow_mut() = Some(tx);
 
@@ -313,15 +341,32 @@ py_class!(pub class TokioEventLoop |py| {
 
                             // cleanup running state
                             let _ = self.stop(py);
+
+                            Ok(py.None())
                         }
-                        None => ()
-                    };
-                    Ok(py.None())
+                        None => Err(utils::no_loop_exc(py)),
+                    }
                 })
             },
             Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(
-                py, PyString::new(py, "TokioFuture is supported"))),
+                py, PyString::new(py, "Only TokioFuture is supported"))),
         }
+    }
+
+
+    //
+    // Event loop debug flag
+    //
+    def get_debug(&self) -> PyResult<bool> {
+        Ok(self.debug(py).get())
+    }
+
+    //
+    // Set event loop debug flag
+    //
+    def set_debug(&self, enabled: bool) -> PyResult<PyObject> {
+        self.debug(py).set(enabled);
+        Ok(py.None())
     }
 
 });

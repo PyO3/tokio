@@ -5,6 +5,7 @@ use std::os::raw::c_long;
 use std::ops::Deref;
 use std::clone::Clone;
 use std::time::Duration;
+use std::thread;
 use tokio_core::reactor;
 
 use future::TokioFuture;
@@ -104,6 +105,15 @@ lazy_static! {
 
         }
     };
+}
+
+
+pub fn no_loop_exc(py: Python) -> PyErr {
+    let cur = thread::current();
+    PyErr::new::<exc::RuntimeError, _>(
+        py,
+        format!("There is no current event loop in thread {}.",
+                cur.name().unwrap_or("unknown")).to_py_object(py))
 }
 
 

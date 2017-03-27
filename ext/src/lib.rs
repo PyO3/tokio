@@ -12,7 +12,7 @@ mod utils;
 mod future;
 mod event_loop;
 mod transport;
-pub use event_loop::{TokioEventLoop, new_event_loop, spawn_worker};
+pub use event_loop::{new_event_loop, spawn_event_loop};
 
 
 py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
@@ -24,12 +24,12 @@ py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
 
 
 pub fn init_tokio_module(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
-    m.add_class::<TokioEventLoop>(py)?;
+    m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<future::TokioFuture>(py)?;
     m.add_class::<handle::TokioHandle>(py)?;
     m.add_class::<handle::TokioTimerHandle>(py)?;
 
-    m.add(py, "spawn_worker", py_fn!(py, spawn_worker(name: &PyString)))?;
+    m.add(py, "spawn_event_loop", py_fn!(py, spawn_event_loop(name: &PyString)))?;
     m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
     Ok(())
 }
