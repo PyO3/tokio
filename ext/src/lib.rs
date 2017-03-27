@@ -1,5 +1,6 @@
 extern crate futures;
 extern crate tokio_core;
+extern crate boxfnonce;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
 #[macro_use] extern crate lazy_static;

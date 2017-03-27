@@ -123,7 +123,7 @@ def test_task():
         while True:
             counter += 1
             print('coro', counter)
-            await asyncio.sleep(0.5, loop=evloop)
+            await asyncio.sleep(0.2, loop=evloop)
 
     def start(evloop):
         asyncio.ensure_future(coro(), loop=evloop)
@@ -134,4 +134,26 @@ def test_task():
     print(evloop, evloop.time())
     print('starting')
     evloop.run_forever()
+    evloop.close()
+
+
+def test_run_until_complete():
+    name = 'test_run_until_complete'
+    counter = 0
+    evloop = tokio.new_event_loop()
+
+    async def coro():
+        nonlocal counter
+        while True:
+            counter += 1
+            if counter > 5:
+                return
+
+            print('%s: iteration' % name, counter)
+            await asyncio.sleep(0.2, loop=evloop)
+
+    task = asyncio.ensure_future(coro(), loop=evloop)
+
+    print('starting', evloop.time())
+    evloop.run_until_complete(task)
     evloop.close()

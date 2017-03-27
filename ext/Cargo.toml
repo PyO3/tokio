@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
 [dependencies]
+boxfnonce = "*"
 log = "0.3"
 dns-lookup = "0.2"
 lazy_static = "0.2"

@@ -2,6 +2,7 @@
 name = "async_tokio"
 version = "0.1.0"
 dependencies = [
+ "boxfnonce 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.4.1 (git+https://github.com/carllerche/bytes.git)",
  "cpython 0.1.0 (git+https://github.com/fafhrd91/rust-cpython.git)",
  "dns-lookup 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -12,6 +13,11 @@ dependencies = [
  "tokio-io 0.1.1 (git+https://github.com/tokio-rs/tokio-io)",
  "tokio-timer 0.1.0 (git+https://github.com/tokio-rs/tokio-timer)",
 ]
+
+[[package]]
+name = "boxfnonce"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "byteorder"
@@ -219,6 +225,7 @@ dependencies = [
 ]
 
 [metadata]
+"checksum boxfnonce 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "8380105befe91099e6f69206164072c05bc92427ff6aa8a5171388317346dd75"
 "checksum byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c40977b0ee6b9885c9013cd41d9feffdd22deb3bb4dc3a71d901cc7a77de18c8"
 "checksum bytes 0.4.1 (git+https://github.com/carllerche/bytes.git)" = "<none>"
 "checksum bytes 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)" = "46112a0060ae15e3a3f9a445428a53e082b91215b744fa27a1948842f4a64b96"

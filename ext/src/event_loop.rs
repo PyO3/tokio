@@ -6,6 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 use cpython::*;
 
+use boxfnonce::SendBoxFnOnce;
+
+use futures::future::*;
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, Remote};
 
@@ -39,7 +42,7 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
 
                 if let Some(ref mut core) = *cell.borrow_mut() {
                     // send 'remote' to callee for TokioEventLoop
-                    let _ = tx.send(core.remote());
+                    let _ = tx.send((core.remote(), Handle::new(core.handle())));
 
                     // run loop
                     let _ = core.run(rx_stop);
@@ -49,9 +52,9 @@ pub fn spawn_worker(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
     );
 
     match rx.recv() {
-        Ok(remote) =>
+        Ok((remote, handle)) =>
             TokioEventLoop::create_instance(
-                py, remote, Instant::now(), RefCell::new(Some(tx_stop))),
+                py, remote, handle, Instant::now(), RefCell::new(Some(tx_stop))),
         Err(_) =>
             Err(PyErr::new::<exc::RuntimeError, _>(
                 py, "Can not start tokio Core".to_py_object(py)))
@@ -83,7 +86,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
         let core = Core::new().unwrap();
 
         let evloop = TokioEventLoop::create_instance(
-            py, core.remote(), Instant::now(), RefCell::new(None));
+            py, core.remote(), Handle::new(core.handle()), Instant::now(), RefCell::new(None));
 
         *cell.borrow_mut() = Some(core);
         evloop
@@ -93,6 +96,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
 
 py_class!(pub class TokioEventLoop |py| {
     data remote: Remote;
+    data handle: Handle;
     data instant: Instant;
     data runner: RefCell<Option<oneshot::Sender<bool>>>;
 
@@ -100,14 +104,16 @@ py_class!(pub class TokioEventLoop |py| {
     // Create a Future object attached to the loop.
     //
     def create_future(&self) -> PyResult<future::TokioFuture> {
-        match self.remote(py).handle() {
-            Some(h) => future::create_future(py, Handle::new(h)),
-            None =>
-                Err(PyErr::new::<exc::RuntimeError, _>(
-                    py, PyString::new(
-                        py, "Non-thread-safe operation invoked on an event loop \
-                             other than the current one"))),
-        }
+        future::create_future(py, self.handle(py).clone())
+
+        //match self.remote(py).handle() {
+        //    Some(h) => future::create_future(py, Handle::new(h)),
+        //    None =>
+        //        Err(PyErr::new::<exc::RuntimeError, _>(
+        //            py, PyString::new(
+        //                py, "Non-thread-safe operation invoked on an event loop \
+        //                     other than the current one"))),
+        //}
     }
 
     //
@@ -116,15 +122,17 @@ py_class!(pub class TokioEventLoop |py| {
     // Return a task object.
     //
     def create_task(&self, coro: PyObject) -> PyResult<future::TokioFuture> {
+        future::create_task(py, coro, self.handle(py).clone())
+
         // self._check_closed()
-        match self.remote(py).handle() {
-            Some(h) => future::create_task(py, coro, Handle::new(h)),
-            None =>
-                Err(PyErr::new::<exc::RuntimeError, _>(
-                    py, PyString::new(
-                        py, "Non-thread-safe operation invoked on an event loop \
-                             other than the current one"))),
-        }
+        //match self.remote(py).handle() {
+        //    Some(h) => future::create_task(py, coro, Handle::new(h)),
+        //    None =>
+        //        Err(PyErr::new::<exc::RuntimeError, _>(
+        //            py, PyString::new(
+        //                py, "Non-thread-safe operation invoked on an event loop \
+        //                     other than the current one"))),
+        //}
     }
 
     //
@@ -275,8 +283,47 @@ py_class!(pub class TokioEventLoop |py| {
         run_event_loop(py, self)
     }
 
-    def run_until_complete(&self) -> PyResult<PyObject> {
-        run_event_loop(py, self)
+    //
+    // Run until the Future is done.
+    //
+    // If the argument is a coroutine, it is wrapped in a Task.
+    //
+    // WARNING: It would be disastrous to call run_until_complete()
+    // with the same coroutine twice -- it would wrap it in two
+    // different Tasks and that can't be good.
+    //
+    // Return the Future's result, or raise its exception.
+    //
+    def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
+        match future::TokioFuture::downcast_from(py, future) {
+            Ok(fut) => {
+                CORE.with(|cell| {
+                    match *cell.borrow_mut() {
+                        Some(ref mut core) => {
+                            // wait for future completion
+                            let (done, done_rx) = oneshot::channel::<bool>();
+                            fut.add_callback(py, SendBoxFnOnce::from(move |fut| {
+                                let _ = done.send(true);
+                            }));
+
+                            // set stop fut
+                            let (tx, rx) = oneshot::channel::<bool>();
+                            *(self.runner(py)).borrow_mut() = Some(tx);
+
+                            // wait for completion
+                            let _ = core.run(rx.select2(done_rx));
+
+                            // cleanup running state
+                            let _ = self.stop(py);
+                        }
+                        None => ()
+                    };
+                    Ok(py.None())
+                })
+            },
+            Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(
+                py, PyString::new(py, "TokioFuture is supported"))),
+        }
     }
 
 });

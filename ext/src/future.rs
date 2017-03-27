@@ -1,6 +1,7 @@
 use std::cell;
 use cpython::*;
 use futures::future::*;
+use boxfnonce::SendBoxFnOnce;
 
 use utils::{Classes, Handle};
 
@@ -23,6 +24,8 @@ pub enum State {
     Finished,
 }
 
+type Callback = SendBoxFnOnce<(TokioFuture,)>;
+
 
 py_class!(pub class TokioFuture |py| {
     data _loop: Handle;
@@ -30,6 +33,9 @@ py_class!(pub class TokioFuture |py| {
     data _result: cell::RefCell<PyObject>;
     data _exception: cell::RefCell<Option<PyObject>>;
     data _callbacks: cell::RefCell<Option<Vec<PyObject>>>;
+
+    // rust callbacks
+    data _rcallbacks: cell::RefCell<Option<Vec<Callback>>>;
 
     //
     // Cancel the future and schedule callbacks.
@@ -195,7 +201,7 @@ py_class!(pub class TokioFuture |py| {
 
                 // schedule callbacks
                 let callbacks = self._callbacks(py).borrow_mut().take();
-                let coroutines = self._coroutines(py).borrow_mut().take();
+                let rcallbacks = self._rcallbacks(py).borrow_mut().take();
 
                 if let Some(callbacks) = callbacks {
                     let fut = self.clone_ref(py);
@@ -218,18 +224,17 @@ py_class!(pub class TokioFuture |py| {
                         }
 
                         // call task callback
-                        if let Some(mut coroutines) = coroutines {
+                        if let Some(mut rcallbacks) = rcallbacks {
                             loop {
-                                match coroutines.pop() {
-                                    Some((task, coro)) =>
-                                        wakeup_task(py, task, coro, fut.clone_ref(py)),
+                                match rcallbacks.pop() {
+                                    Some(cb) => cb.call(fut.clone_ref(py)),
                                     None => break
                                 }
                             }
                         }
 
                         ok(())
-                    })
+                    });
                 }
 
                 //self._schedule_callbacks()
@@ -321,25 +326,24 @@ py_class!(pub class TokioFuture |py| {
         }
     }
 
+});
+
+
+impl TokioFuture {
+
     //
-    //  task scheduling support
+    // Add future completion callback
     //
-
-    // coroutines related to tasks
-    data _coroutines: cell::RefCell<Option<Vec<(TokioFuture, PyObject)>>>;
-
-    def add_task_callback(&self, fut: TokioFuture, coro: PyObject) -> PyResult<PyObject> {
-        let co = coro.clone_ref(py);
-
+    pub fn add_callback(&self, py: Python, cb: Callback) {
         match *self._state(py).borrow() {
             State::Pending => {
                 // add coro, create tasks vector if needed
-                let mut coroutines = self._coroutines(py).borrow_mut();
-                if let None = *coroutines {
-                    *coroutines = Some(Vec::new());
+                let mut callbacks = self._rcallbacks(py).borrow_mut();
+                if let None = *callbacks {
+                    *callbacks = Some(Vec::new());
                 }
-                if let Some(ref mut coroutines) = *coroutines {
-                    coroutines.push((fut, co));
+                if let Some(ref mut callbacks) = *callbacks {
+                    callbacks.push(cb);
                 }
             },
             _ => {
@@ -347,23 +351,14 @@ py_class!(pub class TokioFuture |py| {
 
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
-                    // get python GIL
-                    let gil = Python::acquire_gil();
-                    let py = gil.python();
-
-                    // wakeup task
-                    wakeup_task(py, fut, coro, rfut);
-
+                    cb.call(rfut);
                     ok(())
                 })
             },
         }
-
-        Ok(py.None())
     }
 
-});
-
+}
 
 pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {
     let fut = create_future(py, handle.clone())?;
@@ -386,7 +381,11 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
 }
 
 
-fn wakeup_task(py: Python, fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
+fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
+    // get python GIL
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+
     if let Err(ref mut err) = rfut.result(py) {
         task_step(py, fut, coro, Some(err.instance(py)))
     } else {
@@ -432,9 +431,11 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
                     err.print(py);
                 }
             }
-            // log exception
-            println!("unknown task error {:?}", &err);
-            err.print(py);
+            else {
+                // log exception
+                println!("unknown task error {:?}", &err);
+                err.print(py);
+            }
         },
         Ok(result) => {
             if result == py.None() {
@@ -453,7 +454,9 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
             }
             else if let Ok(res) = TokioFuture::downcast_from(py, result) {
                 // schedule wakeup on done
-                let _ = res.add_task_callback(py, fut, coro);
+                let _ = res.add_callback(py, SendBoxFnOnce::from(move |rfut| {
+                    wakeup_task(fut, coro, rfut);
+                }));
 
                 //if *self._must_cancel(py).borrow() {
                 //    result.call_method(py, "cancel", NoArgs, None);
