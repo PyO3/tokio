@@ -19,7 +19,7 @@
 .noseids
 .tox
 .vimrc
-rust-cpython
+Cargo.lock
 bin
 build
 cover
@@ -28,6 +28,7 @@ develop-eggs
 dist
 docs/_build/
 eggs
+target/
 include/
 lib/
 man/

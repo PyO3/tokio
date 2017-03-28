@@ -112,6 +112,7 @@ impl<S: Stream> Server<S> {
     fn serve(handle: utils::Handle, stream: Incoming,
              factory: PyObject, stop: oneshot::Receiver<()>) {
 
+        let h = handle.clone();
         let srv = Server { stop: stop, stream: stream };
 
         handle.spawn(
