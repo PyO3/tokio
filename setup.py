@@ -17,7 +17,7 @@ class PyTest(TestCommand):
 
 
 setup_requires=['setuptools-rust>=0.4.2']
-install_requires = []
+install_requires = ['aiohttp']
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
 

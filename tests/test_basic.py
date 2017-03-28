@@ -1,6 +1,7 @@
 from __future__ import print_function
 import asyncio
 import traceback
+from aiohttp import web
 
 import tokio
 
@@ -156,4 +157,46 @@ def test_run_until_complete():
 
     print('starting', evloop.time())
     evloop.run_until_complete(task)
+    evloop.close()
+
+
+def test_create_server():
+    name = 'test_create_server'
+    evloop = tokio.new_event_loop()
+
+    async def coro():
+        try:
+            res = evloop.create_server(None, host="127.0.0.1", port=9090)
+            print(res)
+        except:
+            import traceback
+            traceback.print_exc()
+
+        await asyncio.sleep(2, loop=evloop)
+        res.close()
+        await asyncio.sleep(0.1, loop=evloop)
+
+    task = asyncio.ensure_future(coro(), loop=evloop)
+
+    print('starting', evloop.time())
+    evloop.run_until_complete(task)
+    evloop.close()
+
+
+def test_web():
+    name = 'test_web'
+    evloop = tokio.new_event_loop()
+
+    app = web.Application()
+    async def handler(req):
+        return web.Response()
+
+    app.router.add_route('get', '/', handler)
+    handler = app.make_handler(loop=evloop)
+
+    server = evloop.create_server(handler, host="127.0.0.1", port=9090)
+    evloop.call_later(3.0, stop_event_loop, name, evloop)
+
+    print('starting', evloop.time())
+    evloop.run_forever()
     evloop.close()

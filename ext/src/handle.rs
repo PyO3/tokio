@@ -4,7 +4,7 @@ use cpython::*;
 
 use futures::future::{self, Future};
 use futures::sync::oneshot;
-use tokio_core::reactor::{Remote, Timeout};
+use tokio_core::reactor::Timeout;
 
 use utils::Handle;
 

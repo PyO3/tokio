@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals)]
 
 use cpython::*;
+use std::io;
 use std::os::raw::c_long;
 use std::ops::Deref;
 use std::clone::Clone;
@@ -52,6 +53,7 @@ pub struct WorkingClasses {
     pub Exception: PyType,
     pub BaseException: PyType,
     pub StopIteration: PyType,
+    pub OSError: PyType,
 }
 
 lazy_static! {
@@ -81,6 +83,8 @@ lazy_static! {
                     py, &builtins.get(py, "Exception").unwrap()).unwrap(),
                 BaseException: PyType::extract(
                     py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
+                OSError: PyType::extract(
+                    py, &builtins.get(py, "OSError").unwrap()).unwrap(),
             }
         } else {
             WorkingClasses {
@@ -101,6 +105,8 @@ lazy_static! {
                     py, &builtins.get(py, "Exception").unwrap()).unwrap(),
                 BaseException: PyType::extract(
                     py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
+                OSError: PyType::extract(
+                    py, &builtins.get(py, "OSError").unwrap()).unwrap(),
             }
 
         }
@@ -114,6 +120,21 @@ pub fn no_loop_exc(py: Python) -> PyErr {
         py,
         format!("There is no current event loop in thread {}.",
                 cur.name().unwrap_or("unknown")).to_py_object(py))
+}
+
+
+//
+// Create OSError
+//
+pub fn os_error(py: Python, err: io::Error) -> PyErr {
+    let inst = Classes.OSError.call(
+        py,
+        PyTuple::new(py, &[
+            err.raw_os_error().unwrap_or(0).to_py_object(py).into_object()]), None);
+    match inst {
+        Ok(ob) => PyErr::from_instance(py, ob),
+        Err(err) => err,
+    }
 }
 
 

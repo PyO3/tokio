@@ -1,20 +1,22 @@
 #![allow(unused_variables)]
 
+use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use cpython::*;
-
 use boxfnonce::SendBoxFnOnce;
 
 use futures::future::*;
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId};
 
+use addrinfo;
 use handle;
 use future;
-use utils::{self, Handle};
+use server;
+use utils::{self, Classes, Handle};
 
 
 thread_local!(
@@ -283,6 +285,41 @@ py_class!(pub class TokioEventLoop |py| {
         });
 
         Ok(py.None())
+    }
+
+    //
+    // Create a TCP server.
+    //
+    // The host parameter can be a string, in that case the TCP server is bound
+    // to host and port.
+    //
+    // The host parameter can also be a sequence of strings and in that case
+    // the TCP server is bound to all hosts of the sequence. If a host
+    // appears multiple times (possibly indirectly e.g. when hostnames
+    // resolve to the same IP address), the server is only bound once to that
+    // host.
+    //
+    // Return a Server object which can be used to stop the service.
+    //
+    def create_server(&self, protocol_factory: PyObject,
+                      host: Option<PyString>, port: Option<u16> = None,
+                      family: i32 = 0,
+                      flags: i32 = addrinfo::AI_PASSIVE,
+                      sock: Option<PyObject> = None,
+                      backlog: i32 = 100,
+                      ssl: Option<PyObject> = None,
+                      reuse_address: bool = true,
+                      reuse_port: bool = true) -> PyResult<server::TokioServer> {
+
+        if let Some(ssl) = ssl {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, PyString::new(py, "ssl argument is not supported yet")));
+        }
+
+        server::create_server(
+            py, protocol_factory, self.handle(py).clone(),
+            Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
+            family, flags, sock, backlog, ssl, reuse_address, reuse_port)
     }
 
     //
