@@ -1,8 +1,28 @@
 // UNSAFE code!
+use cpython::{GILGuard, Python};
 use std::ops::Deref;
 use std::clone::Clone;
 use tokio_core::reactor;
 use futures::unsync::{mpsc, oneshot};
+
+
+pub struct GIL(GILGuard);
+
+unsafe impl Send for GIL {}
+
+impl GIL {
+
+    pub fn new() -> GIL {
+        GIL(Python::acquire_gil())
+    }
+
+    /// Retrieves the marker type that proves that the GIL was acquired.
+    #[inline]
+    pub fn python<'p>() -> Python<'p> {
+        unsafe { Python::assume_gil_acquired() }
+    }
+
+}
 
 
 // tokio handle

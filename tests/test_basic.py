@@ -1,6 +1,7 @@
 from __future__ import print_function
 import asyncio
 import traceback
+import os
 from aiohttp import web
 
 import tokio
@@ -231,18 +232,19 @@ def test_create_server():
 
 
 def test_web():
+    print(os.getpid())
     name = 'test_web'
     evloop = tokio.new_event_loop()
 
-    app = web.Application(debug=True)
+    app = web.Application(debug=False, handler_args={'access_log': None})
     async def handler(req):
         return web.Response()
 
-    app.router.add_route('get', '/', handler)
+    app.router.add_get('/', handler)
     handler = app.make_handler(loop=evloop)
 
     server = evloop.create_server(handler, host="127.0.0.1", port=9090)
-    evloop.call_later(10.0, stop_event_loop, name, evloop)
+    evloop.call_later(6000.0, stop_event_loop, name, evloop)
 
     print('starting', evloop.time())
     evloop.run_forever()

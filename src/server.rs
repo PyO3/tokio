@@ -15,8 +15,8 @@ use transport;
 
 pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
                      host: Option<String>, port: Option<u16>,
-                     family: i32, flags: i32, sock: Option<PyObject>,
-                     backlog: i32, ssl: Option<PyObject>,
+                     family: i32, flags: i32, _sock: Option<PyObject>,
+                     backlog: i32, _ssl: Option<PyObject>,
                      reuse_address: bool, reuse_port: bool) -> PyResult<TokioServer> {
 
     let lookup = match addrinfo::lookup_addrinfo(

@@ -1,6 +1,6 @@
 [package]
 name = "async_tokio"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
 [dependencies]
@@ -22,8 +22,11 @@ git = "https://github.com/fafhrd91/rust-cpython.git"
 #path = "../tokio/rust-cpython"
 default-features = false
 
-[replace]
-"futures:0.1.11" = { path = "../tokio/futures-rs" }
+#[replace]
+#"futures:0.1.11" = { path = "../tokio/futures-rs" }
 
 [lib]
 crate-type = ["cdylib"]
+
+[profile.release]
+debug = true

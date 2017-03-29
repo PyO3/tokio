@@ -4,7 +4,7 @@ use futures::future::*;
 use boxfnonce::SendBoxFnOnce;
 
 use utils::Classes;
-use unsafepy::Handle;
+use unsafepy::{GIL, Handle};
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
@@ -157,8 +157,7 @@ py_class!(pub class TokioFuture |py| {
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
                     // get python GIL
-                    let gil = Python::acquire_gil();
-                    let py = gil.python();
+                    let py = GIL::python();
 
                     // call python callback
                     let res = cb.call(py, (fut,).to_py_object(py), None);
@@ -183,7 +182,7 @@ py_class!(pub class TokioFuture |py| {
     //
     // Returns the number of callbacks removed.
     //
-    def remove_done_callback(&self, f: PyObject) -> PyResult<u32> {
+    def remove_done_callback(&self, _f: PyObject) -> PyResult<u32> {
         Ok(0)
     }
 
@@ -210,8 +209,7 @@ py_class!(pub class TokioFuture |py| {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
                         // get python GIL
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
+                        let py = GIL::python();
 
                         // call python callback
                         for cb in callbacks.iter() {
@@ -280,8 +278,7 @@ py_class!(pub class TokioFuture |py| {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
                         // get python GIL
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
+                        let py = GIL::python();
 
                         // call python callback
                         for cb in callbacks.iter() {
@@ -355,12 +352,12 @@ py_class!(pub class TokioFutureIter |py| {
         }
     }
 
-    def send(&self, unused: PyObject) -> PyResult<Option<PyObject>> {
+    def send(&self, _unused: PyObject) -> PyResult<Option<PyObject>> {
         self.__next__(py)
     }
 
     def throw(&self, tp: PyObject, val: Option<PyObject> = None,
-              tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
+              _tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
 
         if Classes.Exception.is_instance(py, &tp) {
             let val = tp;
@@ -409,22 +406,17 @@ impl TokioFuture {
             },
         }
     }
+
 }
 
 
 pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {
     let fut = create_future(py, handle.clone())?;
-
-    // schedule task
     let fut2 = fut.clone_ref(py);
 
     handle.spawn_fn(move|| {
-        // get python GIL
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-
-        // call python callback
-        task_step(py, fut2, coro, None);
+        // execute one step
+        task_step(GIL::python(), fut2, coro, None);
 
         ok(())
     });
@@ -433,19 +425,14 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
 }
 
 
-enum TaskStepResult {
-    Some(PyObject),
-    Err(PyObject),
-    None,
-}
-
+//
+// wakeup task from future
+//
 fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
-    // get python GIL
-    let gil = Python::acquire_gil();
-    let py = gil.python();
+    let py = GIL::python();
 
     match rfut.result(py) {
-        Ok(res) => task_step(py, fut, coro, None),
+        Ok(_) => task_step(py, fut, coro, None),
         Err(mut err) => task_step(py, fut, coro, Some(err.instance(py))),
     }
 }
@@ -463,24 +450,23 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
     // handle coroutine result
     match res {
         Err(mut err) => {
-            let exc = err.instance(py);
-
-            if Classes.StopIteration.is_instance(py, &exc) {
-                if let Err(err) = fut.set_result(py, exc.getattr(py, "value").unwrap()) {
+            if err.matches(py, &Classes.StopIteration) {
+                if let Err(err) = fut.set_result(
+                    py, err.instance(py).getattr(py, "value").unwrap()) {
                     // log exception
                     println!("can not get StopIteration.value {:?}", &err);
                     err.print(py);
                 }
             }
-            else if Classes.CancelledError.is_instance(py, &exc) {
+            else if err.matches(py, &Classes.CancelledError) {
                 if let Err(err) = fut.cancel(py) {
                     // log exception
                     println!("can not cancel task {:?}", &err);
                     err.print(py);
                 }
             }
-            else if Classes.BaseException.is_instance(py, &exc) {
-                if let Err(err) = fut.set_exception(py, exc.clone_ref(py)) {
+            else if err.matches(py, &Classes.BaseException) {
+                if let Err(err) = fut.set_exception(py, err.instance(py)) {
                     // log exception
                     println!("can not set task exception {:?}", &err);
                     err.print(py);
@@ -498,8 +484,7 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
                 let fut2 = fut.clone_ref(py);
                 fut._loop(py).spawn_fn(move|| {
                     // get python GIL
-                    let gil = Python::acquire_gil();
-                    let py = gil.python();
+                    let py = GIL::python();
 
                     // wakeup task
                     task_step(py, fut2, coro, None);

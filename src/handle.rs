@@ -6,7 +6,7 @@ use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
-use unsafepy::Handle;
+use unsafepy::{GIL, Handle};
 
 
 py_class!(pub class TokioHandle |py| {
@@ -39,8 +39,7 @@ pub fn call_soon(py: Python, h: &Handle,
     // schedule work
     h.spawn_fn(move || {
         // get python GIL
-        let gil = Python::acquire_gil();
-        let py = gil.python();
+        let py = GIL::python();
 
         // check if cancelled
         if ! handle_ref.cancelled(py).get() {
@@ -79,8 +78,7 @@ pub fn call_later(py: Python, h: &Handle, dur: Duration,
     // start timer
     let fut = Timeout::new(dur, &h).unwrap().select2(rx).then(move |res| {
         // get python GIL
-        let gil = Python::acquire_gil();
-        let py = gil.python();
+        let py = GIL::python();
 
         // drop ref to handle
         handle_ref.release_ref(py);

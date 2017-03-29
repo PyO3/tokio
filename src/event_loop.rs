@@ -1,6 +1,6 @@
 #![allow(unused_variables)]
 
-use std::borrow::Borrow;
+
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 use std::thread;
@@ -17,7 +17,7 @@ use handle;
 use future;
 use server;
 use utils;
-use unsafepy::Handle;
+use unsafepy::{GIL, Handle};
 
 
 thread_local!(
@@ -50,7 +50,7 @@ pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<TokioEventLoop>
     match rx.recv() {
         Ok((id, handle)) =>
             TokioEventLoop::create_instance(
-                py, id, handle, Instant::now(),
+                py, GIL::new(), id, handle, Instant::now(),
                 RefCell::new(Some(tx_stop)), Cell::new(false)),
         Err(_) =>
             Err(PyErr::new::<exc::RuntimeError, _>(
@@ -64,7 +64,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
         let core = Core::new().unwrap();
 
         let evloop = TokioEventLoop::create_instance(
-            py, core.id(),
+            py, GIL::new(), core.id(),
             Handle::new(core.handle()), Instant::now(), RefCell::new(None), Cell::new(false));
 
         *cell.borrow_mut() = Some(core);
@@ -93,6 +93,7 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
 
 
 py_class!(pub class TokioEventLoop |py| {
+    data gil: GIL;
     data id: CoreId;
     data handle: Handle;
     data instant: Instant;
