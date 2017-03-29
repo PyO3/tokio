@@ -2,44 +2,11 @@
 
 use cpython::*;
 use std::io;
-use std::os::raw::c_long;
-use std::ops::Deref;
-use std::clone::Clone;
-use std::time::Duration;
 use std::thread;
-use tokio_core::reactor;
+use std::os::raw::c_long;
+use std::time::Duration;
 
 use future::TokioFuture;
-
-
-// tokio handle
-#[doc(hidden)]
-pub struct Handle {
-    pub h: reactor::Handle,
-}
-
-unsafe impl Send for Handle {}
-
-impl Handle {
-    pub fn new(h: reactor::Handle) -> Handle {
-        Handle{h: h}
-    }
-}
-
-impl Clone for Handle {
-
-    fn clone(&self) -> Handle {
-        Handle {h: self.h.clone()}
-    }
-}
-
-impl Deref for Handle {
-    type Target = reactor::Handle;
-
-    fn deref(&self) -> &reactor::Handle {
-        &self.h
-    }
-}
 
 
 #[allow(non_snake_case)]
@@ -53,6 +20,7 @@ pub struct WorkingClasses {
     pub Exception: PyType,
     pub BaseException: PyType,
     pub StopIteration: PyType,
+    pub TypeError: PyType,
     pub OSError: PyType,
 }
 
@@ -85,6 +53,8 @@ lazy_static! {
                     py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
                 OSError: PyType::extract(
                     py, &builtins.get(py, "OSError").unwrap()).unwrap(),
+                TypeError: PyType::extract(
+                    py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
             }
         } else {
             WorkingClasses {
@@ -107,6 +77,8 @@ lazy_static! {
                     py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
                 OSError: PyType::extract(
                     py, &builtins.get(py, "OSError").unwrap()).unwrap(),
+                TypeError: PyType::extract(
+                    py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
             }
 
         }
@@ -126,7 +98,7 @@ pub fn no_loop_exc(py: Python) -> PyErr {
 //
 // Create OSError
 //
-pub fn os_error(py: Python, err: io::Error) -> PyErr {
+pub fn os_error(py: Python, err: &io::Error) -> PyErr {
     let inst = Classes.OSError.call(
         py,
         PyTuple::new(py, &[

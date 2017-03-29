@@ -6,7 +6,7 @@ use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
-use utils::Handle;
+use unsafepy::Handle;
 
 
 py_class!(pub class TokioHandle |py| {

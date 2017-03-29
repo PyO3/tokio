@@ -16,7 +16,8 @@ use addrinfo;
 use handle;
 use future;
 use server;
-use utils::{self, Classes, Handle};
+use utils;
+use unsafepy::Handle;
 
 
 thread_local!(

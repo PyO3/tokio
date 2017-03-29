@@ -1,21 +1,19 @@
 use std::io;
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use cpython::*;
-use futures::sync::oneshot;
-use futures::{Async, Stream, Future, Poll};
+use futures::{unsync, Async, Stream, Future, Poll};
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
-use tokio_core::net::{TcpListener, TcpStream, Incoming};
+use tokio_core::net::{TcpListener, Incoming};
 
 use addrinfo;
 use future;
-use server;
 use utils;
+use unsafepy;
 use transport;
 
 
-pub fn create_server(py: Python, factory: PyObject, handle: utils::Handle,
+pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
                      host: Option<String>, port: Option<u16>,
                      family: i32, flags: i32, sock: Option<PyObject>,
                      backlog: i32, ssl: Option<PyObject>,
@@ -50,7 +48,7 @@ pub fn create_server(py: Python, factory: PyObject, handle: utils::Handle,
         let _ = builder.reuse_port(reuse_port);
 
         if let Err(err) = builder.bind(info.sockaddr) {
-            return Err(utils::os_error(py, err));
+            return Err(utils::os_error(py, &err));
         }
 
         match builder.listen(backlog) {
@@ -60,18 +58,18 @@ pub fn create_server(py: Python, factory: PyObject, handle: utils::Handle,
                         info!("Started listening on {:?}", info.sockaddr);
                         listeners.push(lst);
                     },
-                    Err(err) => return Err(utils::os_error(py, err)),
+                    Err(err) => return Err(utils::os_error(py, &err)),
                 }
             }
-            Err(err) => return Err(utils::os_error(py, err)),
+            Err(err) => return Err(utils::os_error(py, &err)),
         }
     }
 
     // create tokio listeners
     let mut handles = Vec::new();
     for listener in listeners {
-        let (tx, rx) = oneshot::channel::<()>();
-        handles.push(tx);
+        let (tx, rx) = unsync::oneshot::channel::<()>();
+        handles.push(unsafepy::OneshotSender::new(tx));
         Server::serve(handle.clone(), listener.incoming(), factory.clone_ref(py), rx);
     }
 
@@ -80,8 +78,8 @@ pub fn create_server(py: Python, factory: PyObject, handle: utils::Handle,
 
 
 py_class!(pub class TokioServer |py| {
-    data handle: utils::Handle;
-    data stop_handles: RefCell<Option<Vec<oneshot::Sender<()>>>>;
+    data handle: unsafepy::Handle;
+    data stop_handles: RefCell<Option<Vec<unsafepy::OneshotSender<()>>>>;
 
     def close(&self) -> PyResult<PyObject> {
         let handles = self.stop_handles(py).borrow_mut().take();
@@ -104,9 +102,9 @@ py_class!(pub class TokioServer |py| {
 
 struct Server {
     stream: Incoming,
-    stop: oneshot::Receiver<()>,
+    stop: unsync::oneshot::Receiver<()>,
     factory: PyObject,
-    handle: utils::Handle,
+    handle: unsafepy::Handle,
 }
 
 impl Server {
@@ -114,18 +112,15 @@ impl Server {
     //
     // Start accepting incoming connections
     //
-    fn serve(handle: utils::Handle, stream: Incoming,
-             factory: PyObject, stop: oneshot::Receiver<()>) {
+    fn serve(handle: unsafepy::Handle, stream: Incoming,
+             factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
 
-        let h = handle.clone();
-        let srv = Server { stop: stop, stream: stream, factory: factory, handle: handle };
+        let srv = Server { stop: stop, stream: stream,
+                           factory: factory, handle: handle.clone() };
 
-        srv.handle.clone().spawn(
-            srv.for_each(move |(socket, peer, proto)| {
-                transport::accept_connection(h.clone(), proto, socket, peer);
-
-                Ok(())
-            }).map_err(|e| {
+        handle.spawn(
+            srv.map_err(|e| {
+                println!("Server error: {}", e);
                 error!("Server error: {}", e);
             })
         );
@@ -133,37 +128,28 @@ impl Server {
 }
 
 
-impl Stream for Server
+impl Future for Server
 {
-    type Item = (TcpStream, SocketAddr, PyObject);
+    type Item = ();
     type Error = io::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.stop.poll() {
-            Ok(Async::Ready(_)) | Err(_) => {
-                // We are done
-                Ok(Async::Ready(None))
-            },
+            // TokioServer is closed
+            Ok(Async::Ready(_)) | Err(_) => Ok(Async::Ready(())),
             Ok(Async::NotReady) => {
                 let option = self.stream.poll()?;
                 match option {
                     Async::Ready(Some((socket, peer))) => {
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
+                        transport::accept_connection(
+                            self.handle.clone(), &self.factory, socket, peer)?;
 
-                        let proto = match self.factory.call(py, NoArgs, None) {
-                            Ok(proto) => proto,
-                            Err(_) => {
-                                // TODO: log exception to loop logging facility
-                                return Err(
-                                    io::Error::new(
-                                        io::ErrorKind::Other, "Protocol factory failure"));
-                            }
-                        };
-
-                        Ok(Async::Ready(Some((socket, peer, proto))))
+                        // we can not just return Async::NotReady here,
+                        // because self.stream is not registered within mio anymore
+                        // next stream.poll() will re-charge future
+                        self.poll()
                     },
-                    Async::Ready(None) => Ok(Async::Ready(None)),
+                    Async::Ready(None) => Ok(Async::Ready(())),
                     Async::NotReady => Ok(Async::NotReady),
                 }
             },

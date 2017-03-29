@@ -138,6 +138,53 @@ def test_task():
     evloop.close()
 
 
+def test_task2():
+    name = 'test_task'
+    counter = 0
+    evloop = tokio.new_event_loop()
+
+    def coro(fut):
+        res = yield from fut
+        print("Done: %s", res)
+        evloop.stop()
+
+    def start(evloop):
+        fut = evloop.create_future()
+        asyncio.ensure_future(coro(fut), loop=evloop)
+        evloop.call_later(0.01, fut.set_result, 1)
+
+    evloop.call_later(0.01, start, evloop)
+    evloop.call_later(3.0, stop_event_loop, name, evloop)
+
+    print(evloop, evloop.time())
+    print('starting')
+    evloop.run_forever()
+    evloop.close()
+
+
+def test_task3():
+    name = 'test_task'
+    counter = 0
+    evloop = tokio.new_event_loop()
+
+    async def coro(fut):
+        res = await fut
+        print("Done: %s", res)
+
+    def start(evloop):
+        fut = evloop.create_future()
+        asyncio.ensure_future(coro(fut), loop=evloop)
+        evloop.call_later(0.01, fut.set_result, 1)
+
+    evloop.call_later(0.01, start, evloop)
+    evloop.call_later(3.0, stop_event_loop, name, evloop)
+
+    print(evloop, evloop.time())
+    print('starting')
+    evloop.run_forever()
+    evloop.close()
+
+
 def test_run_until_complete():
     name = 'test_run_until_complete'
     counter = 0
@@ -187,7 +234,7 @@ def test_web():
     name = 'test_web'
     evloop = tokio.new_event_loop()
 
-    app = web.Application()
+    app = web.Application(debug=True)
     async def handler(req):
         return web.Response()
 
@@ -195,7 +242,7 @@ def test_web():
     handler = app.make_handler(loop=evloop)
 
     server = evloop.create_server(handler, host="127.0.0.1", port=9090)
-    evloop.call_later(3.0, stop_event_loop, name, evloop)
+    evloop.call_later(10.0, stop_event_loop, name, evloop)
 
     print('starting', evloop.time())
     evloop.run_forever()

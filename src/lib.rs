@@ -1,7 +1,10 @@
 extern crate libc;
 extern crate net2;
+extern crate bytes;
 extern crate futures;
+extern crate tokio_io;
 extern crate tokio_core;
+extern crate tokio_signal;
 extern crate boxfnonce;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
@@ -16,6 +19,8 @@ mod future;
 mod event_loop;
 mod transport;
 mod server;
+mod unsafepy;
+
 pub use event_loop::{new_event_loop, spawn_event_loop};
 
 

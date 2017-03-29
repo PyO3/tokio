@@ -197,7 +197,7 @@ pub fn lookup_addrinfo(
     family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> Result<LookupAddrInfo, LookupError> {
     let c_host = CString::new(host)?;
     let mut res = ptr::null_mut();
-    let mut hints = libc::addrinfo {
+    let hints = libc::addrinfo {
         ai_flags: flags,
         ai_family: family,
         ai_socktype: socktype.to_int(),

@@ -3,7 +3,8 @@ use cpython::*;
 use futures::future::*;
 use boxfnonce::SendBoxFnOnce;
 
-use utils::{Classes, Handle};
+use utils::Classes;
+use unsafepy::Handle;
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
@@ -18,6 +19,7 @@ pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
 }
 
 
+#[derive(Debug)]
 pub enum State {
     Pending,
     Cancelled,
@@ -192,6 +194,7 @@ py_class!(pub class TokioFuture |py| {
     // InvalidStateError.
     //
     def set_result(&self, result: PyObject) -> PyResult<PyObject> {
+        //println!("set result {:?}", result);
         let mut state = self._state(py).borrow_mut();
 
         match *state {
@@ -305,28 +308,12 @@ py_class!(pub class TokioFuture |py| {
     //
     // awaitable
     //
-    def __iter__(&self) -> PyResult<PyObject> {
-        if let State::Pending = *self._state(py).borrow() {
-            Ok(self.clone_ref(py).into_object())
-        } else {
-            self.result(py)
-        }
+    def __iter__(&self) -> PyResult<TokioFutureIter> {
+        TokioFutureIter::create_instance(py, self.clone_ref(py))
     }
 
-    def __next__(&self) -> PyResult<Option<PyObject>> {
-        if let State::Pending = *self._state(py).borrow() {
-            Ok(Some(self.clone_ref(py).into_object()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    def __await__(&self) -> PyResult<PyObject> {
-        if let State::Pending = *self._state(py).borrow() {
-            Ok(self.clone_ref(py).into_object())
-        } else {
-            self.result(py)
-        }
+    def __await__(&self) -> PyResult<TokioFutureIter> {
+        TokioFutureIter::create_instance(py, self.clone_ref(py))
     }
 
     //
@@ -346,6 +333,52 @@ py_class!(pub class TokioFuture |py| {
     }
 
 });
+
+
+py_class!(pub class TokioFutureIter |py| {
+    data _fut: TokioFuture;
+
+    def __iter__(&self) -> PyResult<TokioFutureIter> {
+        Ok(self.clone_ref(py))
+    }
+
+    def __next__(&self) -> PyResult<Option<PyObject>> {
+        let fut = self._fut(py);
+
+        if let State::Pending = *fut._state(py).borrow() {
+            Ok(Some(fut.clone_ref(py).into_object()))
+        } else {
+            let res = fut.result(py)?;
+            Err(PyErr::new_lazy_init(
+                Classes.StopIteration.clone_ref(py),
+                Some(PyTuple::new(py, &[res]).into_object())))
+        }
+    }
+
+    def send(&self, unused: PyObject) -> PyResult<Option<PyObject>> {
+        self.__next__(py)
+    }
+
+    def throw(&self, tp: PyObject, val: Option<PyObject> = None,
+              tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
+
+        if Classes.Exception.is_instance(py, &tp) {
+            let val = tp;
+            let tp = val.get_type(py);
+            PyErr::new_lazy_init(tp, Some(val)).restore(py);
+        } else {
+            if let Ok(tp) = PyType::downcast_from(py, tp) {
+                PyErr::new_lazy_init(tp, val).restore(py);
+            } else {
+                PyErr::new_lazy_init(Classes.TypeError.clone_ref(py), None).restore(py);
+            }
+        }
+
+        self.__next__(py)
+    }
+
+});
+
 
 
 impl TokioFuture {
@@ -400,15 +433,20 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
 }
 
 
+enum TaskStepResult {
+    Some(PyObject),
+    Err(PyObject),
+    None,
+}
+
 fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
     // get python GIL
     let gil = Python::acquire_gil();
     let py = gil.python();
 
-    if let Err(ref mut err) = rfut.result(py) {
-        task_step(py, fut, coro, Some(err.instance(py)))
-    } else {
-        task_step(py, fut, coro, None)
+    match rfut.result(py) {
+        Ok(res) => task_step(py, fut, coro, None),
+        Err(mut err) => task_step(py, fut, coro, Some(err.instance(py))),
     }
 }
 
@@ -418,10 +456,8 @@ fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
 fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>) {
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
-        Some(exc) => coro.call_method(
-            py, "throw", PyTuple::new(py, &[exc]), None),
-        None => coro.call_method(
-            py, "send", PyTuple::new(py, &[py.None()]), None),
+        None => coro.call_method(py, "send", PyTuple::new(py, &[py.None()]), None),
+        Some(exc) => coro.call_method(py, "throw", PyTuple::new(py, &[exc]), None),
     };
 
     // handle coroutine result
