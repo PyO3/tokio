@@ -4,7 +4,7 @@ use futures::future::*;
 use boxfnonce::SendBoxFnOnce;
 
 use utils::Classes;
-use unsafepy::{GIL, Handle};
+use unsafepy::Handle;
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
@@ -157,7 +157,8 @@ py_class!(pub class TokioFuture |py| {
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
                     // get python GIL
-                    let py = GIL::python();
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
 
                     // call python callback
                     let res = cb.call(py, (fut,).to_py_object(py), None);
@@ -209,7 +210,8 @@ py_class!(pub class TokioFuture |py| {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
                         // get python GIL
-                        let py = GIL::python();
+                        let gil = Python::acquire_gil();
+                        let py = gil.python();
 
                         // call python callback
                         for cb in callbacks.iter() {
@@ -278,7 +280,8 @@ py_class!(pub class TokioFuture |py| {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
                         // get python GIL
-                        let py = GIL::python();
+                        let gil = Python::acquire_gil();
+                        let py = gil.python();
 
                         // call python callback
                         for cb in callbacks.iter() {
@@ -415,8 +418,11 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
     let fut2 = fut.clone_ref(py);
 
     handle.spawn_fn(move|| {
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
         // execute one step
-        task_step(GIL::python(), fut2, coro, None);
+        task_step(py, fut2, coro, None);
 
         ok(())
     });
@@ -429,7 +435,8 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
 // wakeup task from future
 //
 fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
-    let py = GIL::python();
+    let gil = Python::acquire_gil();
+    let py = gil.python();
 
     match rfut.result(py) {
         Ok(_) => task_step(py, fut, coro, None),
@@ -484,7 +491,8 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
                 let fut2 = fut.clone_ref(py);
                 fut._loop(py).spawn_fn(move|| {
                     // get python GIL
-                    let py = GIL::python();
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
 
                     // wakeup task
                     task_step(py, fut2, coro, None);

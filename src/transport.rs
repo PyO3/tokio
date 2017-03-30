@@ -8,8 +8,7 @@ use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
 use utils;
-// use future::{TokioFuture, create_future};
-use unsafepy::{GIL, Handle, Sender};
+use unsafepy::{Handle, Sender};
 
 
 py_class!(pub class TokioTcpTransport |py| {
@@ -44,7 +43,8 @@ py_class!(pub class TokioTcpTransport |py| {
 
 pub fn accept_connection(handle: Handle, factory: &PyObject,
                          socket: TcpStream, _peer: SocketAddr) -> Result<(), io::Error> {
-    let py = GIL::python();
+    let gil = Python::acquire_gil();
+    let py = gil.python();
 
     // create protocol
     let proto = match factory.call(py, NoArgs, None) {
@@ -127,7 +127,9 @@ impl Transport {
         match self.framed.poll() {
             Ok(Async::Ready(Some(bytes))) => {
                 // trace!("Data recv: {}", bytes.len());
-                let py = GIL::python();
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
                 let b = PyBytes::new(py, &bytes).into_object();
                 let res = self.data_received.call(py, PyTuple::new(py, &[b]), None);
 
@@ -144,8 +146,8 @@ impl Transport {
             Ok(Async::Ready(None)) => {
                 // Protocol.connection_lost(None)
                 println!("connectino_lost");
-
-                let py = GIL::python();
+                let gil = Python::acquire_gil();
+                let py = gil.python();
                 let res = self.connection_lost.call(py, PyTuple::new(py, &[py.None()]), None);
 
                 match res {
@@ -164,9 +166,10 @@ impl Transport {
             },
             Err(err) => {
                 println!("connection_lost: {:?}", err);
-
                 // Protocol.connection_lost(exc)
-                let py = GIL::python();
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
                 let mut e = utils::os_error(py, &err);
                 let res = self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None);
 

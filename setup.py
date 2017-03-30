@@ -29,7 +29,7 @@ setup(**dict(
     url='https://github.com/aio-libs/async-tokio/',
     packages=['tokio'],
     rust_extensions=[
-        RustExtension('tokio._ext', 'Cargo.toml')], # debug=False)],
+        RustExtension('tokio._ext', 'Cargo.toml')], #, debug=False)],
     install_requires=install_requires,
     tests_require=tests_require,
     setup_requires=setup_requires,

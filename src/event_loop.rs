@@ -17,7 +17,7 @@ use handle;
 use future;
 use server;
 use utils;
-use unsafepy::{GIL, Handle};
+use unsafepy::Handle;
 
 
 thread_local!(
@@ -50,7 +50,7 @@ pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<TokioEventLoop>
     match rx.recv() {
         Ok((id, handle)) =>
             TokioEventLoop::create_instance(
-                py, GIL::new(), id, handle, Instant::now(),
+                py, id, handle, Instant::now(),
                 RefCell::new(Some(tx_stop)), Cell::new(false)),
         Err(_) =>
             Err(PyErr::new::<exc::RuntimeError, _>(
@@ -64,7 +64,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
         let core = Core::new().unwrap();
 
         let evloop = TokioEventLoop::create_instance(
-            py, GIL::new(), core.id(),
+            py, core.id(),
             Handle::new(core.handle()), Instant::now(), RefCell::new(None), Cell::new(false));
 
         *cell.borrow_mut() = Some(core);
@@ -93,7 +93,6 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
 
 
 py_class!(pub class TokioEventLoop |py| {
-    data gil: GIL;
     data id: CoreId;
     data handle: Handle;
     data instant: Instant;
@@ -328,20 +327,33 @@ py_class!(pub class TokioEventLoop |py| {
     // Run until stop() is called
     //
     def run_forever(&self) -> PyResult<PyObject> {
-        CORE.with(|cell| {
-            match *cell.borrow_mut() {
-                Some(ref mut core) => {
-                    // set cancel sender
-                    let (tx, rx) = oneshot::channel::<bool>();
-                    *(self.runner(py)).borrow_mut() = Some(tx);
+        let res = py.allow_threads(|| {
+            CORE.with(|cell| {
+                match *cell.borrow_mut() {
+                    Some(ref mut core) => {
+                        let rx = {
+                            let gil = Python::acquire_gil();
+                            let py = gil.python();
 
-                    let _ = core.run(rx);
+                            // set cancel sender
+                            let (tx, rx) = oneshot::channel::<bool>();
+                            *(self.runner(py)).borrow_mut() = Some(tx);
+                            rx
+                        };
 
-                    Ok(py.None())
+                        let _ = core.run(rx);
+                        true
+                    }
+                    None => false,
                 }
-                None => Err(utils::no_loop_exc(py)),
-            }
-        })
+            })
+        });
+
+        if res {
+            Ok(py.None())
+        } else {
+            Err(utils::no_loop_exc(py))
+        }
     }
 
     //
@@ -358,30 +370,45 @@ py_class!(pub class TokioEventLoop |py| {
     def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
         match future::TokioFuture::downcast_from(py, future) {
             Ok(fut) => {
-                CORE.with(|cell| {
-                    match *cell.borrow_mut() {
-                        Some(ref mut core) => {
-                            // wait for future completion
-                            let (done, done_rx) = oneshot::channel::<bool>();
-                            fut.add_callback(py, SendBoxFnOnce::from(move |fut| {
-                                let _ = done.send(true);
-                            }));
+                let res = py.allow_threads(|| {
+                    CORE.with(|cell| {
+                        match *cell.borrow_mut() {
+                            Some(ref mut core) => {
+                                let (rx, done_rx) = {
+                                    let gil = Python::acquire_gil();
+                                    let py = gil.python();
 
-                            // stop fut
-                            let (tx, rx) = oneshot::channel::<bool>();
-                            *(self.runner(py)).borrow_mut() = Some(tx);
+                                    // wait for future completion
+                                    let (done, done_rx) = oneshot::channel::<bool>();
+                                    fut.add_callback(py, SendBoxFnOnce::from(move |fut| {
+                                        let _ = done.send(true);
+                                    }));
 
-                            // wait for completion
-                            let _ = core.run(rx.select2(done_rx));
+                                    // stop fut
+                                    let (tx, rx) = oneshot::channel::<bool>();
+                                    *(self.runner(py)).borrow_mut() = Some(tx);
 
-                            // cleanup running state
-                            let _ = self.stop(py);
+                                    (rx, done_rx)
+                                };
 
-                            Ok(py.None())
+                                // wait for completion
+                                let _ = core.run(rx.select2(done_rx));
+
+                                true
+                            }
+                            None => false,
                         }
-                        None => Err(utils::no_loop_exc(py)),
-                    }
-                })
+                    })
+                });
+
+                if res {
+                    // cleanup running state
+                    let _ = self.stop(py);
+
+                    fut.result(py)
+                } else {
+                    Err(utils::no_loop_exc(py))
+                }
             },
             Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(
                 py, PyString::new(py, "Only TokioFuture is supported"))),
