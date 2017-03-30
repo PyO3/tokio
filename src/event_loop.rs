@@ -1,6 +1,5 @@
 #![allow(unused_variables)]
 
-
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
 use std::thread;
@@ -10,7 +9,7 @@ use boxfnonce::SendBoxFnOnce;
 
 use futures::future::*;
 use futures::sync::{oneshot};
-use tokio_core::reactor::{Core, CoreId};
+use tokio_core::reactor::{Core, CoreId, Remote};
 
 use addrinfo;
 use handle;
@@ -23,40 +22,6 @@ use unsafepy::Handle;
 thread_local!(
     pub static CORE: RefCell<Option<Core>> = RefCell::new(None);
 );
-
-
-pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<TokioEventLoop> {
-    let (tx, rx) = mpsc::channel();
-    let (tx_stop, rx_stop) = oneshot::channel::<bool>();
-
-    // start worker thread
-    let _ = thread::Builder::new().name(String::from(name.to_string_lossy(py))).spawn(
-        move || {
-            CORE.with(|cell| {
-                // create tokio core
-                *cell.borrow_mut() = Some(Core::new().unwrap());
-
-                if let Some(ref mut core) = *cell.borrow_mut() {
-                    // send 'remote' to callee for TokioEventLoop
-                    let _ = tx.send((core.id(), Handle::new(core.handle())));
-
-                    // run loop
-                    let _ = core.run(rx_stop);
-                }
-            });
-        }
-    );
-
-    match rx.recv() {
-        Ok((id, handle)) =>
-            TokioEventLoop::create_instance(
-                py, id, handle, Instant::now(),
-                RefCell::new(Some(tx_stop)), Cell::new(false)),
-        Err(_) =>
-            Err(PyErr::new::<exc::RuntimeError, _>(
-                py, "Can not start tokio Core".to_py_object(py)))
-    }
-}
 
 
 pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
@@ -432,3 +397,12 @@ py_class!(pub class TokioEventLoop |py| {
     }
 
 });
+
+
+impl TokioEventLoop {
+
+    pub fn remote(&self, py: Python) -> Remote {
+        self.handle(py).remote().clone()
+    }
+
+}

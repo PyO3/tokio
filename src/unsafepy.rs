@@ -3,6 +3,23 @@ use std::ops::Deref;
 use std::clone::Clone;
 use tokio_core::reactor;
 use futures::unsync::{mpsc, oneshot};
+use cpython::Python;
+
+
+#[doc(hidden)]
+pub struct GIL;
+
+unsafe impl Send for GIL {}
+
+impl GIL {
+
+    /// Retrieves the marker type that proves that the GIL was acquired.
+    #[inline]
+    pub fn python<'p>() -> Python<'p> {
+        unsafe { Python::assume_gil_acquired() }
+    }
+
+}
 
 
 // tokio handle

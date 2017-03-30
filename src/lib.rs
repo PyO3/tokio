@@ -16,12 +16,16 @@ mod addrinfo;
 mod handle;
 mod utils;
 mod future;
+mod remote;
 mod event_loop;
 mod transport;
 mod server;
 mod unsafepy;
 
-pub use event_loop::{new_event_loop, spawn_event_loop};
+pub use future::TokioFuture;
+pub use handle::{TokioHandle, TokioTimerHandle};
+pub use event_loop::{TokioEventLoop, new_event_loop};
+pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
 
 
 py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
@@ -34,6 +38,7 @@ py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
 
 pub fn init_tokio_module(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
+    m.add_class::<RemoteTokioEventLoop>(py)?;
     m.add_class::<future::TokioFuture>(py)?;
     m.add_class::<handle::TokioHandle>(py)?;
     m.add_class::<handle::TokioTimerHandle>(py)?;
