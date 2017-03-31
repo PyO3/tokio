@@ -10,6 +10,9 @@ use tokio_core::net::TcpStream;
 use utils;
 use unsafepy::{Handle, Sender};
 
+// Transport factory
+pub type TransportFactory = fn(Handle, &PyObject, TcpStream, SocketAddr) -> io::Result<()>;
+
 
 py_class!(pub class TokioTcpTransport |py| {
     data handle: Handle;
@@ -41,8 +44,8 @@ py_class!(pub class TokioTcpTransport |py| {
 });
 
 
-pub fn accept_connection(handle: Handle, factory: &PyObject,
-                         socket: TcpStream, _peer: SocketAddr) -> Result<(), io::Error> {
+pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
+                             socket: TcpStream, _peer: SocketAddr) -> Result<(), io::Error> {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
@@ -57,7 +60,7 @@ pub fn accept_connection(handle: Handle, factory: &PyObject,
     };
 
     // create transport and then call connection_made on protocol
-    let transport = match Transport::new(py, handle.clone(), socket, proto) {
+    let transport = match TcpTransport::new(py, handle.clone(), socket, proto) {
         Err(err) =>
             return Err(io::Error::new(
                 io::ErrorKind::Other, format!("Python protocol error: {:?}", err))),
@@ -83,8 +86,8 @@ pub fn accept_connection(handle: Handle, factory: &PyObject,
 }
 
 
-struct Transport {
-    framed: Framed<TcpStream, TransportCodec>,
+struct TcpTransport {
+    framed: Framed<TcpStream, TcpTransportCodec>,
     reader: unsync::mpsc::UnboundedReceiver<Bytes>,
     //protocol: PyObject,
     transport: TokioTcpTransport,
@@ -97,9 +100,9 @@ struct Transport {
     is_flushed: bool
 }
 
-impl Transport {
+impl TcpTransport {
 
-    fn new(py: Python, handle: Handle, socket: TcpStream, protocol: PyObject) -> PyResult<Transport> {
+    fn new(py: Python, handle: Handle, socket: TcpStream, protocol: PyObject) -> PyResult<TcpTransport> {
         let (tx, rx) = unsync::mpsc::unbounded();
 
         let transport = TokioTcpTransport::create_instance(py, handle, Sender::new(tx))?;
@@ -108,8 +111,8 @@ impl Transport {
         let data_received = protocol.getattr(py, "data_received")?;
         //let eof_received = protocol.getattr(py, "eof_received")?;
 
-        Ok(Transport {
-            framed: socket.framed(TransportCodec),
+        Ok(TcpTransport {
+            framed: socket.framed(TcpTransportCodec),
             reader: rx,
             //protocol: protocol,
             transport: transport,
@@ -188,7 +191,7 @@ impl Transport {
 }
 
 
-impl Future for Transport
+impl Future for TcpTransport
 {
     type Item = ();
     type Error = io::Error;
@@ -238,9 +241,9 @@ impl Future for Transport
 }
 
 
-struct TransportCodec;
+struct TcpTransportCodec;
 
-impl Decoder for TransportCodec {
+impl Decoder for TcpTransportCodec {
     type Item = Bytes;
     type Error = io::Error;
 
@@ -254,7 +257,7 @@ impl Decoder for TransportCodec {
 
 }
 
-impl Encoder for TransportCodec {
+impl Encoder for TcpTransportCodec {
     type Item = Bytes;
     type Error = io::Error;
 

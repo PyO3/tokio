@@ -1,12 +1,11 @@
 use std::thread;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 use cpython::*;
 use futures::future;
 use tokio_core::reactor;
 
 use handle;
-use unsafepy::GIL;
+use unsafepy::{GIL, Handle};
 use event_loop::{TokioEventLoop, new_event_loop};
 
 
@@ -63,7 +62,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     //
     // Schedule callback to call later
     //
-    def call_later(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+    def call_later(&self, *args, **_kwargs) -> PyResult<handle::TokioTimerHandle> {
         let args = args.clone_ref(py);
         let remote = self.handle(py);
 
@@ -108,3 +107,34 @@ py_class!(pub class RemoteTokioEventLoop |py| {
 
 
 });
+
+
+impl RemoteTokioEventLoop {
+
+    pub fn execute_in_loop<T, F>(&self, py: Python, f: F) -> Option<T>
+        where T : Send + 'static, F : FnOnce(Python, Handle) -> T + Send + 'static
+    {
+        let remote = self.handle(py);
+
+        py.allow_threads(move|| {
+            let py = GIL::python();
+            let (tx, rx) = mpsc::channel();
+            let evloop = self.evloop(py).clone_ref(py);
+
+            remote.spawn(move |h| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                let result = f(py, Handle::new(h.clone()));
+                tx.send(result);
+                future::ok(())
+            });
+
+            match rx.recv() {
+                Ok(handle) => Some(handle),
+                _ => None,
+            }
+        })
+    }
+
+}

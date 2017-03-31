@@ -10,14 +10,15 @@ use addrinfo;
 use future;
 use utils;
 use unsafepy;
-use transport;
+use transport::TransportFactory;
 
 
 pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
                      host: Option<String>, port: Option<u16>,
                      family: i32, flags: i32, _sock: Option<PyObject>,
                      backlog: i32, _ssl: Option<PyObject>,
-                     reuse_address: bool, reuse_port: bool) -> PyResult<TokioServer> {
+                     reuse_address: bool, reuse_port: bool,
+                     transport_factory: TransportFactory) -> PyResult<TokioServer> {
 
     let lookup = match addrinfo::lookup_addrinfo(
             &host.unwrap(), port.unwrap_or(0), family, flags, addrinfo::SocketType::Stream) {
@@ -70,7 +71,8 @@ pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
     for listener in listeners {
         let (tx, rx) = unsync::oneshot::channel::<()>();
         handles.push(unsafepy::OneshotSender::new(tx));
-        Server::serve(handle.clone(), listener.incoming(), factory.clone_ref(py), rx);
+        Server::serve(handle.clone(), listener.incoming(),
+                      transport_factory, factory.clone_ref(py), rx);
     }
 
     TokioServer::create_instance(py, handle, RefCell::new(Some(handles)))
@@ -103,20 +105,23 @@ py_class!(pub class TokioServer |py| {
 struct Server {
     stream: Incoming,
     stop: unsync::oneshot::Receiver<()>,
+    transport: TransportFactory,
     factory: PyObject,
     handle: unsafepy::Handle,
 }
 
-impl Server {
+impl Server
+{
 
     //
     // Start accepting incoming connections
     //
     fn serve(handle: unsafepy::Handle, stream: Incoming,
+             transport: TransportFactory,
              factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
 
         let srv = Server { stop: stop, stream: stream,
-                           factory: factory, handle: handle.clone() };
+                           transport: transport, factory: factory, handle: handle.clone() };
 
         handle.spawn(
             srv.map_err(|e| {
@@ -141,7 +146,7 @@ impl Future for Server
                 let option = self.stream.poll()?;
                 match option {
                     Async::Ready(Some((socket, peer))) => {
-                        transport::accept_connection(
+                        (self.transport)(
                             self.handle.clone(), &self.factory, socket, peer)?;
 
                         // we can not just return Async::NotReady here,
