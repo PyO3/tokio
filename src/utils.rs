@@ -108,7 +108,7 @@ lazy_static! {
                 BaseException: PyType::extract(
                     py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
                 OSError: PyType::extract(
-                    py, &builtins.get(py, "OSError").unwrap()).unwrap(),
+                    py, &builtins.get(py, "IOError").unwrap()).unwrap(),
                 TypeError: PyType::extract(
                     py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
             }
