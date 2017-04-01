@@ -57,16 +57,48 @@ lazy_static! {
                     py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
             }
         } else {
+            let tokio = if let Ok(tokio) = PyModule::new(py, "tokio") {
+                tokio
+            } else {
+                PyModule::import(py, "tokio").unwrap()
+            };
+
+            let has_exc = if let Ok(_) = tokio.get(py, "CancelledError") {
+                true
+            } else {
+                false
+            };
+
+            let cancelled = if !has_exc {
+                PyErr::new_type(
+                    py, "tokio.CancelledError", Some(exception.clone_ref(py)), None)
+            } else {
+                PyType::extract(
+                    py, &tokio.get(py, "CancelledError").unwrap()).unwrap()
+            };
+
+            let invalid_state = if !has_exc {
+                PyErr::new_type(
+                    py, "tokio.InvalidStateError", Some(exception.clone_ref(py)), None)
+            } else {
+                PyType::extract(
+                    py, &tokio.get(py, "InvalidStateError").unwrap()).unwrap()
+            };
+
+            let timeout = if !has_exc {
+                PyErr::new_type(
+                    py, "tokio.TimeoutError", Some(exception.clone_ref(py)), None)
+            } else {
+                PyType::extract(
+                    py, &tokio.get(py, "TimeoutError").unwrap()).unwrap()
+            };
+
             WorkingClasses {
                 // asyncio types
                 Future: py.get_type::<TokioFuture>(),
-
-                CancelledError: PyErr::new_type(
-                    py, "tokio.CancelledError", Some(exception.clone_ref(py)), None),
-                InvalidStateError: PyErr::new_type(
-                    py, "tokio.InvalidStateError", Some(exception.clone_ref(py)), None),
-                TimeoutError: PyErr::new_type(
-                    py, "tokio,TimeoutError", Some(exception.clone_ref(py)), None),
+                CancelledError: cancelled,
+                TimeoutError: timeout,
+                InvalidStateError: invalid_state,
 
                 // general purpose types
                 StopIteration: PyType::extract(
