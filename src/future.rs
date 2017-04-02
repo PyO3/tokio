@@ -1,6 +1,6 @@
 use std::cell;
 use cpython::*;
-use futures::future::*;
+use futures::future;
 use boxfnonce::SendBoxFnOnce;
 
 use utils::Classes;
@@ -10,7 +10,7 @@ use unsafepy::Handle;
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
     TokioFuture::create_instance(
         py, h,
-        cell::RefCell::new(State::Pending),
+        cell::Cell::new(State::Pending),
         cell::RefCell::new(py.None()),
         cell::RefCell::new(None),
         cell::RefCell::new(Some(Vec::new())),
@@ -19,7 +19,7 @@ pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
 }
 
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum State {
     Pending,
     Cancelled,
@@ -31,7 +31,7 @@ type Callback = SendBoxFnOnce<(TokioFuture,)>;
 
 py_class!(pub class TokioFuture |py| {
     data _loop: Handle;
-    data _state: cell::RefCell<State>;
+    data _state: cell::Cell<State>;
     data _result: cell::RefCell<PyObject>;
     data _exception: cell::RefCell<Option<PyObject>>;
     data _callbacks: cell::RefCell<Option<Vec<PyObject>>>;
@@ -47,11 +47,11 @@ py_class!(pub class TokioFuture |py| {
     // return True.
     //
     def cancel(&self) -> PyResult<bool> {
-        let mut state = self._state(py).borrow_mut();
+        let state = self._state(py);
 
-        match *state {
+        match state.get() {
             State::Pending => {
-                *state = State::Cancelled;
+                state.set(State::Cancelled);
                 Ok(true)
             }
             _ => Ok(false)
@@ -62,7 +62,7 @@ py_class!(pub class TokioFuture |py| {
     // Return True if the future was cancelled
     //
     def cancelled(&self) -> PyResult<bool> {
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Cancelled => Ok(true),
             _ => Ok(false),
         }
@@ -74,7 +74,7 @@ py_class!(pub class TokioFuture |py| {
     // future was cancelled.
     //
     def done(&self) -> PyResult<bool> {
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Pending => Ok(false),
             _ => Ok(true),
         }
@@ -88,7 +88,7 @@ py_class!(pub class TokioFuture |py| {
     // the future is done and has an exception set, this exception is raised.
     //
     def result(&self) -> PyResult<PyObject> {
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Pending =>
                 Err(PyErr::new_lazy_init(
                     Classes.InvalidStateError.clone_ref(py),
@@ -114,7 +114,7 @@ py_class!(pub class TokioFuture |py| {
     // InvalidStateError.
     //
     def exception(&self) -> PyResult<PyObject> {
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Pending =>
                 Err(PyErr::new_lazy_init(
                     Classes.InvalidStateError.clone_ref(py),
@@ -140,7 +140,7 @@ py_class!(pub class TokioFuture |py| {
     def add_done_callback(&self, f: &PyObject) -> PyResult<PyObject> {
         let cb = f.clone_ref(py);
 
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Pending => {
                 // add callback, create callbacks vector if needed
                 let mut callbacks = self._callbacks(py).borrow_mut();
@@ -170,7 +170,7 @@ py_class!(pub class TokioFuture |py| {
                         _ => (),
                     }
 
-                    ok(())
+                    future::ok(())
                 })
             },
         }
@@ -195,11 +195,11 @@ py_class!(pub class TokioFuture |py| {
     //
     def set_result(&self, result: PyObject) -> PyResult<PyObject> {
         //println!("set result {:?}", result);
-        let mut state = self._state(py).borrow_mut();
+        let state = self._state(py);
 
-        match *state {
+        match state.get() {
             State::Pending => {
-                *state = State::Finished;
+                state.set(State::Finished);
                 *self._result(py).borrow_mut() = result;
 
                 // schedule callbacks
@@ -236,7 +236,7 @@ py_class!(pub class TokioFuture |py| {
                             }
                         }
 
-                        ok(())
+                        future::ok(())
                     });
                 }
 
@@ -254,9 +254,9 @@ py_class!(pub class TokioFuture |py| {
     // InvalidStateError.
     //
     def set_exception(&self, exception: PyObject) -> PyResult<PyObject> {
-        let mut state = self._state(py).borrow_mut();
+        let state = self._state(py);
 
-        match *state {
+        match state.get() {
             State::Pending => {
                 // check if exception is a type object
                 let exc =
@@ -270,7 +270,7 @@ py_class!(pub class TokioFuture |py| {
                 // if type(exception) is StopIteration:
                 //    raise TypeError("StopIteration interacts badly with generators "
                 //                    "and cannot be raised into a Future")
-                *state = State::Finished;
+                state.set(State::Finished);
                 *self._exception(py).borrow_mut() = Some(exc);
 
                 // schedule callback
@@ -295,7 +295,7 @@ py_class!(pub class TokioFuture |py| {
                                 _ => (),
                             }
                         }
-                        ok(())
+                        future::ok(())
                     })
                 }
 
@@ -345,7 +345,7 @@ py_class!(pub class TokioFutureIter |py| {
     def __next__(&self) -> PyResult<Option<PyObject>> {
         let fut = self._fut(py);
 
-        if let State::Pending = *fut._state(py).borrow() {
+        if let State::Pending = fut._state(py).get() {
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
@@ -387,7 +387,7 @@ impl TokioFuture {
     // Add future completion callback
     //
     pub fn add_callback(&self, py: Python, cb: Callback) {
-        match *self._state(py).borrow() {
+        match self._state(py).get() {
             State::Pending => {
                 // add coro, create tasks vector if needed
                 let mut callbacks = self._rcallbacks(py).borrow_mut();
@@ -404,7 +404,7 @@ impl TokioFuture {
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
                     cb.call(rfut);
-                    ok(())
+                    future::ok(())
                 })
             },
         }
@@ -424,7 +424,7 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
         // execute one step
         task_step(py, fut2, coro, None);
 
-        ok(())
+        future::ok(())
     });
 
     Ok(fut)
@@ -497,7 +497,7 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
                     // wakeup task
                     task_step(py, fut2, coro, None);
 
-                    ok(())
+                    future::ok(())
                 });
             }
             else if let Ok(res) = TokioFuture::downcast_from(py, result) {

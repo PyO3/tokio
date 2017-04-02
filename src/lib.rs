@@ -13,9 +13,9 @@ extern crate boxfnonce;
 use cpython::*;
 
 pub mod addrinfo;
-mod handle;
 pub mod utils;
-mod future;
+pub mod handle;
+pub mod future;
 mod remote;
 mod event_loop;
 mod transport;

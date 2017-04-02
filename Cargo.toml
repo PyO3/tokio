@@ -13,7 +13,9 @@ bytes = "0.4"
 futures = "*"
 tokio-core = "*"
 tokio-io = "*"
-tokio-signal = "*"
+
+#tokio-signal = "*"
+tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 
 #tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
 #tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
