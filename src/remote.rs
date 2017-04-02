@@ -20,7 +20,7 @@ pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<RemoteTokioEven
 
             if let Ok(evloop) = new_event_loop(py) {
                 let _ = tx.send((evloop.clone_ref(py), evloop.remote(py)));
-                let _ = evloop.run_forever(py);
+                let _ = evloop.run_forever(py, false);
             }
         }
     );

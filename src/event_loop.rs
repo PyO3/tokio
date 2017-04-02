@@ -5,13 +5,14 @@ use std::time::{Duration, Instant};
 use cpython::*;
 use boxfnonce::SendBoxFnOnce;
 
-use futures::future::*;
+use futures::{future, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
+use tokio_signal;
 
 use addrinfo;
 use handle;
-use future;
+use future::{TokioFuture, create_future, create_task};
 use server;
 use utils;
 use transport;
@@ -55,6 +56,14 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
     }
 }
 
+#[derive(Debug)]
+enum RunStatus {
+    Stopped,
+    CtrlC,
+    NoEventLoop,
+    Error
+}
+
 
 py_class!(pub class TokioEventLoop |py| {
     data id: CoreId;
@@ -66,14 +75,14 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Create a Future object attached to the loop.
     //
-    def create_future(&self) -> PyResult<future::TokioFuture> {
+    def create_future(&self) -> PyResult<TokioFuture> {
         if self.debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        future::create_future(py, self.handle(py).clone())
+        create_future(py, self.handle(py).clone())
     }
 
     //
@@ -81,14 +90,14 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return a task object.
     //
-    def create_task(&self, coro: PyObject) -> PyResult<future::TokioFuture> {
+    def create_task(&self, coro: PyObject) -> PyResult<TokioFuture> {
         if self.debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        future::create_task(py, coro, self.handle(py).clone())
+        create_task(py, coro, self.handle(py).clone())
     }
 
     //
@@ -291,7 +300,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Run until stop() is called
     //
-    def run_forever(&self) -> PyResult<PyObject> {
+    def run_forever(&self, stop_on_sigint: bool = true) -> PyResult<PyObject> {
         let res = py.allow_threads(|| {
             CORE.with(|cell| {
                 match *cell.borrow_mut() {
@@ -306,18 +315,42 @@ py_class!(pub class TokioEventLoop |py| {
                             rx
                         };
 
-                        let _ = core.run(rx);
-                        true
+                        // SIGINT
+                        if stop_on_sigint {
+                            let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
+                            let ctrlc = core.run(ctrlc_f).unwrap().into_future();
+
+                            let fut = rx.select2(ctrlc).then(|res| {
+                                match res {
+                                    Ok(future::Either::A(_)) => future::ok(RunStatus::Stopped),
+                                    Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
+                                    Err(e) => future::err(()),
+                                }
+                            });
+                            match core.run(fut) {
+                                Ok(status) => status,
+                                Err(_) => RunStatus::Error,
+                            }
+                        } else {
+                            match core.run(rx) {
+                                Ok(_) => RunStatus::Stopped,
+                                Err(_) => RunStatus::Error,
+                            }
+                        }
                     }
-                    None => false,
+                    None => RunStatus::NoEventLoop,
                 }
             })
         });
 
-        if res {
-            Ok(py.None())
-        } else {
-            Err(utils::no_loop_exc(py))
+        let _ = self.stop(py);
+
+        match res {
+            RunStatus::Stopped => Ok(py.None()),
+            RunStatus::CtrlC => Ok(py.None()),
+            RunStatus::Error => Err(PyErr::new::<exc::RuntimeError, _>(
+                py, PyString::new(py, "Unknown runtime error"))),
+            RunStatus::NoEventLoop => Err(utils::no_loop_exc(py)),
         }
     }
 
@@ -333,7 +366,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Return the Future's result, or raise its exception.
     //
     def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
-        match future::TokioFuture::downcast_from(py, future) {
+        match TokioFuture::downcast_from(py, future) {
             Ok(fut) => {
                 let res = py.allow_threads(|| {
                     CORE.with(|cell| {
@@ -356,8 +389,12 @@ py_class!(pub class TokioEventLoop |py| {
                                     (rx, done_rx)
                                 };
 
+                                // SIGINT
+                                let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
+                                let ctrlc = core.run(ctrlc_f).unwrap().into_future();
+
                                 // wait for completion
-                                let _ = core.run(rx.select2(done_rx));
+                                let _ = core.run(rx.select2(done_rx).select2(ctrlc));
 
                                 true
                             }
