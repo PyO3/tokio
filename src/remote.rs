@@ -73,7 +73,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
 
             remote.spawn(move |_| {
                 let res = evloop.call_later(GIL::python(), &args, None);
-                tx.send(res);
+                let _ = tx.send(res);
                 future::ok(())
             });
 
@@ -117,16 +117,14 @@ impl RemoteTokioEventLoop {
         let remote = self.handle(py);
 
         py.allow_threads(move|| {
-            let py = GIL::python();
             let (tx, rx) = mpsc::channel();
-            let evloop = self.evloop(py).clone_ref(py);
 
             remote.spawn(move |h| {
                 let gil = Python::acquire_gil();
                 let py = gil.python();
 
                 let result = f(py, Handle::new(h.clone()));
-                tx.send(result);
+                let _ = tx.send(result);
                 future::ok(())
             });
 

@@ -8,15 +8,21 @@ use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
 use utils;
-use unsafepy::{Handle, Sender};
+use unsafepy::{GIL, Handle, Sender};
 
 // Transport factory
 pub type TransportFactory = fn(Handle, &PyObject, TcpStream, SocketAddr) -> io::Result<()>;
 
 
+pub enum TokioTcpTransportMessage {
+    Bytes(PyBytes),
+    Close,
+}
+
+
 py_class!(pub class TokioTcpTransport |py| {
     data handle: Handle;
-    data writer: Sender<Bytes>;
+    data transport: Sender<TokioTcpTransportMessage>;
 
     def get_extra_info(&self, _name: PyString,
                        default: Option<PyObject> = None ) -> PyResult<PyObject> {
@@ -29,9 +35,12 @@ py_class!(pub class TokioTcpTransport |py| {
         )
     }
 
+    //
+    // write bytes to transport
+    //
     def write(&self, data: PyBytes) -> PyResult<PyObject> {
-        let bytes = Bytes::from(data.data(py));
-        self.writer(py).send(bytes);
+        //let bytes = Bytes::from(data.data(py));
+        let _ = self.transport(py).send(TokioTcpTransportMessage::Bytes(data));
         Ok(py.None())
     }
 
@@ -40,6 +49,14 @@ py_class!(pub class TokioTcpTransport |py| {
     //    fut.set_result(py, py.None())?;
     //    Ok(fut)
     //}
+
+    //
+    // close transport
+    //
+    def close(&self) -> PyResult<PyObject> {
+        let _ = self.transport(py).send(TokioTcpTransportMessage::Close);
+        Ok(py.None())
+    }
 
 });
 
@@ -65,7 +82,7 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
             return Err(io::Error::new(
                 io::ErrorKind::Other, format!("Python protocol error: {:?}", err))),
         Ok(transport) => {
-            println!("connectino_made");
+            debug!("connectino_made");
             let res = transport.connection_made.call(
                 py, PyTuple::new(py, &[transport.transport.clone_ref(py).into_object()]), None);
 
@@ -88,16 +105,17 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
 
 struct TcpTransport {
     framed: Framed<TcpStream, TcpTransportCodec>,
-    reader: unsync::mpsc::UnboundedReceiver<Bytes>,
+    intake: unsync::mpsc::UnboundedReceiver<TokioTcpTransportMessage>,
+
     //protocol: PyObject,
     transport: TokioTcpTransport,
     connection_made: PyObject,
     connection_lost: PyObject,
-    //eof_received: PyObject,
     data_received: PyObject,
+    //eof_received: PyObject,
 
-    bytes: Option<Bytes>,
-    is_flushed: bool
+    buf: Option<PyBytes>,
+    flushed: bool
 }
 
 impl TcpTransport {
@@ -113,15 +131,17 @@ impl TcpTransport {
 
         Ok(TcpTransport {
             framed: socket.framed(TcpTransportCodec),
-            reader: rx,
+            intake: rx,
+
             //protocol: protocol,
             transport: transport,
             connection_made: connection_made,
             connection_lost: connection_lost,
             data_received: data_received,
             //eof_received: eof_received,
-            bytes: None,
-            is_flushed: false,
+
+            buf: None,
+            flushed: false,
         })
     }
 
@@ -138,7 +158,7 @@ impl TcpTransport {
 
                 match res {
                     Err(err) => {
-                        println!("data_received error {:?}", &err);
+                        debug!("data_received error {:?}", &err);
                         err.print(py);
                     }
                     _ => (),
@@ -148,14 +168,14 @@ impl TcpTransport {
             },
             Ok(Async::Ready(None)) => {
                 // Protocol.connection_lost(None)
-                println!("connectino_lost");
+                debug!("connectino_lost");
                 let gil = Python::acquire_gil();
                 let py = gil.python();
                 let res = self.connection_lost.call(py, PyTuple::new(py, &[py.None()]), None);
 
                 match res {
                     Err(err) => {
-                        println!("connection_lost error {:?}", &err);
+                        debug!("connection_lost error {:?}", &err);
                         err.print(py);
                     }
                     _ => (),
@@ -164,11 +184,10 @@ impl TcpTransport {
                 Ok(Async::Ready(()))
             },
             Ok(Async::NotReady) => {
-                // println!("not ready");
                 Ok(Async::NotReady)
             },
             Err(err) => {
-                println!("connection_lost: {:?}", err);
+                debug!("connection_lost: {:?}", err);
                 // Protocol.connection_lost(exc)
                 let gil = Python::acquire_gil();
                 let py = gil.python();
@@ -178,7 +197,7 @@ impl TcpTransport {
 
                 match res {
                     Err(err) => {
-                        println!("connection_lost error {:?}", &err);
+                        debug!("connection_lost error {:?}", &err);
                         err.print(py);
                     }
                     _ => (),
@@ -202,25 +221,29 @@ impl Future for TcpTransport
         }
 
         loop {
-            let bytes = if let Some(bytes) = self.bytes.take() {
+            let bytes = if let Some(bytes) = self.buf.take() {
                 Some(bytes)
             } else {
-                match self.reader.poll() {
-                    Ok(Async::Ready(Some(bytes))) => {
-                        //println!("WRITE DATA {:?}", bytes.len());
-                        Some(bytes)
-                    },
+                match self.intake.poll() {
+                    Ok(Async::Ready(Some(msg))) => {
+                        match msg {
+                            TokioTcpTransportMessage::Bytes(bytes) =>
+                                Some(bytes),
+                            TokioTcpTransportMessage::Close =>
+                                return Ok(Async::Ready(())),
+                        }
+                    }
                     Ok(_) => None,
                     Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "Closed")),
                 }
             };
 
             if let Some(bytes) = bytes {
-                self.is_flushed = false;
+                self.flushed = false;
 
                 match self.framed.start_send(bytes) {
                     Ok(AsyncSink::NotReady(bytes)) => {
-                        self.bytes = Some(bytes);
+                        self.buf = Some(bytes);
                         break
                     }
                     Ok(AsyncSink::Ready) => continue,
@@ -232,8 +255,8 @@ impl Future for TcpTransport
         }
 
         // flush sink
-        if !self.is_flushed {
-            self.is_flushed = self.framed.poll_complete()?.is_ready();
+        if !self.flushed {
+            self.flushed = self.framed.poll_complete()?.is_ready();
         }
 
         Ok(Async::NotReady)
@@ -258,11 +281,11 @@ impl Decoder for TcpTransportCodec {
 }
 
 impl Encoder for TcpTransportCodec {
-    type Item = Bytes;
+    type Item = PyBytes;
     type Error = io::Error;
 
-    fn encode(&mut self, msg: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.extend(msg);
+    fn encode(&mut self, msg: PyBytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.extend(msg.data(GIL::python()));
         Ok(())
     }
 
