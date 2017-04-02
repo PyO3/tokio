@@ -16,6 +16,7 @@ pub mod addrinfo;
 pub mod utils;
 pub mod handle;
 pub mod future;
+mod pybytes;
 mod remote;
 mod event_loop;
 mod transport;
@@ -50,3 +51,5 @@ pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::
 
     Ok(())
 }
+
+

@@ -2,12 +2,13 @@ use std::io;
 use std::net::SocketAddr;
 use cpython::*;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio_io::{AsyncRead};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
 use utils;
+use pybytes::{TokioBytes, create_bytes};
 use unsafepy::{GIL, Handle, Sender};
 
 // Transport factory
@@ -153,8 +154,8 @@ impl TcpTransport {
                 let gil = Python::acquire_gil();
                 let py = gil.python();
 
-                let b = PyBytes::new(py, &bytes).into_object();
-                let res = self.data_received.call(py, PyTuple::new(py, &[b]), None);
+                let res = self.data_received.call(
+                    py, PyTuple::new(py, &[bytes.into_object()]), None);
 
                 match res {
                     Err(err) => {
@@ -267,12 +268,23 @@ impl Future for TcpTransport
 struct TcpTransportCodec;
 
 impl Decoder for TcpTransportCodec {
-    type Item = Bytes;
+    type Item = TokioBytes;
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if !src.is_empty() {
-            Ok(Some(src.take().freeze()))
+            let bytes = src.take().freeze();
+
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            match create_bytes(py, bytes) {
+                Ok(bytes) =>
+                    Ok(Some(bytes)),
+                Err(_) =>
+                    Err(io::Error::new(
+                        io::ErrorKind::Other, "Can not create TokioBytes instance")),
+            }
         } else {
             Ok(None)
         }
