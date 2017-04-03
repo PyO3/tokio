@@ -9,7 +9,7 @@ use handle;
 use server;
 use transport;
 use future::{TokioFuture, create_future, create_task};
-use unsafepy::{GIL, Handle};
+use pyunsafe::{GIL, Handle};
 use event_loop::{TokioEventLoop, new_event_loop};
 
 

@@ -9,7 +9,7 @@ use tokio_core::net::TcpStream;
 
 use utils;
 use pybytes::{TokioBytes, create_bytes};
-use unsafepy::{GIL, Handle, Sender};
+use pyunsafe::{GIL, Handle, Sender};
 
 // Transport factory
 pub type TransportFactory = fn(Handle, &PyObject, TcpStream, SocketAddr) -> io::Result<()>;

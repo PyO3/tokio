@@ -9,11 +9,11 @@ use tokio_core::net::{TcpListener, Incoming};
 use addrinfo;
 use future;
 use utils;
-use unsafepy;
+use pyunsafe;
 use transport::TransportFactory;
 
 
-pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
+pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
                      host: Option<String>, port: Option<u16>,
                      family: i32, flags: i32, _sock: Option<PyObject>,
                      backlog: i32, _ssl: Option<PyObject>,
@@ -70,7 +70,7 @@ pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
     let mut handles = Vec::new();
     for listener in listeners {
         let (tx, rx) = unsync::oneshot::channel::<()>();
-        handles.push(unsafepy::OneshotSender::new(tx));
+        handles.push(pyunsafe::OneshotSender::new(tx));
         Server::serve(handle.clone(), listener.incoming(),
                       transport_factory, factory.clone_ref(py), rx);
     }
@@ -80,8 +80,8 @@ pub fn create_server(py: Python, factory: PyObject, handle: unsafepy::Handle,
 
 
 py_class!(pub class TokioServer |py| {
-    data handle: unsafepy::Handle;
-    data stop_handles: RefCell<Option<Vec<unsafepy::OneshotSender<()>>>>;
+    data handle: pyunsafe::Handle;
+    data stop_handles: RefCell<Option<Vec<pyunsafe::OneshotSender<()>>>>;
 
     def close(&self) -> PyResult<PyObject> {
         let handles = self.stop_handles(py).borrow_mut().take();
@@ -107,7 +107,7 @@ struct Server {
     stop: unsync::oneshot::Receiver<()>,
     transport: TransportFactory,
     factory: PyObject,
-    handle: unsafepy::Handle,
+    handle: pyunsafe::Handle,
 }
 
 impl Server
@@ -116,7 +116,7 @@ impl Server
     //
     // Start accepting incoming connections
     //
-    fn serve(handle: unsafepy::Handle, stream: Incoming,
+    fn serve(handle: pyunsafe::Handle, stream: Incoming,
              transport: TransportFactory,
              factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
 

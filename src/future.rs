@@ -4,7 +4,7 @@ use futures::future;
 use boxfnonce::SendBoxFnOnce;
 
 use utils::Classes;
-use unsafepy::Handle;
+use pyunsafe::Handle;
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {

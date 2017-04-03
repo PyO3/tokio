@@ -16,19 +16,19 @@ pub mod addrinfo;
 pub mod utils;
 pub mod handle;
 pub mod future;
-mod pybytes;
+pub mod pybytes;
+pub mod pyunsafe;
 mod remote;
 mod event_loop;
 mod transport;
 mod server;
-mod unsafepy;
 
+pub use pybytes::TokioBytes;
 pub use future::TokioFuture;
 pub use handle::{TokioHandle, TokioTimerHandle};
 pub use event_loop::{TokioEventLoop, new_event_loop};
 pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
 pub use server::create_server;
-pub use unsafepy::Handle;
 
 
 py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {

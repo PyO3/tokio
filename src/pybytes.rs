@@ -1,9 +1,10 @@
+use std::io;
 use std::ptr;
 use libc::c_void;
 
 use cpython::*;
 use cpython::_detail::ffi;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 
 pub fn create_bytes(py: Python, bytes: Bytes) -> PyResult<TokioBytes> {
@@ -50,3 +51,22 @@ py_class!(pub class TokioBytes |py| {
     }
 
 });
+
+
+impl TokioBytes {
+
+    pub fn create(py: Python, src: Bytes) -> PyResult<TokioBytes> {
+        TokioBytes::create_instance(py, src)
+    }
+
+    pub fn from(py: Python, src: &mut BytesMut, length: usize) -> Result<TokioBytes, io::Error> {
+        let bytes = src.split_to(length).freeze();
+        match TokioBytes::create(py, bytes) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) =>
+                Err(io::Error::new(
+                    io::ErrorKind::Other, "Can not create TokioBytes instance")),
+        }
+    }
+
+}

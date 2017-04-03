@@ -16,7 +16,7 @@ use future::{TokioFuture, create_future, create_task};
 use server;
 use utils;
 use transport;
-use unsafepy::Handle;
+use pyunsafe::Handle;
 
 
 thread_local!(
