@@ -70,8 +70,9 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
     // create protocol
     let proto = match factory.call(py, NoArgs, None) {
         Ok(proto) => proto,
-        Err(_) => {
+        Err(e) => {
             // TODO: log exception to loop logging facility
+            e.print(py);
             return Err(io::Error::new(
                 io::ErrorKind::Other, "Protocol factory failure"));
         }

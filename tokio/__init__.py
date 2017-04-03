@@ -16,6 +16,10 @@ def new_event_loop():
     return _ext.new_event_loop()
 
 
+def spawn_event_loop(name='event-loop'):
+    return _ext.spawn_event_loop(name)
+
+
 class EventLoopPolicy:
     """Event loop policy."""
 

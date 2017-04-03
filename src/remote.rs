@@ -4,7 +4,11 @@ use cpython::*;
 use futures::future;
 use tokio_core::reactor;
 
+use addrinfo;
 use handle;
+use server;
+use transport;
+use future::{TokioFuture, create_future, create_task};
 use unsafepy::{GIL, Handle};
 use event_loop::{TokioEventLoop, new_event_loop};
 
@@ -42,6 +46,28 @@ pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<RemoteTokioEven
 py_class!(pub class RemoteTokioEventLoop |py| {
     data evloop: TokioEventLoop;
     data handle: reactor::Remote;
+
+    def create_future(&self) -> PyResult<TokioFuture> {
+        let res = self.execute_in_loop(py, move|py, h| {
+            create_future(py, h)
+        });
+        match res {
+            Some(Ok(srv)) => Ok(srv),
+            _ => Err(
+                PyErr::new::<exc::RuntimeError, _>(py, "Can not create tcp server")),
+        }
+    }
+
+    def create_task(&self, coro: PyObject) -> PyResult<TokioFuture> {
+        let res = self.execute_in_loop(py, move|py, h| {
+            create_task(py, coro, h)
+        });
+        match res {
+            Some(Ok(srv)) => Ok(srv),
+            _ => Err(
+                PyErr::new::<exc::RuntimeError, _>(py, "Can not create tcp server")),
+        }
+    }
 
     //
     // Return the time according to the event loop's clock.
@@ -90,7 +116,40 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                     py, "Can not connect to remote event loop")),
         }
     }
-    
+
+
+    //
+    // Schedule callback at specific time
+    //
+    def call_at(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+        let args = args.clone_ref(py);
+        let remote = self.handle(py);
+
+        let handle = py.allow_threads(move|| {
+            let py = GIL::python();
+            let (tx, rx) = mpsc::channel();
+            let evloop = self.evloop(py).clone_ref(py);
+
+            remote.spawn(move |_| {
+                let res = evloop.call_at(GIL::python(), &args, None);
+                let _ = tx.send(res);
+                future::ok(())
+            });
+
+            match rx.recv() {
+                Ok(Ok(handle)) => Some(handle),
+                _ => None,
+            }
+        });
+
+        match handle {
+            Some(handle) => Ok(handle),
+            None => Err(
+                PyErr::new::<exc::RuntimeError, _>(
+                    py, "Can not connect to remote event loop")),
+        }
+    }
+
     //
     // Stop running the event loop (it is safe to call TokioEventLoop.stop())
     //
@@ -105,6 +164,50 @@ py_class!(pub class RemoteTokioEventLoop |py| {
         Ok(py.None())
     }
 
+
+    //
+    // Create a TCP server.
+    //
+    // The host parameter can be a string, in that case the TCP server is bound
+    // to host and port.
+    //
+    // The host parameter can also be a sequence of strings and in that case
+    // the TCP server is bound to all hosts of the sequence. If a host
+    // appears multiple times (possibly indirectly e.g. when hostnames
+    // resolve to the same IP address), the server is only bound once to that
+    // host.
+    //
+    // Return a Server object which can be used to stop the service.
+    //
+    def create_server(&self, protocol_factory: PyObject,
+                      host: Option<PyString>, port: Option<u16> = None,
+                      family: i32 = 0,
+                      flags: i32 = addrinfo::AI_PASSIVE,
+                      sock: Option<PyObject> = None,
+                      backlog: i32 = 100,
+                      ssl: Option<PyObject> = None,
+                      reuse_address: bool = true,
+                      reuse_port: bool = true) -> PyResult<server::TokioServer> {
+
+        if let Some(ssl) = ssl {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, PyString::new(py, "ssl argument is not supported yet")));
+        }
+
+        let res = self.execute_in_loop(py, move|py, h| {
+            server::create_server(
+                py, protocol_factory, h,
+                Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
+                family, flags, sock, backlog, ssl, reuse_address, reuse_port,
+                transport::tcp_transport_factory)
+        });
+
+        match res {
+            Some(Ok(srv)) => Ok(srv),
+            _ => Err(
+                PyErr::new::<exc::RuntimeError, _>(py, "Can not create tcp server")),
+        }
+    }
 
 });
 

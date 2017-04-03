@@ -170,7 +170,7 @@ def test_task3():
 
     async def coro(fut):
         res = await fut
-        print("Done: %s", res)
+        print("Done: %s" % res)
 
     def start(evloop):
         fut = evloop.create_future()
