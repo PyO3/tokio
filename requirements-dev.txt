@@ -1,4 +1,0 @@
--r requirements-ci.txt
-ipdb==0.10.2
-pytest-sugar==0.8.0
-ipython==5.3.0

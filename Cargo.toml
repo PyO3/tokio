@@ -27,6 +27,3 @@ default-features = false
 
 #[profile.release]
 #debug = true
-
-#[lib]
-#crate-type = ["cdylib"]

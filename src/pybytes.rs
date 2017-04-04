@@ -12,8 +12,9 @@ pub fn create_bytes(py: Python, bytes: Bytes) -> PyResult<TokioBytes> {
 }
 
 
-// BufferError
-
+//
+// Buffer interface for Bytes
+//
 py_class!(pub class TokioBytes |py| {
     data _bytes: Bytes;
 
