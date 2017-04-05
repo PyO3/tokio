@@ -7,7 +7,7 @@ use tokio_io::{AsyncRead};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use utils::{self, PyLogger, with_py};
+use utils::{PyLogger, ToPyErr, with_py};
 use pybytes::{TokioBytes, create_bytes};
 use pyunsafe::{GIL, Handle, Sender};
 
@@ -175,7 +175,7 @@ impl TcpTransport {
             Err(err) => {
                 debug!("connection_lost: {:?}", err);
                 with_py(|py| {
-                    let mut e = utils::os_error(py, &err);
+                    let mut e = err.to_pyerr(py);
                     self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None)
                         .log_error(py, "connection_lost error");
                 });

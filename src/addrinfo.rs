@@ -258,6 +258,7 @@ pub enum LookupError {
     Generic
 }
 
+
 impl From<io::Error> for LookupError {
     fn from(err: io::Error) -> Self {
         LookupError::IOError(err)
@@ -275,7 +276,6 @@ impl<'a> From<&'a str> for LookupError {
         LookupError::Other(err.to_owned())
     }
 }
-
 
 impl Error for LookupError {
     fn description(&self) -> &str {

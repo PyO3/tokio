@@ -8,7 +8,7 @@ use tokio_core::net::{TcpListener, Incoming};
 
 use addrinfo;
 use future;
-use utils;
+use utils::ToPyErr;
 use pyunsafe;
 use transport::TransportFactory;
 
@@ -23,8 +23,7 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
     let lookup = match addrinfo::lookup_addrinfo(
             &host.unwrap(), port.unwrap_or(0), family, flags, addrinfo::SocketType::Stream) {
         Ok(lookup) => lookup,
-        Err(_) => return Err(PyErr::new_lazy_init(
-            utils::Classes.OSError.clone_ref(py), None))
+        Err(err) => return Err(err.to_pyerr(py)),
     };
 
     // configure sockets
@@ -49,7 +48,7 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
         let _ = builder.reuse_port(reuse_port);
 
         if let Err(err) = builder.bind(info.sockaddr) {
-            return Err(utils::os_error(py, &err));
+            return Err(err.to_pyerr(py));
         }
 
         match builder.listen(backlog) {
@@ -59,10 +58,10 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
                         info!("Started listening on {:?}", info.sockaddr);
                         listeners.push(lst);
                     },
-                    Err(err) => return Err(utils::os_error(py, &err)),
+                    Err(err) => return Err(err.to_pyerr(py)),
                 }
             }
-            Err(err) => return Err(utils::os_error(py, &err)),
+            Err(err) => return Err(err.to_pyerr(py)),
         }
     }
 

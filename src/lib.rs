@@ -23,7 +23,7 @@ mod event_loop;
 mod transport;
 mod server;
 
-pub use utils::{Classes, PyLogger, with_py};
+pub use utils::{Classes, PyLogger, ToPyErr, with_py};
 pub use pybytes::TokioBytes;
 pub use future::TokioFuture;
 pub use handle::{TokioHandle, TokioTimerHandle};

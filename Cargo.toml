@@ -1,5 +1,5 @@
 [package]
-name = "async_tokio"
+name = "async-tokio"
 version = "0.0.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
@@ -22,3 +22,4 @@ tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 [dependencies.cpython]
 git = "https://github.com/fafhrd91/rust-cpython.git"
 #path = "../tokio/rust-cpython"
+default-features = false

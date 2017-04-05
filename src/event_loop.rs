@@ -1,10 +1,11 @@
 #![allow(unused_variables)]
 
+use std::thread;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
+
 use cpython::*;
 use boxfnonce::SendBoxFnOnce;
-
 use futures::{future, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
@@ -12,8 +13,8 @@ use tokio_signal;
 
 use addrinfo;
 use handle;
-use future::{TokioFuture, create_future, create_task};
 use server;
+use future::{TokioFuture, create_future, create_task};
 use utils;
 use transport;
 use pyunsafe::Handle;
@@ -22,6 +23,15 @@ use pyunsafe::Handle;
 thread_local!(
     pub static CORE: RefCell<Option<Core>> = RefCell::new(None);
 );
+
+
+pub fn no_loop_exc(py: Python) -> PyErr {
+    let cur = thread::current();
+    PyErr::new::<exc::RuntimeError, _>(
+        py,
+        format!("There is no current event loop in thread {}.",
+                cur.name().unwrap_or("unknown")).to_py_object(py))
+}
 
 
 pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
@@ -350,7 +360,7 @@ py_class!(pub class TokioEventLoop |py| {
             RunStatus::CtrlC => Ok(py.None()),
             RunStatus::Error => Err(PyErr::new::<exc::RuntimeError, _>(
                 py, PyString::new(py, "Unknown runtime error"))),
-            RunStatus::NoEventLoop => Err(utils::no_loop_exc(py)),
+            RunStatus::NoEventLoop => Err(no_loop_exc(py)),
         }
     }
 
@@ -409,7 +419,7 @@ py_class!(pub class TokioEventLoop |py| {
 
                     fut.result(py)
                 } else {
-                    Err(utils::no_loop_exc(py))
+                    Err(no_loop_exc(py))
                 }
             },
             Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(
