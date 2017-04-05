@@ -259,8 +259,9 @@ py_class!(pub class TokioEventLoop |py| {
     def close(&self) -> PyResult<PyObject> {
         if let Ok(running) = self.is_running(py) {
             if running {
-                return Err(PyErr::new::<exc::RuntimeError, _>(
-                    py, PyString::new(py, "Cannot close a running event loop")));
+                return Err(
+                    PyErr::new::<exc::RuntimeError, _>(
+                        py, "Cannot close a running event loop"));
             }
         }
 
@@ -358,8 +359,8 @@ py_class!(pub class TokioEventLoop |py| {
         match res {
             RunStatus::Stopped => Ok(py.None()),
             RunStatus::CtrlC => Ok(py.None()),
-            RunStatus::Error => Err(PyErr::new::<exc::RuntimeError, _>(
-                py, PyString::new(py, "Unknown runtime error"))),
+            RunStatus::Error => Err(
+                PyErr::new::<exc::RuntimeError, _>(py, "Unknown runtime error")),
             RunStatus::NoEventLoop => Err(no_loop_exc(py)),
         }
     }
@@ -422,8 +423,7 @@ py_class!(pub class TokioEventLoop |py| {
                     Err(no_loop_exc(py))
                 }
             },
-            Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(
-                py, PyString::new(py, "Only TokioFuture is supported"))),
+            Err(_) => Err(PyErr::new::<exc::RuntimeError, _>(py, "Only TokioFuture is supported")),
         }
     }
 

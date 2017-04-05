@@ -124,7 +124,6 @@ impl Server
 
         handle.spawn(
             srv.map_err(|e| {
-                println!("Server error: {}", e);
                 error!("Server error: {}", e);
             })
         );
@@ -139,7 +138,7 @@ impl Future for Server
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.stop.poll() {
-            // TokioServer is closed
+            // TokioServer is closed remotely
             Ok(Async::Ready(_)) | Err(_) => Ok(Async::Ready(())),
             Ok(Async::NotReady) => {
                 let option = self.stream.poll()?;
@@ -150,7 +149,7 @@ impl Future for Server
 
                         // we can not just return Async::NotReady here,
                         // because self.stream is not registered within mio anymore
-                        // next stream.poll() will re-charge future
+                        // next stream.poll() will re-arm future
                         self.poll()
                     },
                     Async::Ready(None) => Ok(Async::Ready(())),

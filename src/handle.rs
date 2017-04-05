@@ -7,6 +7,7 @@ use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
 use pyunsafe::Handle;
+use utils::{with_py, PyLogger};
 
 
 py_class!(pub class TokioHandle |py| {
@@ -38,25 +39,16 @@ pub fn call_soon(py: Python, h: &Handle,
 
     // schedule work
     h.spawn_fn(move || {
-        // get python GIL
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-
-        // check if cancelled
-        if ! handle_ref.cancelled(py).get() {
-            // call python callback
-            let res = callback.call(py, args, None);
-            match res {
-                Err(err) => {
-                    println!("call_soon {:?}", err);
-                    err.print(py);
-                },
-                _ => (),
+        with_py(|py| {
+            // check if cancelled
+            if ! handle_ref.cancelled(py).get() {
+                callback.call(py, args, None)
+                    .log_error(py, "call_soon callback error");
             }
-        }
 
-        // drop ref to handle
-        handle_ref.release_ref(py);
+            // drop ref to handle
+            handle_ref.release_ref(py);
+        });
 
         future::ok(())
     });
@@ -78,27 +70,16 @@ pub fn call_later(py: Python, h: &Handle, dur: Duration,
 
     // start timer
     let fut = Timeout::new(dur, &h).unwrap().select2(rx).then(move |res| {
-        // get python GIL
-        let gil = Python::acquire_gil();
-        let py = gil.python();
+        with_py(|py| {
+            // drop ref to handle
+            handle_ref.release_ref(py);
 
-        // drop ref to handle
-        handle_ref.release_ref(py);
-
-        match res {
-            Ok(future::Either::A(_)) => {
-                // call python callback
-                let res = callback.call(py, args, None);
-                match res {
-                    Err(err) => {
-                        println!("call_later error {:?}", err);
-                        err.print(py);
-                    },
-                    _ => (),
-                }
-            },
-            _ => ()
-        };
+            if let Ok(future::Either::A(_)) = res {
+                // timeout got fired, call callback
+                callback.call(py, args, None)
+                    .log_error(py, "call_later callback error");
+            }
+        });
 
         future::ok(())
     });

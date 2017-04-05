@@ -189,9 +189,10 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                       reuse_address: bool = true,
                       reuse_port: bool = true) -> PyResult<server::TokioServer> {
 
-        if let Some(ssl) = ssl {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, PyString::new(py, "ssl argument is not supported yet")));
+        if let Some(_) = ssl {
+            return Err(
+                PyErr::new::<exc::TypeError, _>(
+                    py, "ssl argument is not supported yet"));
         }
 
         let res = self.execute_in_loop(py, move|py, h| {

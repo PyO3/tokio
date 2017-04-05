@@ -30,8 +30,8 @@ py_class!(pub class TokioBytes |py| {
         if flags != 0 {
             unsafe {
                 let msg = ::std::ffi::CStr::from_ptr(
-                    concat!("Only simple, read-only buffer is available",
-                            "\0").as_ptr() as *const _);
+                    concat!(
+                        "Only simple, read-only buffer is available","\0").as_ptr() as *const _);
                 ffi::PyErr_SetString(ffi::PyExc_BufferError, msg.as_ptr());
             }
             return false;
