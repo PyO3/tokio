@@ -42,6 +42,10 @@ lazy_static! {
         let exception = PyType::extract(
             py, &builtins.get(py, "Exception").unwrap()).unwrap().into_object();
 
+        // for py2.7
+        let ioerror = PyType::extract(
+            py, &builtins.get(py, "IOError").unwrap()).unwrap().into_object();
+
         let cancelled;
         let invalid_state;
         let timeout;
@@ -111,15 +115,20 @@ lazy_static! {
                 py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
 
             BrokenPipeError: PyType::extract(
-                py, &builtins.get(py, "BrokenPipeError").unwrap()).unwrap(),
+                py, &builtins.get(py, "BrokenPipeError").unwrap_or(
+                    ioerror.clone_ref(py))).unwrap(),
             ConnectionAbortedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionAbortedError").unwrap()).unwrap(),
+                py, &builtins.get(py, "ConnectionAbortedError").unwrap_or(
+                    ioerror.clone_ref(py))).unwrap(),
             ConnectionRefusedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionRefusedError").unwrap()).unwrap(),
+                py, &builtins.get(py, "ConnectionRefusedError").unwrap_or(
+                    ioerror.clone_ref(py))).unwrap(),
             ConnectionResetError: PyType::extract(
-                py, &builtins.get(py, "ConnectionResetError").unwrap()).unwrap(),
+                py, &builtins.get(py, "ConnectionResetError").unwrap_or(
+                    ioerror.clone_ref(py))).unwrap(),
             InterruptedError: PyType::extract(
-                py, &builtins.get(py, "InterruptedError").unwrap()).unwrap(),
+                py, &builtins.get(py, "InterruptedError").unwrap_or(
+                    ioerror.clone_ref(py))).unwrap(),
 
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),

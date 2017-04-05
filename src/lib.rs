@@ -50,6 +50,9 @@ pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::
     m.add_class::<handle::TokioTimerHandle>(py)?;
     m.add_class::<server::TokioServer>(py)?;
 
+    // touch classes
+    let _ = Classes.OSError;
+
     Ok(())
 }
 
