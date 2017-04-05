@@ -147,9 +147,9 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
 
 pub trait PyLogger {
 
-    fn log_error(self: &Self, py: Python, msg: &str);
+    fn log_error(&self, py: Python, msg: &str);
 
-    fn log_if_error(self: Self, py: Python, msg: &str) -> Self;
+    fn log_if_error(self, py: Python, msg: &str) -> Self;
 
 }
 
