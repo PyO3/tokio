@@ -18,6 +18,10 @@ pub fn create_bytes(py: Python, bytes: Bytes) -> PyResult<TokioBytes> {
 py_class!(pub class TokioBytes |py| {
     data _bytes: Bytes;
 
+    def __len__(&self) -> PyResult<usize> {
+        Ok(self._bytes(py).len())
+    }
+
     def __buffer_get__(&self, view, flags) -> bool {
         unsafe {
             (*view).obj = ptr::null_mut();

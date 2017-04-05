@@ -22,6 +22,8 @@ pub struct WorkingClasses {
     pub StopIteration: PyType,
     pub TypeError: PyType,
     pub OSError: PyType,
+
+    pub SocketTimeout: PyType,
 }
 
 lazy_static! {
@@ -29,8 +31,11 @@ lazy_static! {
         let gil = Python::acquire_gil();
         let py = gil.python();
         let builtins = py.import("builtins").unwrap();
+        let socket = py.import("socket").unwrap();
         let exception = PyType::extract(
             py, &builtins.get(py, "Exception").unwrap()).unwrap().into_object();
+        let socket_timeout = PyType::extract(
+            py, &socket.get(py, "timeout").unwrap()).unwrap();
 
         if let Ok(asyncio) = py.import("asyncio") {
             WorkingClasses {
@@ -55,6 +60,8 @@ lazy_static! {
                     py, &builtins.get(py, "OSError").unwrap()).unwrap(),
                 TypeError: PyType::extract(
                     py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
+
+                SocketTimeout: socket_timeout,
             }
         } else {
             let tokio = if let Ok(tokio) = PyModule::new(py, "tokio") {
@@ -111,10 +118,49 @@ lazy_static! {
                     py, &builtins.get(py, "IOError").unwrap()).unwrap(),
                 TypeError: PyType::extract(
                     py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
+                SocketTimeout: socket_timeout,
             }
 
         }
     };
+}
+
+
+// Temporarily acquire GIL
+pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+    f(py)
+}
+
+
+pub trait PyLogger {
+
+    fn log_error(self: &Self, py: Python, msg: &str);
+
+    fn log_if_error(self: Self, py: Python, msg: &str) -> Self;
+
+}
+
+impl<T> PyLogger for PyResult<T> {
+
+    fn log_error(&self, py: Python, msg: &str) {
+        if let &Err(ref err) = self {
+            error!("{} {:?}", msg, err);
+            err.clone_ref(py).print(py);
+        }
+    }
+
+    fn log_if_error(self, py: Python, msg: &str) -> Self {
+        match &self {
+            &Err(ref err) => {
+                error!("{} {:?}", msg, err);
+                err.clone_ref(py).print(py);
+            }
+            _ => (),
+        }
+        self
+    }
 }
 
 

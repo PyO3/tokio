@@ -10,20 +10,15 @@ net2 = "0.2"
 libc = "0.2"
 lazy_static = "0.2"
 bytes = "0.4"
-futures = "*"
-tokio-core = "*"
-tokio-io = "*"
+futures = "0.1"
+tokio-core = "0.1"
+tokio-io = "0.1"
 
 #tokio-signal = "*"
 tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
-
 #tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
 #tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 
 [dependencies.cpython]
 git = "https://github.com/fafhrd91/rust-cpython.git"
 #path = "../tokio/rust-cpython"
-default-features = false
-
-#[profile.release]
-#debug = true

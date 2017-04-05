@@ -3,7 +3,7 @@ use cpython::*;
 use futures::future;
 use boxfnonce::SendBoxFnOnce;
 
-use utils::Classes;
+use utils::{Classes, PyLogger, with_py};
 use pyunsafe::Handle;
 
 
@@ -156,19 +156,11 @@ py_class!(pub class TokioFuture |py| {
 
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
-                    // get python GIL
-                    let gil = Python::acquire_gil();
-                    let py = gil.python();
-
                     // call python callback
-                    let res = cb.call(py, (fut,).to_py_object(py), None);
-                    match res {
-                        Err(err) => {
-                            println!("future callback error {:?}", &err);
-                            err.print(py);
-                        }
-                        _ => (),
-                    }
+                    with_py(|py| {
+                        cb.call(py, (fut,).to_py_object(py), None)
+                            .log_error(py, "future callback error");
+                    });
 
                     future::ok(())
                 })
@@ -204,37 +196,28 @@ py_class!(pub class TokioFuture |py| {
 
                 // schedule callbacks
                 let callbacks = self._callbacks(py).borrow_mut().take();
-                let rcallbacks = self._rcallbacks(py).borrow_mut().take();
+                let mut rcallbacks = self._rcallbacks(py).borrow_mut().take();
 
                 if let Some(callbacks) = callbacks {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
-                        // get python GIL
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
-
-                        // call python callback
-                        for cb in callbacks.iter() {
-                            let f = fut.clone_ref(py);
-                            let res = cb.call(py, (f,).to_py_object(py), None);
-                            match res {
-                                Err(err) => {
-                                    println!("future done {:?}", &err);
-                                    err.print(py);
-                                }
-                                _ => (),
+                        with_py(move|py| {
+                            // call python callback
+                            for cb in callbacks.iter() {
+                                cb.call(py, (fut.clone_ref(py),).to_py_object(py), None)
+                                    .log_error(py, "future done callback error");
                             }
-                        }
 
-                        // call task callback
-                        if let Some(mut rcallbacks) = rcallbacks {
-                            loop {
-                                match rcallbacks.pop() {
-                                    Some(cb) => cb.call(fut.clone_ref(py)),
-                                    None => break
+                            // call task callback
+                            if let Some(ref mut rcallbacks) = rcallbacks {
+                                loop {
+                                    match rcallbacks.pop() {
+                                        Some(cb) => cb.call(fut.clone_ref(py)),
+                                        None => break
+                                    }
                                 }
                             }
-                        }
+                        });
 
                         future::ok(())
                     });
@@ -279,22 +262,13 @@ py_class!(pub class TokioFuture |py| {
                 if let Some(callbacks) = callbacks {
                     let fut = self.clone_ref(py);
                     self._loop(py).spawn_fn(move|| {
-                        // get python GIL
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
-
-                        // call python callback
-                        for cb in callbacks.iter() {
-                            let f = fut.clone_ref(py);
-                            let res = cb.call(py, (f,).to_py_object(py), None);
-                            match res {
-                                Err(err) => {
-                                    println!("future exception {:?}", &err);
-                                    err.print(py);
-                                }
-                                _ => (),
+                        with_py(|py| {
+                            // call python callback
+                            for cb in callbacks.iter() {
+                                cb.call(py, (fut.clone_ref(py),).to_py_object(py), None)
+                                    .log_error(py, "future exception callback error");
                             }
-                        }
+                        });
                         future::ok(())
                     })
                 }
@@ -458,26 +432,15 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
     match res {
         Err(mut err) => {
             if err.matches(py, &Classes.StopIteration) {
-                if let Err(err) = fut.set_result(
-                    py, err.instance(py).getattr(py, "value").unwrap()) {
-                    // log exception
-                    println!("can not get StopIteration.value {:?}", &err);
-                    err.print(py);
-                }
+                fut.set_result(py, err.instance(py).getattr(py, "value").unwrap())
+                    .log_error(py, "can not get StopIteration.value");
             }
             else if err.matches(py, &Classes.CancelledError) {
-                if let Err(err) = fut.cancel(py) {
-                    // log exception
-                    println!("can not cancel task {:?}", &err);
-                    err.print(py);
-                }
+                fut.cancel(py).log_error(py, "can not cancel task");
             }
             else if err.matches(py, &Classes.BaseException) {
-                if let Err(err) = fut.set_exception(py, err.instance(py)) {
-                    // log exception
-                    println!("can not set task exception {:?}", &err);
-                    err.print(py);
-                }
+                fut.set_exception(py, err.instance(py))
+                    .log_error(py, "can not set task exception");
             }
             else {
                 // log exception

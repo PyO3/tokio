@@ -7,7 +7,7 @@ use tokio_io::{AsyncRead};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use utils;
+use utils::{self, PyLogger, with_py};
 use pybytes::{TokioBytes, create_bytes};
 use pyunsafe::{GIL, Handle, Sender};
 
@@ -68,11 +68,9 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
     let py = gil.python();
 
     // create protocol
-    let proto = match factory.call(py, NoArgs, None) {
+    let proto = match factory.call(py, NoArgs, None).log_if_error(py, "Protocol factory failure") {
         Ok(proto) => proto,
-        Err(e) => {
-            // TODO: log exception to loop logging facility
-            e.print(py);
+        Err(_) => {
             return Err(io::Error::new(
                 io::ErrorKind::Other, "Protocol factory failure"));
         }
@@ -87,6 +85,8 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
             debug!("connectino_made");
             let res = transport.connection_made.call(
                 py, PyTuple::new(py, &[transport.transport.clone_ref(py).into_object()]), None);
+
+            res.log_error(py, "Protocol.connection_made error");
 
             if let Err(err) = res {
                 return Err(io::Error::new(
@@ -151,38 +151,22 @@ impl TcpTransport {
         // poll for incoming data
         match self.framed.poll() {
             Ok(Async::Ready(Some(bytes))) => {
-                // trace!("Data recv: {}", bytes.len());
-                let gil = Python::acquire_gil();
-                let py = gil.python();
-
-                let res = self.data_received.call(
-                    py, PyTuple::new(py, &[bytes.into_object()]), None);
-
-                match res {
-                    Err(err) => {
-                        debug!("data_received error {:?}", &err);
-                        err.print(py);
-                    }
-                    _ => (),
-                }
+                with_py(|py| {
+                    trace!("Data recv: {}", bytes.__len__(py).unwrap());
+                    self.data_received.call(py, PyTuple::new(py, &[bytes.into_object()]),
+                                            None)
+                        .log_error(py, "data_received error");
+                });
 
                 self.read_from_socket()
             },
             Ok(Async::Ready(None)) => {
-                // Protocol.connection_lost(None)
                 debug!("connectino_lost");
-                let gil = Python::acquire_gil();
-                let py = gil.python();
-                let res = self.connection_lost.call(py, PyTuple::new(py, &[py.None()]), None);
-
-                match res {
-                    Err(err) => {
-                        debug!("connection_lost error {:?}", &err);
-                        err.print(py);
-                    }
-                    _ => (),
-                }
-
+                with_py(|py| {
+                    self.connection_lost.call(py, PyTuple::new(py, &[py.None()]),
+                                              None)
+                        .log_error(py, "connection_lost error");
+                });
                 Ok(Async::Ready(()))
             },
             Ok(Async::NotReady) => {
@@ -190,20 +174,11 @@ impl TcpTransport {
             },
             Err(err) => {
                 debug!("connection_lost: {:?}", err);
-                // Protocol.connection_lost(exc)
-                let gil = Python::acquire_gil();
-                let py = gil.python();
-
-                let mut e = utils::os_error(py, &err);
-                let res = self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None);
-
-                match res {
-                    Err(err) => {
-                        debug!("connection_lost error {:?}", &err);
-                        err.print(py);
-                    }
-                    _ => (),
-                }
+                with_py(|py| {
+                    let mut e = utils::os_error(py, &err);
+                    self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None)
+                        .log_error(py, "connection_lost error");
+                });
 
                 Err(err)
             }
