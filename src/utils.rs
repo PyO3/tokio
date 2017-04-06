@@ -147,22 +147,22 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
 
 pub trait PyLogger {
 
-    fn log_error(&self, py: Python, msg: &str);
+    fn into_log(&self, py: Python, msg: &str);
 
-    fn log_if_error(self, py: Python, msg: &str) -> Self;
+    fn log_error(self, py: Python, msg: &str) -> Self;
 
 }
 
 impl<T> PyLogger for PyResult<T> {
 
-    fn log_error(&self, py: Python, msg: &str) {
+    fn into_log(&self, py: Python, msg: &str) {
         if let &Err(ref err) = self {
             error!("{} {:?}", msg, err);
             err.clone_ref(py).print(py);
         }
     }
 
-    fn log_if_error(self, py: Python, msg: &str) -> Self {
+    fn log_error(self, py: Python, msg: &str) -> Self {
         match &self {
             &Err(ref err) => {
                 error!("{} {:?}", msg, err);
@@ -174,14 +174,12 @@ impl<T> PyLogger for PyResult<T> {
     }
 }
 
-
 /// Converts into PyErr
 pub trait ToPyErr {
 
     fn to_pyerr(&self, Python) -> PyErr;
 
 }
-
 
 /// Create OSError from io::Error
 impl ToPyErr for io::Error {

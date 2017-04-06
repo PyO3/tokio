@@ -68,34 +68,16 @@ pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
     let py = gil.python();
 
     // create protocol
-    let proto = match factory.call(py, NoArgs, None).log_if_error(py, "Protocol factory failure") {
-        Ok(proto) => proto,
-        Err(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other, "Protocol factory failure"));
-        }
-    };
+    let proto = factory.call(py, NoArgs, None)
+        .log_error(py, "Protocol factory failure")?;
 
     // create transport and then call connection_made on protocol
-    let transport = match TcpTransport::new(py, handle.clone(), socket, proto) {
-        Err(err) =>
-            return Err(io::Error::new(
-                io::ErrorKind::Other, format!("Python protocol error: {:?}", err))),
-        Ok(transport) => {
-            debug!("connectino_made");
-            let res = transport.connection_made.call(
-                py, PyTuple::new(py, &[transport.transport.clone_ref(py).into_object()]), None);
+    let transport = TcpTransport::new(py, handle.clone(), socket, proto)?;
 
-            res.log_error(py, "Protocol.connection_made error");
-
-            if let Err(err) = res {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other, format!("Protocol.connection_made error: {:?}", err)))
-            }
-
-            transport
-        }
-    };
+    debug!("connectino_made");
+    let _ = transport.connection_made.call(
+        py, PyTuple::new(py, &[transport.transport.clone_ref(py).into_object()]), None)
+        .log_error(py, "Protocol.connection_made error")?;
 
     handle.spawn(transport.map_err(|e| {
         println!("Error: {:?}", e);
