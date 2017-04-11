@@ -137,7 +137,7 @@ impl TcpTransport {
                     trace!("Data recv: {}", bytes.__len__(py).unwrap());
                     self.data_received.call(py, PyTuple::new(py, &[bytes.into_object()]),
                                             None)
-                        .log_error(py, "data_received error");
+                        .into_log(py, "data_received error");
                 });
 
                 self.read_from_socket()
@@ -147,7 +147,7 @@ impl TcpTransport {
                 with_py(|py| {
                     self.connection_lost.call(py, PyTuple::new(py, &[py.None()]),
                                               None)
-                        .log_error(py, "connection_lost error");
+                        .into_log(py, "connection_lost error");
                 });
                 Ok(Async::Ready(()))
             },
@@ -159,7 +159,7 @@ impl TcpTransport {
                 with_py(|py| {
                     let mut e = err.to_pyerr(py);
                     self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None)
-                        .log_error(py, "connection_lost error");
+                        .into_log(py, "connection_lost error");
                 });
 
                 Err(err)

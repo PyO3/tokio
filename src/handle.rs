@@ -43,7 +43,7 @@ pub fn call_soon(py: Python, h: &Handle,
             // check if cancelled
             if ! handle_ref.cancelled(py).get() {
                 callback.call(py, args, None)
-                    .log_error(py, "call_soon callback error");
+                    .into_log(py, "call_soon callback error");
             }
 
             // drop ref to handle
@@ -77,7 +77,7 @@ pub fn call_later(py: Python, h: &Handle, dur: Duration,
             if let Ok(future::Either::A(_)) = res {
                 // timeout got fired, call callback
                 callback.call(py, args, None)
-                    .log_error(py, "call_later callback error");
+                    .into_log(py, "call_later callback error");
             }
         });
 

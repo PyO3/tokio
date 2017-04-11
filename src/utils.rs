@@ -174,6 +174,22 @@ impl<T> PyLogger for PyResult<T> {
     }
 }
 
+
+impl PyLogger for PyErr {
+
+    fn into_log(&self, py: Python, msg: &str) {
+        error!("{} {:?}", msg, self);
+        self.clone_ref(py).print(py);
+    }
+
+    fn log_error(self, py: Python, msg: &str) -> Self {
+        error!("{} {:?}", msg, self);
+        self.clone_ref(py).print(py);
+        self
+    }
+}
+
+
 /// Converts into PyErr
 pub trait ToPyErr {
 

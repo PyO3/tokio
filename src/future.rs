@@ -159,7 +159,7 @@ py_class!(pub class TokioFuture |py| {
                     // call python callback
                     with_py(|py| {
                         cb.call(py, (fut,).to_py_object(py), None)
-                            .log_error(py, "future callback error");
+                            .into_log(py, "future callback error");
                     });
 
                     future::ok(())
@@ -205,7 +205,7 @@ py_class!(pub class TokioFuture |py| {
                             // call python callback
                             for cb in callbacks.iter() {
                                 cb.call(py, (fut.clone_ref(py),).to_py_object(py), None)
-                                    .log_error(py, "future done callback error");
+                                    .into_log(py, "future done callback error");
                             }
 
                             // call task callback
@@ -266,7 +266,7 @@ py_class!(pub class TokioFuture |py| {
                             // call python callback
                             for cb in callbacks.iter() {
                                 cb.call(py, (fut.clone_ref(py),).to_py_object(py), None)
-                                    .log_error(py, "future exception callback error");
+                                    .into_log(py, "future exception callback error");
                             }
                         });
                         future::ok(())
@@ -433,19 +433,18 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
         Err(mut err) => {
             if err.matches(py, &Classes.StopIteration) {
                 fut.set_result(py, err.instance(py).getattr(py, "value").unwrap())
-                    .log_error(py, "can not get StopIteration.value");
+                    .into_log(py, "can not get StopIteration.value");
             }
             else if err.matches(py, &Classes.CancelledError) {
-                fut.cancel(py).log_error(py, "can not cancel task");
+                fut.cancel(py).into_log(py, "can not cancel task");
             }
             else if err.matches(py, &Classes.BaseException) {
                 fut.set_exception(py, err.instance(py))
-                    .log_error(py, "can not set task exception");
+                    .into_log(py, "can not set task exception");
             }
             else {
                 // log exception
-                println!("unknown task error {:?}", &err);
-                err.print(py);
+                err.into_log(py, "error executing task step");
             }
         },
         Ok(result) => {
