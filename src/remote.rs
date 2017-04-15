@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use std::thread;
 use std::sync::mpsc;
 use cpython::*;

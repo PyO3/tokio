@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use std::cell;
 use cpython::*;
 use futures::future;

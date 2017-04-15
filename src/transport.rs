@@ -1,3 +1,6 @@
+#![allow(unused_variables)]
+#![allow(dead_code)]
+
 use std::io;
 use std::net::SocketAddr;
 use cpython::*;
