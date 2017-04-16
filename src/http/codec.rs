@@ -504,7 +504,7 @@ enum State {
     Done,
 }
 
-pub struct RequestCodec {
+pub struct RequestDecoder {
     state: State,
     start: usize,
     meth_pos: usize,
@@ -530,9 +530,10 @@ pub struct RequestCodec {
     max_field_size: usize,
 }
 
-impl RequestCodec {
-    pub fn new() -> RequestCodec {
-        RequestCodec {
+impl RequestDecoder {
+
+    pub fn new() -> RequestDecoder {
+        RequestDecoder {
             start: 0, state: State::Status(ParseStatusLine::Method),
             meth_pos: 0, meth_end: 0, path_pos: 0, path_end: 0,
             headers: [EMPTY_HEADER; 8], headers_idx: 0, header_name: ParseHeaderName::General,
@@ -585,7 +586,7 @@ impl RequestCodec {
     }
 }
 
-impl Decoder for RequestCodec {
+impl Decoder for RequestDecoder {
     type Item = RequestMessage;
     type Error = Error;
 
@@ -732,6 +733,14 @@ impl Decoder for RequestCodec {
                             self.headers_idx -= 1;
                             state = State::Header(ParseHeader::Value);
                         } else {
+                            // we can parse 8 headers at once
+                            if self.headers_idx == 8 {
+                                self.start = 0;
+                                self.state = state;
+                                return Ok(Some(
+                                    RequestMessage::Headers(self.headers_message(src))));
+                            }
+
                             // header
                             state = State::Header(ParseHeader::Name);
                             self.header_name = ParseHeaderName::New;
@@ -740,14 +749,6 @@ impl Decoder for RequestCodec {
                     None => break
                 },
                 ParseHeader::Name => {
-                    // we can parse 8 headers at once
-                    if self.headers_idx == 9 {
-                        self.start = 0;
-                        self.state = state;
-                        return Ok(Some(
-                            RequestMessage::Headers(self.headers_message(src))));
-                    }
-
                     // parse header name
                     let len = bytes.len();
                     for idx in 0..len {
@@ -811,8 +812,6 @@ impl Decoder for RequestCodec {
                                 Ok(v) => self.length = Some(v),
                                 Err(..) => return Err(Error::ContentLength)
                             }
-                            //println!("Header: {:?} {:?}", self.header_name,
-                            //         self.headers[self.headers_idx]);
                             continue 'run
                         } else if !is_num(ch) {
                             return Err(Error::ContentLength);
@@ -874,7 +873,6 @@ impl Decoder for RequestCodec {
                     if len > 0 {
                         let len64 = len as u64;
                         if remaining > len64 {
-                            //println!("Reading chunk: {} buf:{}", remaining, len);
                             self.state = State::Body(ParseBody::Length(remaining - len64));
                             return Ok(Some(
                                 RequestMessage::Body(src.split_to(len).freeze())));
@@ -956,7 +954,6 @@ impl Decoder for RequestCodec {
                         if start != 0 {
                             src.split_to(start);
                         }
-                        //println!("Reading chunk: {} buf:{} {:?}", remaining, len, src);
                         if remaining > len64 {
                             self.start = 0;
                             self.state = State::Body(ParseBody::Chunk(remaining - len64));
@@ -1175,7 +1172,6 @@ fn parse_token(bytes: &mut BytesPtr, stop: u8) -> Result<usize, usize> {
             bytes.advance(idx+1);
             return Ok(Status::Complete(idx));
         } else if !is_token(b) {
-            println!("Err: {:?}", b as char);
             return Err(Error::BadStatusLine);
         }
     }

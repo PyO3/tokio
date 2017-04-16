@@ -4,13 +4,13 @@ extern crate async_tokio;
 
 use bytes::BytesMut;
 use tokio_io::codec::{Decoder};
-use async_tokio::http::{ContentCompression, Error, RequestCodec, RequestMessage, Version};
+use async_tokio::http::{ContentCompression, Error, RequestDecoder, RequestMessage, Version};
 
 macro_rules! test {
     ($name:ident, $($data:expr),+ => |$codec:ident, $buf:ident| $body:expr) => (
         #[test]
         fn $name() {
-            let mut $codec = RequestCodec::new();
+            let mut $codec = RequestDecoder::new();
             let mut $buf = BytesMut::from(concat!(
                 $( $data ),+
             ));
@@ -221,8 +221,36 @@ test! { test_parse_headers_multi,
                             ("Set-Cookie", "c2=cookie2"));
             expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
-        }
-}
+        }}
+
+test! { test_parse_headers_max_multi,
+        "GET /test HTTP/1.1\r\n",
+        "Header1: val1\r\n",
+        "Header2: val2\r\n",
+        "Header3: val3\r\n",
+        "Header4: val4\r\n",
+        "Header5: val5\r\n",
+        "Header6: val6\r\n",
+        "Header7: val7\r\n",
+        "Header8: val8\r\n",
+        "Header9: val9\r\n",
+        "Header10: val10\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf):
+                            ("Header1", "val1"),
+                            ("Header2", "val2"),
+                            ("Header3", "val3"),
+                            ("Header4", "val4"),
+                            ("Header5", "val5"),
+                            ("Header6", "val6"),
+                            ("Header7", "val7"),
+                            ("Header8", "val8"));
+            expect_headers!(codec(buf):
+                            ("Header9", "val9"),
+                            ("Header10", "val10"));
+            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_completed!(codec(buf));
+        }}
 
 test! { test_conn_default_1_0,
         "GET /test HTTP/1.0\r\n\r\n" => |codec, buf| {
