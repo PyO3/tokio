@@ -4,7 +4,7 @@ extern crate async_tokio;
 
 use bytes::BytesMut;
 use tokio_io::codec::{Decoder};
-use async_tokio::http::{Error, RequestCodec, RequestMessage, Version};
+use async_tokio::http::{ContentCompression, Error, RequestCodec, RequestMessage, Version};
 
 macro_rules! test {
     ($name:ident, $($data:expr),+ => |$codec:ident, $buf:ident| $body:expr) => (
@@ -64,23 +64,41 @@ macro_rules! expect_headers {
 
 macro_rules! expect_headers_complete {
     ($codec:ident($buf:ident)) => (
-        expect_headers_complete!($codec($buf): close:false, chunked:false, upgrade:false);
+        expect_headers_complete!(
+            $codec($buf): close:false, chunked:false, upgrade:false,
+            compress:ContentCompression::Default);
     );
     ($codec:ident($buf:ident): chunked:$chunked:expr) => (
-        expect_headers_complete!($codec($buf): close:false, chunked:$chunked, upgrade:false);
+        expect_headers_complete!
+            ($codec($buf): close:false, chunked:$chunked, upgrade:false,
+             compress:ContentCompression::Default);
     );
     ($codec:ident($buf:ident): upgrade:$upgrade:expr) => (
-        expect_headers_complete!($codec($buf): close:false, chunked:false, upgrade:$upgrade);
+        expect_headers_complete!(
+            $codec($buf): close:false, chunked:false, upgrade:$upgrade,
+            compress:ContentCompression::Default);
     );
-    ($codec:ident($buf:ident): close:$close:expr, chunked:$chunked:expr, upgrade:$upgrade:expr) => {
+    ($codec:ident($buf:ident): compress:$compress:expr) => (
+        expect_headers_complete!(
+            $codec($buf): close:false, chunked:false, upgrade:false, compress:$compress);
+    );
+    ($codec:ident($buf:ident): close:$close:expr,
+     chunked:$chunked:expr, upgrade:$upgrade:expr) => (
+        expect_headers_complete!(
+            $codec($buf): close:$close, chunked:$chunked, upgrade:$upgrade,
+            compress:ContentCompression::Default);
+    );
+    ($codec:ident($buf:ident): close:$close:expr,
+     chunked:$chunked:expr, upgrade:$upgrade:expr, compress:$compress:expr) => {
         match $codec.decode(&mut $buf) {
             Err(err) => assert!(false, format!("Got error: {:?}", err)),
             Ok(None) => assert!(false, "Did not get any result"),
             Ok(Some(msg)) => match msg {
-                RequestMessage::HeadersCompleted {close, chunked, upgrade} => {
+                RequestMessage::HeadersCompleted {close, chunked, upgrade, compress} => {
                     assert_eq!(close, $close);
                     assert_eq!(chunked, $chunked);
                     assert_eq!(upgrade, $upgrade);
+                    assert_eq!(compress, $compress);
                 },
                 _ => assert!(false, "RequestMessage::HeadersComplete is required"),
             }
@@ -296,27 +314,32 @@ test! { test_conn_close_and_upgrade,
             expect_completed!(codec(buf));
         }}
 
-//TODO
-// def test_compression_deflate(parser):
-// text = (b'GET /test HTTP/1.1\r\n'
-//         b'content-encoding: deflate\r\n\r\n')
-//     messages, upgrade, tail = parser.feed_data(text)
-//     msg = messages[0][0]
-//     assert msg.compression == 'deflate'
+test! { test_compression_deflate,
+        "GET /test HTTP/1.1\r\n",
+        "content-Encoding: deflate\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf):
+                            ("content-Encoding", "deflate"));
+            expect_headers_complete!(codec(buf): compress:ContentCompression::Deflate);
+        }}
 
-//     def test_compression_gzip(parser):
-// text = (b'GET /test HTTP/1.1\r\n'
-//         b'content-encoding: gzip\r\n\r\n')
-//     messages, upgrade, tail = parser.feed_data(text)
-//     msg = messages[0][0]
-//     assert msg.compression == 'gzip'
+test! { test_compression_gzip,
+        "GET /test HTTP/1.1\r\n",
+        "content-encoding: gzip\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf):
+                            ("content-encoding", "gzip"));
+            expect_headers_complete!(codec(buf): compress:ContentCompression::Gzip);
+        }}
 
-//  def test_compression_unknown(parser):
-// text = (b'GET /test HTTP/1.1\r\n'
-//         b'content-encoding: compress\r\n\r\n')
-//     messages, upgrade, tail = parser.feed_data(text)
-//     msg = messages[0][0]
-//     assert not msg.compression
+test! { test_compression_unknown,
+        "GET /test HTTP/1.1\r\n",
+        "content-encoding: compress\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf):
+                            ("content-encoding", "compress"));
+            expect_headers_complete!(codec(buf): compress:ContentCompression::Default);
+        }}
 
 // def test_headers_connect(parser):
 // text = (b'CONNECT www.google.com HTTP/1.1\r\n'
@@ -375,7 +398,6 @@ test! { test_max_header_value_size,
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
             expect_error!(codec(buf): Error::LineTooLong);
         }}
-
 
 //test! { test_max_header_value_size_continuation,
 //        "GET /test HTTP/1.1\r\n" => |codec, buf| {

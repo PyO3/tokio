@@ -1,3 +1,4 @@
 mod codec;
 
-pub use self::codec::{Error, RequestCodec, RequestMessage, RequestStatusLine, Version};
+pub use self::codec::{ContentCompression, Error,
+                      RequestCodec, RequestMessage, RequestStatusLine, Version};

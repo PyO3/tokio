@@ -159,8 +159,8 @@ impl<'h> Iterator for RequestHeadersIter <'h> {
 }
 
 
-#[derive(Debug)]
-pub enum ContentEncoding {
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum ContentCompression {
     Default,
     Gzip,
     Deflate,
@@ -171,7 +171,7 @@ pub enum ContentEncoding {
 pub enum RequestMessage {
     Status(RequestStatusLine),
     Headers(RequestHeaders),
-    HeadersCompleted {close: bool, chunked: bool, upgrade: bool},
+    HeadersCompleted {close: bool, chunked: bool, upgrade: bool, compress: ContentCompression},
     Body(Bytes),
     Completed,
 }
@@ -310,9 +310,11 @@ enum ParseHeaderName {
     General,
 
     Con(usize),
+    Content(usize),
+
     Connection(usize),
     ContentLength(usize),
-    // ContentEncoding(usize),
+    ContentEncoding(usize),
 
     ProxyConnection(usize),
     TransferEncoding(usize),
@@ -346,7 +348,7 @@ impl ParseHeaderName {
                     if ch == b'n' {
                         ParseHeaderName::Connection(3)
                     } else if ch == b't' {
-                        ParseHeaderName::ContentLength(3)
+                        ParseHeaderName::Content(3)
                     } else {
                         ParseHeaderName::General
                     }
@@ -354,11 +356,30 @@ impl ParseHeaderName {
                     ParseHeaderName::General
                 }
             },
+            ParseHeaderName::Content(idx) => {
+                let next = idx + 1;
+                if next == 8 {
+                    if ch == b'e' {
+                        ParseHeaderName::ContentEncoding(next)
+                    } else if ch == b'l' {
+                        ParseHeaderName::ContentLength(next)
+                    } else {
+                        ParseHeaderName::General
+                    }
+                } else if CONTENT.token[next] != ch {
+                    ParseHeaderName::General
+                } else {
+                    ParseHeaderName::Content(next)
+                }
+            },
             ParseHeaderName::Connection(idx) => {
                 match_hname!(ParseHeaderName::Connection(idx) == ch, CONNECTION)
             },
             ParseHeaderName::ContentLength(idx) => {
                 match_hname!(ParseHeaderName::ContentLength(idx) == ch, CONTENT_LENGTH)
+            },
+            ParseHeaderName::ContentEncoding(idx) => {
+                match_hname!(ParseHeaderName::ContentEncoding(idx) == ch, CONTENT_ENCODING)
             },
             ParseHeaderName::ProxyConnection(idx) => {
                 match_hname!(ParseHeaderName::ProxyConnection(idx) == ch, PROXY_CONNECTION)
@@ -482,6 +503,7 @@ pub struct RequestCodec {
     close: Option<bool>,
     chunked: bool,
     upgrade: bool,
+    compress: ContentCompression,
 
     headers: [Header; 8],
     headers_idx: usize,
@@ -503,7 +525,7 @@ impl RequestCodec {
             header_tokens: 0, header_token: ParseTokens::New,
 
             version: Version::Http10, length: None,
-            close: None, chunked: false, upgrade: false,
+            close: None, chunked: false, upgrade: false, compress: ContentCompression::Default,
 
             max_line_size: 8190, max_headers: 32768, max_field_size: 8190,
         }
@@ -519,6 +541,11 @@ impl RequestCodec {
             },
             ParseHeaderName::TransferEncoding(..) => match self.header_token {
                 ParseTokens::Chunked(..) => self.chunked = true,
+                _ => (),
+            },
+            ParseHeaderName::ContentEncoding(..) => match self.header_token {
+                ParseTokens::Gzip(..) => self.compress = ContentCompression::Gzip,
+                ParseTokens::Deflate(..) => self.compress = ContentCompression::Deflate,
                 _ => (),
             },
             _ => (),
@@ -676,7 +703,9 @@ impl Decoder for RequestCodec {
                                             RequestMessage::HeadersCompleted {
                                                 close: close,
                                                 chunked: self.chunked,
-                                                upgrade: self.upgrade }));
+                                                upgrade: self.upgrade,
+                                                compress: self.compress
+                                            }));
                                     }
                                 } else {
                                     return Err(Error::BadHeader);
@@ -980,6 +1009,7 @@ impl Decoder for RequestCodec {
                 self.start = 0;
                 self.meth_pos = 0;
                 self.meth_end = 0;
+                self.compress = ContentCompression::Default;
                 self.state = State::Status(ParseStatusLine::Method);
                 return Ok(Some(RequestMessage::Completed))
             }
@@ -1052,6 +1082,7 @@ struct Token{
 
 const PROXY_CONNECTION: Token = Token {len: 16, token: b"proxy-connection"};
 const CONNECTION: Token = Token {len: 10, token: b"connection"};
+const CONTENT: Token = Token {len: 8, token: b"content-"};
 const CONTENT_LENGTH: Token = Token {len: 14, token: b"content-length"};
 const CONTENT_ENCODING: Token = Token {len: 16, token: b"content-encoding"};
 const TRANSFER_ENCODING: Token = Token {len: 17, token: b"transfer-encoding"};
