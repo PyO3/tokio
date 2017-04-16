@@ -559,22 +559,34 @@ impl Decoder for RequestCodec {
             State::Status(status) => match status {
                 ParseStatusLine::Method => match parse_token(&mut bytes, SP)? {
                     Status::Complete(l) => {
+                        if bytes.pos() > self.max_line_size {
+                            return Err(Error::LineTooLong);
+                        }
                         self.meth_end = self.meth_end + l;
                         self.path_pos = bytes.pos();
                         self.path_end = self.path_pos;
                         state = State::Status(ParseStatusLine::Path);
                     }
                     Status::Partial(l) => {
+                        if bytes.pos() > self.max_line_size {
+                            return Err(Error::LineTooLong);
+                        }
                         self.meth_end = self.meth_end + l;
                         break
                     }
                 },
                 ParseStatusLine::Path => match parse_path(&mut bytes)? {
                     Status::Complete(l) => {
+                        if bytes.pos() > self.max_line_size {
+                            return Err(Error::LineTooLong);
+                        }
                         self.path_end = self.path_end + l;
                         state = State::Status(ParseStatusLine::Version);
                     }
                     Status::Partial(l) => {
+                        if bytes.pos() > self.max_line_size {
+                            return Err(Error::LineTooLong);
+                        }
                         self.path_end = self.path_end + l;
                         break
                     }

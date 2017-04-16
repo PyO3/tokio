@@ -69,6 +69,9 @@ macro_rules! expect_headers_complete {
     ($codec:ident($buf:ident): chunked:$chunked:expr) => (
         expect_headers_complete!($codec($buf): close:false, chunked:$chunked, upgrade:false);
     );
+    ($codec:ident($buf:ident): upgrade:$upgrade:expr) => (
+        expect_headers_complete!($codec($buf): close:false, chunked:false, upgrade:$upgrade);
+    );
     ($codec:ident($buf:ident): close:$close:expr, chunked:$chunked:expr, upgrade:$upgrade:expr) => {
         match $codec.decode(&mut $buf) {
             Err(err) => assert!(false, format!("Got error: {:?}", err)),
@@ -396,7 +399,7 @@ test! { test_http_request_upgrade,
             expect_headers!(codec(buf):
                             ("connection", "upgrade"),
                             ("upgrade", "websocket"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:true);
+            expect_headers_complete!(codec(buf): upgrade:true);
             //except_bod!(codec(buf): "some raw data");
             //expect_completed!(codec(buf));
         }}
@@ -437,12 +440,11 @@ test! { test_http_request_parser_bad_version,
             expect_error!(codec(buf): Error::BadStatusLine);
         }}
 
-//test! { test_http_request_max_status_line,
-//        "GET /path" => |codec, buf| {
-//            buf.extend([b't'; 10 * 1024][..].as_ref());
-//            expect_error!(codec(buf): Error::LineTooLong);
-//        }}
-
+test! { test_http_request_max_status_line,
+        "GET /path" => |codec, buf| {
+            buf.extend([b't'; 10 * 1024][..].as_ref());
+            expect_error!(codec(buf): Error::LineTooLong);
+        }}
 
 test! { test_http_request_chunked_payload,
         "GET /test HTTP/1.1\r\n",
