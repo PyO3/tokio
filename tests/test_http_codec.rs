@@ -292,6 +292,22 @@ test! { test_request_chunked,
             expect_headers_complete!(codec(buf): close:false, chunked:true, upgrade:false);
         }}
 
+test! { test_request_chunked_partial,
+        "GET /test HTTP/1.1\r\n",
+        "transfer-encoding: chunk\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunk"));
+            expect_headers_complete!(codec(buf): chunked:false);
+        }}
+
+test! { test_special_headers_partial,
+        "GET /test HTTP/1.1\r\n",
+        "transfer-encod: chunked\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encod", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:false);
+        }}
+
 test! { test_conn_upgrade,
         "GET /test HTTP/1.1\r\n",
         "connection: upgrade\r\n",

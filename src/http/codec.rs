@@ -392,6 +392,20 @@ impl ParseHeaderName {
             },
         }
     }
+
+    #[inline]
+    fn completed(&self) -> bool {
+        match *self {
+            ParseHeaderName::Connection(idx) => idx+1 == CONNECTION.len,
+            ParseHeaderName::ContentLength(idx) => idx+1 == CONTENT_LENGTH.len,
+            ParseHeaderName::ContentEncoding(idx) => idx+1 == CONTENT_ENCODING.len,
+            ParseHeaderName::ProxyConnection(idx) => idx+1 == PROXY_CONNECTION.len,
+            ParseHeaderName::TransferEncoding(idx) => idx+1 == TRANSFER_ENCODING.len,
+            ParseHeaderName::Websocket(idx) => idx+1 == WEBSOCKET.len,
+
+            _ => true
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -655,7 +669,7 @@ impl Decoder for RequestCodec {
             },
             State::Header(marker) => match marker {
                 // eol of headers, possible scenarios
-                // CRLF right aster status line
+                // CRLF right avter status line
                 // hedaer line with CRLF and then CRLF (end of headers)
                 // hedaer line with CRLF and then SP (continuation)
                 // token (new header line)
@@ -739,17 +753,25 @@ impl Decoder for RequestCodec {
                     for idx in 0..len {
                         let ch = bytes.next();
                         if ch == b':' {
-                            bytes.advance(idx+1);
-                            state = State::Header(ParseHeader::OWS);
-                            self.header_token = ParseTokens::New;
                             self.headers[self.headers_idx].update_name_len(idx);
                             let _ = self.headers[self.headers_idx]
                                 .check_line_size(self.max_line_size)?;
+
+                            // move char pointer and prepare value parse
+                            bytes.advance(idx+1);
+                            state = State::Header(ParseHeader::OWS);
+                            self.header_token = ParseTokens::New;
+
+                            // complete header name parsing
+                            if !self.header_name.completed() {
+                                self.header_name = ParseHeaderName::General;
+                            }
+
                             continue 'run
                         } else if !is_token(ch) {
                             return Err(Error::BadHeader);
                         }
-                        // parse actual name
+                        // parse actual header name
                         self.header_name = self.header_name.next(lower(ch));
                     }
                     bytes.advance(len);
