@@ -143,12 +143,56 @@ macro_rules! expect_completed {
     }
 }
 
-macro_rules! expect_wait {
+macro_rules! expect_none {
     ($codec:ident($buf:ident)) => {
         match $codec.decode(&mut $buf) {
             Err(err) => assert!(false, format!("Got error: {:?}", err)),
             Ok(None) => (),
             Ok(Some(msg)) => assert!(false, format!("Got unexpected message: {:?}", msg)),
+        }
+    }
+}
+
+
+macro_rules! expect_eof_body {
+    ($codec:ident($buf:ident): $body:expr) => {
+        match $codec.decode_eof(&mut $buf) {
+            Err(err) => assert!(false, format!("Got error: {:?}", err)),
+            Ok(None) => assert!(false, "Did not get any result"),
+            Ok(Some(RequestMessage::Body(body))) => assert_eq!(body, $body),
+            Ok(Some(msg)) => assert!(false, "RequestMessage::Body is expected, got {:?}", msg),
+        }
+    }
+}
+
+macro_rules! expect_eof_error {
+    ($codec:ident($buf:ident): $err:pat) => {
+        match $codec.decode_eof(&mut $buf) {
+            Err($err) => (),
+            Err(err) => assert!(false, format!("Got unexpected error: {:?}", err)),
+            Ok(None) => assert!(false, "Excepted error, did not get any result"),
+            Ok(Some(msg)) => assert!(false, format!("Expected error got message: {:?}", msg)),
+        }
+    }
+}
+
+macro_rules! expect_eof_none {
+    ($codec:ident($buf:ident)) => {
+        match $codec.decode_eof(&mut $buf) {
+            Err(err) => assert!(false, format!("Got error: {:?}", err)),
+            Ok(None) => (),
+            Ok(Some(msg)) => assert!(false, format!("Got unexpected message: {:?}", msg)),
+        }
+    }
+}
+
+macro_rules! expect_eof_completed {
+    ($codec:ident($buf:ident)) => {
+        match $codec.decode(&mut $buf) {
+            Err(err) => assert!(false, format!("Got error: {:?}", err)),
+            Ok(None) => assert!(false, "Did not get any result"),
+            Ok(Some(RequestMessage::Completed)) => (),
+            Ok(Some(msg)) => assert!(false, "RequestMessage::Completed is expected, got {:?}", msg),
         }
     }
 }
@@ -180,7 +224,7 @@ test! { test_parse_body,
 test! { test_parse_delayed,
         "GET /test HTTP/1.1\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b"\r\n");
 
@@ -190,19 +234,19 @@ test! { test_parse_delayed,
 
 test! { test_headers_multi_feed,
         "GE" => |codec, buf| {
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
             buf.extend(b"T /te");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
             buf.extend(b"st HTTP/1.1");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
             buf.extend(b"\r\n");
 
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
 
             buf.extend(b"test: line\r");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
             buf.extend(b"\n");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b" continue\r\n\r\n");
 
@@ -443,13 +487,13 @@ test! { test_max_header_value_size,
             expect_error!(codec(buf): Error::LineTooLong);
         }}
 
-//test! { test_max_header_value_size_continuation,
-//        "GET /test HTTP/1.1\r\n" => |codec, buf| {
-//            buf.extend(b"header: test\r\n ");
-//            buf.extend([b't'; 10 * 1024][..].as_ref());
-//            expect_status!(codec(buf): "GET", "/test", Version::Http11);
-//            expect_error!(codec(buf): Error::LineTooLong);
-//        }}
+test! { test_max_header_value_size_continuation,
+        "GET /test HTTP/1.1\r\n" => |codec, buf| {
+            buf.extend(b"header: test\r\n ");
+            buf.extend([b't'; 10 * 1024][..].as_ref());
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_error!(codec(buf): Error::LineTooLong);
+        }}
 
 test! { test_http_request_bad_status_line,
         "getpath \r\n\r\n" => |codec, buf| {
@@ -556,20 +600,20 @@ test! { test_http_request_chunked_payload_chunks,
             expect_body!(codec(buf): "data");
 
             buf.extend(b"\n4");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b"\r");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b"\n");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b"line\r\n0\r\n");
             expect_body!(codec(buf): "line");
 
             // Trailers
             buf.extend(b"test: test\r\n");
-            expect_wait!(codec(buf));
+            expect_none!(codec(buf));
 
             buf.extend(b"\r\n");
             expect_completed!(codec(buf));
@@ -601,3 +645,69 @@ test! { test_parse_length_payload,
             expect_body!(codec(buf): "ta");
             expect_completed!(codec(buf));
         }}
+
+
+test! { test_parse_no_length_payload,
+        "PUT / HTTP/1.1\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "PUT", "/", Version::Http11);
+            expect_headers_complete!(codec(buf));
+            expect_eof_completed!(codec(buf));
+        }}
+
+test! { test_parse_eof_payload,
+        "PUT / HTTP/1.1\r\n",
+        "Content-Length: 4\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "PUT", "/", Version::Http11);
+            expect_headers!(codec(buf): ("Content-Length", "4"));
+            expect_headers_complete!(codec(buf));
+
+            buf.extend(b"data");
+            expect_eof_body!(codec(buf): &"data");
+        }}
+
+test! { test_parse_length_payload_eof,
+        "PUT / HTTP/1.1\r\n",
+        "Content-Length: 4\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "PUT", "/", Version::Http11);
+            expect_headers!(codec(buf): ("Content-Length", "4"));
+            expect_headers_complete!(codec(buf));
+
+            buf.extend(b"da");
+            expect_eof_error!(codec(buf): Error::PayloadNotCompleted);
+        }}
+
+test! { test_parse_chunked_payload_size_error,
+        "PUT / HTTP/1.1\r\n",
+        "transfer-encoding: chunked\r\n\r\n",
+        "blah\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "PUT", "/", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:true);
+            expect_error!(codec(buf): Error::TransferEncoding);
+        }}
+
+
+test! { test_http_payload_parser_length,
+        "PUT / HTTP/1.1\r\n",
+        "Content-Length: 2\r\n\r\n",
+        "1245" => |codec, buf| {
+            expect_status!(codec(buf): "PUT", "/", Version::Http11);
+            expect_headers!(codec(buf): ("Content-Length", "2"));
+            expect_headers_complete!(codec(buf));
+            expect_body!(codec(buf): &"12");
+            expect_completed!(codec(buf));
+            assert_eq!(buf[..], b"45"[..]);
+        }}
+
+
+//_comp = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+//_COMPRESSED = b''.join([_comp.compress(b'data'), _comp.flush()])
+
+//def test_http_payload_parser_deflate(self):
+//length = len(self._COMPRESSED)
+//    out = aiohttp.FlowControlDataQueue(self.stream)
+//p = HttpPayloadParser(
+//out, length=length, compression='deflate')
+//p.feed_data(self._COMPRESSED)
+//self.assertEqual(b'data', b''.join(d for d, _ in out._buffer))
+//self.assertTrue(out.is_eof())

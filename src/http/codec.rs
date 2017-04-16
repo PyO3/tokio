@@ -191,7 +191,9 @@ pub enum Error {
     /// Content-Length and Trasnfer-Encoding: chunked
     ContentLengthAndTE,
     /// An error in parsing a chunk
-    BadChunkFormat,
+    TransferEncoding,
+    /// Eof received but payload is not completed yet
+    PayloadNotCompleted,
     /// std::io::Error
     IOError(std::io::Error),
 }
@@ -205,7 +207,8 @@ impl Error {
             Error::BadStatusLine => "bad status line",
             Error::ContentLength => "invalid content length",
             Error::ContentLengthAndTE => "Both defined Content-Length and Trasnfer-Encoding: chunked length",
-            Error::BadChunkFormat => "An error in parsing a chunk",
+            Error::TransferEncoding => "transfer encoding error",
+            Error::PayloadNotCompleted => "Eof received but payload is not completed yet",
             Error::IOError(_) => "io error",
         }
     }
@@ -903,7 +906,7 @@ impl Decoder for RequestDecoder {
 
                             let size = match u64::from_str_radix(hex, 16) {
                                 Ok(v) => v,
-                                Err(..) => return Err(Error::BadChunkFormat),
+                                Err(..) => return Err(Error::TransferEncoding),
                             };
 
                             if let Some(ch2) = bytes.get_next_maybe() {
@@ -921,7 +924,7 @@ impl Decoder for RequestDecoder {
                             state = State::Body(ParseBody::ChunkSizeEol(size));
                             continue 'run
                         } else if !is_hex(ch) {
-                            return Err(Error::BadChunkFormat);
+                            return Err(Error::TransferEncoding);
                         }
                         bytes.bump();
                     }
@@ -973,7 +976,7 @@ impl Decoder for RequestDecoder {
                     break
                 },
                 ParseBody::ChunkEOL(marker) =>
-                    match parse_crlf(&mut bytes, marker, Error::BadChunkFormat)? {
+                    match parse_crlf(&mut bytes, marker, Error::TransferEncoding)? {
                         Status::Complete(..) => {
                             state = State::Body(ParseBody::ChunkSize(0))
                         },
@@ -1041,6 +1044,16 @@ impl Decoder for RequestDecoder {
         Ok(None)
     }
 
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
+        let item = self.decode(buf)?;
+
+        match self.state {
+            State::Body(ParseBody::Length(..)) => Err(Error::PayloadNotCompleted),
+            State::Body(ParseBody::Unsized) => Ok(item),
+            State::Body(..) => Err(Error::PayloadNotCompleted),
+            _ => Ok(item)
+        }
+    }
 }
 
 /// Determines if byte is a token char.
