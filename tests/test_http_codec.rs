@@ -19,7 +19,6 @@ macro_rules! test {
     )
 }
 
-
 macro_rules! expect_status {
     ($codec:ident($buf:ident): $meth:expr, $path:expr, $ver:expr) => {
         match $codec.decode(&mut $buf) {
@@ -64,6 +63,12 @@ macro_rules! expect_headers {
 }
 
 macro_rules! expect_headers_complete {
+    ($codec:ident($buf:ident)) => (
+        expect_headers_complete!($codec($buf): close:false, chunked:false, upgrade:false);
+    );
+    ($codec:ident($buf:ident): chunked:$chunked:expr) => (
+        expect_headers_complete!($codec($buf): close:false, chunked:$chunked, upgrade:false);
+    );
     ($codec:ident($buf:ident): close:$close:expr, chunked:$chunked:expr, upgrade:$upgrade:expr) => {
         match $codec.decode(&mut $buf) {
             Err(err) => assert!(false, format!("Got error: {:?}", err)),
@@ -448,5 +453,83 @@ test! { test_http_request_chunked_payload,
             expect_headers_complete!(codec(buf): close:false, chunked:true, upgrade:false);
             expect_body!(codec(buf): "data");
             expect_body!(codec(buf): "line");
+            expect_completed!(codec(buf));
+        }}
+
+
+test! { test_http_request_chunked_payload_and_next_message,
+        "GET /test HTTP/1.1\r\n",
+        "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:true);
+
+            buf.extend(b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n");
+            buf.extend(b"POST /test2 HTTP/1.1\r\n");
+            buf.extend(b"transfer-encoding: chunked\r\n\r\n");
+
+            expect_body!(codec(buf): "data");
+            expect_body!(codec(buf): "line");
+            expect_completed!(codec(buf));
+
+            expect_status!(codec(buf): "POST", "/test2", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:true);
+        }}
+
+test! { test_http_request_chunked_payload_chunks,
+        "GET /test HTTP/1.1\r\n",
+        "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:true);
+
+            buf.extend(b"4\r\ndata\r");
+            expect_body!(codec(buf): "data");
+
+            buf.extend(b"\n4");
+            expect_wait!(codec(buf));
+
+            buf.extend(b"\r");
+            expect_wait!(codec(buf));
+
+            buf.extend(b"\n");
+            expect_wait!(codec(buf));
+
+            buf.extend(b"line\r\n0\r\n");
+            expect_body!(codec(buf): "line");
+
+            // Trailers
+            buf.extend(b"test: test\r\n");
+            expect_wait!(codec(buf));
+
+            buf.extend(b"\r\n");
+            expect_completed!(codec(buf));
+        }}
+
+test! { test_parse_chunked_payload_chunk_extension,
+        "GET /test HTTP/1.1\r\n",
+        "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/test", Version::Http11);
+            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
+            expect_headers_complete!(codec(buf): chunked:true);
+
+            buf.extend(b"4;test\r\ndata\r\n4\r\nline\r\n0\r\ntest: test\r\n\r\n".as_ref());
+            expect_body!(codec(buf): "data");
+            expect_body!(codec(buf): "line");
+            expect_completed!(codec(buf));
+        }}
+
+test! { test_parse_length_payload,
+        "GET /path HTTP/1.1\r\n",
+        "content-length: 4\r\n\r\n" => |codec, buf| {
+            expect_status!(codec(buf): "GET", "/path", Version::Http11);
+            expect_headers!(codec(buf): ("content-length", "4"));
+            expect_headers_complete!(codec(buf));
+
+            buf.extend(b"da");
+            expect_body!(codec(buf): "da");
+            buf.extend(b"taPO");
+            expect_body!(codec(buf): "ta");
             expect_completed!(codec(buf));
         }}

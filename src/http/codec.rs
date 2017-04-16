@@ -263,6 +263,16 @@ enum CRLF {
     LF,
 }
 
+impl CRLF {
+    #[inline]
+    fn val(&self) -> u8 {
+        match *self {
+            CRLF::CR => CR,
+            CRLF::LF => LF,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 enum ParseHeader {
     Eol,
@@ -445,7 +455,7 @@ enum ParseBody {
     Chunk(u64),
     ChunkEOL(CRLF),
     ChunkMaybeTrailers,
-    ChunkTrailers,
+    ChunkTrailers(CRLF),
     Length(u64),
     Unsized,
 }
@@ -832,9 +842,9 @@ impl Decoder for RequestCodec {
                                 Err(..) => return Err(Error::BadChunkFormat),
                             };
 
-                            bytes.bump();
-                            if let Some(ch) = bytes.get_maybe() {
-                                if ch == LF {
+                            if let Some(ch2) = bytes.get_next_maybe() {
+                                if ch2 == LF && ch == CR {
+                                    bytes.bump();
                                     bytes.bump();
                                     if size == 0 {
                                         state = State::Body(ParseBody::ChunkMaybeTrailers);
@@ -862,7 +872,7 @@ impl Decoder for RequestCodec {
                     for idx in 0..len {
                         let ch = bytes.next();
                         if ch == LF && prev == CR {
-                            bytes.advance(idx);
+                            bytes.advance(idx+1);
                             if size == 0 {
                                 state = State::Body(ParseBody::ChunkMaybeTrailers);
                             } else {
@@ -872,7 +882,6 @@ impl Decoder for RequestCodec {
                         }
                         prev = ch;
                     }
-                    bytes.advance(len);
                     break
                 },
                 ParseBody::Chunk(remaining) => {
@@ -910,7 +919,7 @@ impl Decoder for RequestCodec {
                             break
                         },
                     },
-                ParseBody::ChunkMaybeTrailers => {
+                ParseBody::ChunkMaybeTrailers =>
                     if let Some(ch) = bytes.get_maybe() {
                         if ch == CR {
                             if let Some(ch) = bytes.get_next_maybe() {
@@ -919,21 +928,33 @@ impl Decoder for RequestCodec {
                                     src.split_to(bytes.pos()+2);
                                     bytes = BytesPtr::new(src.as_ref(), 0);
                                 } else {
-                                    state = State::Body(ParseBody::ChunkTrailers);
+                                    state = State::Body(ParseBody::ChunkTrailers(CRLF::CR));
                                 }
                             } else {
                                 break
                             }
                         } else {
-                            state = State::Body(ParseBody::ChunkTrailers)
+                            state = State::Body(ParseBody::ChunkTrailers(CRLF::CR))
                         }
                     } else {
                         break
+                    },
+                ParseBody::ChunkTrailers(marker) => {
+                    let len = bytes.len();
+                    for idx in 0..len {
+                        let ch = bytes.next();
+                        if ch == marker.val() {
+                            bytes.advance(idx+1);
+                            if marker.val() == LF {
+                                state = State::Body(ParseBody::ChunkMaybeTrailers);
+                            } else {
+                                state = State::Body(ParseBody::ChunkTrailers(CRLF::LF));
+                            }
+                            continue 'run
+                        }
                     }
-                },
-                ParseBody::ChunkTrailers => {
-                    //println!("trailers");
-                    break;
+                    bytes.advance(len);
+                    break
                 },
                 ParseBody::Unsized =>
                     if !src.is_empty() {
