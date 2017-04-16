@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 use bytes::{Bytes, BytesMut};
 use tokio_io::codec::{Decoder};
 
+
 /// Request http version
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Version {
@@ -329,15 +330,6 @@ impl ParseHeaderName {
         match *self {
             ParseHeaderName::General => ParseHeaderName::General,
 
-            ParseHeaderName::New => {
-                match ch {
-                    b'c' => ParseHeaderName::Con(0),
-                    b'p' => ParseHeaderName::ProxyConnection(0),
-                    b't' => ParseHeaderName::TransferEncoding(0),
-                    b'w' => ParseHeaderName::Websocket(0),
-                    _    => ParseHeaderName::General,
-                }
-            },
             ParseHeaderName::Con(idx) => {
                 let next = idx + 1;
                 if next == 1 && ch == b'o' {
@@ -390,10 +382,19 @@ impl ParseHeaderName {
             ParseHeaderName::Websocket(idx) => {
                 match_hname!(ParseHeaderName::Websocket(idx) == ch, WEBSOCKET)
             },
+            ParseHeaderName::New => {
+                match ch {
+                    b'c' => ParseHeaderName::Con(0),
+                    b'p' => ParseHeaderName::ProxyConnection(0),
+                    b't' => ParseHeaderName::TransferEncoding(0),
+                    b'w' => ParseHeaderName::Websocket(0),
+                    _    => ParseHeaderName::General,
+                }
+            },
         }
     }
 
-    #[inline]
+    //#[inline]
     fn completed(&self) -> bool {
         match *self {
             ParseHeaderName::Connection(idx) => idx+1 == CONNECTION.len,
@@ -402,7 +403,6 @@ impl ParseHeaderName {
             ParseHeaderName::ProxyConnection(idx) => idx+1 == PROXY_CONNECTION.len,
             ParseHeaderName::TransferEncoding(idx) => idx+1 == TRANSFER_ENCODING.len,
             ParseHeaderName::Websocket(idx) => idx+1 == WEBSOCKET.len,
-
             _ => true
         }
     }
@@ -427,17 +427,6 @@ impl ParseTokens {
     fn next(&self, ch: u8) -> ParseTokens {
         match *self {
             ParseTokens::General => ParseTokens::General,
-
-            ParseTokens::New => {
-                match ch {
-                    b'c' => ParseTokens::C,
-                    b'g' => ParseTokens::Gzip(0),
-                    b'd' => ParseTokens::Deflate(0),
-                    b'k' => ParseTokens::KeepAlive(0),
-                    b'u' => ParseTokens::Upgrade(0),
-                    _    => ParseTokens::General,
-                }
-            },
             ParseTokens::C => {
                 if ch == b'h' {
                     ParseTokens::Chunked(1)
@@ -465,10 +454,20 @@ impl ParseTokens {
             ParseTokens::Upgrade(idx) => {
                 match_hname!(ParseTokens::Upgrade(idx) == ch, UPGRADE)
             },
+            ParseTokens::New => {
+                match ch {
+                    b'c' => ParseTokens::C,
+                    b'g' => ParseTokens::Gzip(0),
+                    b'd' => ParseTokens::Deflate(0),
+                    b'k' => ParseTokens::KeepAlive(0),
+                    b'u' => ParseTokens::Upgrade(0),
+                    _    => ParseTokens::General,
+                }
+            },
         }
     }
 
-    #[inline]
+    //#[inline]
     fn completed(&self) -> bool {
         match *self {
             ParseTokens::Chunked(idx) => idx+1 == CHUNKED.len,
@@ -546,19 +545,19 @@ impl RequestDecoder {
         }
     }
 
-    fn update_msg_state(&mut self) {
+    fn update_msg_state(&mut self, token: ParseTokens) {
         match self.header_name {
-            ParseHeaderName::Connection(..) => match self.header_token {
+            ParseHeaderName::Connection(..) => match token {
                 ParseTokens::Close(..) => self.close = Some(true),
                 ParseTokens::KeepAlive(..) => self.close = Some(false),
                 ParseTokens::Upgrade(..) => self.upgrade = true,
                 _ => (),
             },
-            ParseHeaderName::TransferEncoding(..) => match self.header_token {
+            ParseHeaderName::TransferEncoding(..) => match token {
                 ParseTokens::Chunked(..) => self.chunked = true,
                 _ => (),
             },
-            ParseHeaderName::ContentEncoding(..) => match self.header_token {
+            ParseHeaderName::ContentEncoding(..) => match token {
                 ParseTokens::Gzip(..) => self.compress = ContentCompression::Gzip,
                 ParseTokens::Deflate(..) => self.compress = ContentCompression::Deflate,
                 _ => (),
@@ -593,6 +592,8 @@ impl Decoder for RequestDecoder {
     fn decode(&mut self, src: &mut BytesMut) -> std::result::Result<Option<Self::Item>, Self::Error> {
         let mut state = self.state;
         let mut bytes = BytesPtr::new(src.as_ref(), self.start);
+        let mut header_name = self.header_name;
+        let mut header_token = self.header_token;
 
         'run: loop {
             //println!("Start from: {:?}", state);
@@ -743,7 +744,7 @@ impl Decoder for RequestDecoder {
 
                             // header
                             state = State::Header(ParseHeader::Name);
-                            self.header_name = ParseHeaderName::New;
+                            header_name = ParseHeaderName::New;
                             self.headers[self.headers_idx].set_name_pos(bytes.pos());
                         },
                     None => break
@@ -760,22 +761,23 @@ impl Decoder for RequestDecoder {
 
                             // move char pointer and prepare value parse
                             bytes.advance(idx+1);
+                            header_token = ParseTokens::New;
                             state = State::Header(ParseHeader::OWS);
-                            self.header_token = ParseTokens::New;
 
                             // complete header name parsing
-                            if !self.header_name.completed() {
-                                self.header_name = ParseHeaderName::General;
+                            if !header_name.completed() {
+                                header_name = ParseHeaderName::General;
                             }
-
+                            self.header_name = header_name;
                             continue 'run
                         } else if !is_token(ch) {
                             return Err(Error::BadHeader);
                         }
                         // parse actual header name
-                        self.header_name = self.header_name.next(lower(ch));
+                        header_name = header_name.next(lower(ch));
                     }
                     bytes.advance(len);
+                    self.header_name = header_name;
                     self.headers[self.headers_idx].update_name_len(len);
                     let _ = self.headers[self.headers_idx].check_line_size(self.max_line_size)?;
                     break
@@ -784,7 +786,7 @@ impl Decoder for RequestDecoder {
                     // strip OWS
                     Status::Complete(..) => {
                         self.headers[self.headers_idx].set_value_pos(bytes.pos());
-                        if let ParseHeaderName::ContentLength(..) = self.header_name {
+                        if let ParseHeaderName::ContentLength(..) = header_name {
                             state = State::Header(ParseHeader::ContentLength);
                         } else {
                             state = State::Header(ParseHeader::Value);
@@ -829,8 +831,8 @@ impl Decoder for RequestDecoder {
                         if ch == CR {
                             bytes.advance(idx+1);
                             // check for specific tokens
-                            if self.header_token.completed() {
-                                self.update_msg_state();
+                            if header_token.completed() {
+                                self.update_msg_state(header_token);
                             }
                             state = State::Header(ParseHeader::ValueEol);
                             self.headers[self.headers_idx].update_value_len(idx);
@@ -841,18 +843,19 @@ impl Decoder for RequestDecoder {
                             return Err(Error::BadHeader);
                         }
                         if is_token(ch) {
-                            self.header_token = self.header_token.next(ch);
+                            header_token = header_token.next(ch);
                         } else if ch == b',' || ch == SP {
                             // check for specific tokens
-                            if self.header_token.completed() {
-                                self.update_msg_state();
+                            if header_token.completed() {
+                                self.update_msg_state(header_token);
                             }
-                            self.header_token = ParseTokens::New;
+                            header_token = ParseTokens::New;
                         } else {
-                            self.header_token = ParseTokens::New;
+                            header_token = ParseTokens::New;
                         }
                     }
                     bytes.advance(len);
+                    self.header_token = header_token;
                     self.headers[self.headers_idx].update_value_len(len);
                     let _ = self.headers[self.headers_idx].check_line_size(self.max_line_size)?;
                     break
@@ -1062,7 +1065,7 @@ static TOKENS: [u8; 256] = [
 /*  32 sp    33  !    34  "    35  #    36  $    37  %    38  &    39  '  */
     0,       1,       0,       1,       1,       1,       1,       1,
 /*  40  (    41  )    42  *    43  +    44  ,    45  -    46  .    47  /  */
-    0,       0,     b'*',    b'+',      0,      b'-',    b'/',       0,
+    0,       0,       1,       1,       0,       1,       1,       0,
 /*  48  0    49  1    50  2    51  3    52  4    53  5    54  6    55  7  */
     1,       1,       1,       1,       1,       1,       1,       1,
 /*  56  8    57  9    58  :    59  ;    60  <    61  =    62  >    63  ?  */
@@ -1082,7 +1085,7 @@ static TOKENS: [u8; 256] = [
 /* 112  p   113  q   114  r   115  s   116  t   117  u   118  v   119  w  */
     1,       1,       1,       1,       1,       1,       1,       1,
 /* 120  x   121  y   122  z   123  {   124  |   125  }   126  ~   127 del */
-    1,       1,       1,       0,        1,       0,       1,       0,
+    1,       1,       1,       0,       1,       0,       1,       0,
     0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,

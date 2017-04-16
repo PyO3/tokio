@@ -22,3 +22,12 @@ tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 [dependencies.cpython]
 git = "https://github.com/fafhrd91/rust-cpython.git"
 default-features = false
+
+[dev-dependencies]
+http-muncher = "0.3"
+httparse = "*"
+
+[profile.bench]
+lto = true
+codegen-units = 1
+opt-level = 3
