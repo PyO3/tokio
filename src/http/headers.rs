@@ -15,7 +15,7 @@ use bytes::{Bytes, BytesMut};
 pub struct Headers {
     headers: HashMap<u64, Header>,
     bytes: Option<Bytes>,
-    last_pos: usize,
+    last_pos: u16,
     hasher: RefCell<DefaultHasher>
 }
 
@@ -73,17 +73,17 @@ impl WriteHeaders for Headers {
 
     fn flush(&mut self, src: &mut BytesMut) {
         let end = self.last_pos + 4; // 2: header does not include CRLF
-        self.bytes = Some(src.split_to(end).freeze());
+        self.bytes = Some(src.split_to(end as usize).freeze());
     }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Header {
     hash: u64,
-    name_pos: usize,
-    name_len: usize,
-    value_pos: usize,
-    value_len: usize,
+    name_pos: u16,
+    name_len: u16,
+    value_pos: u16,
+    value_len: u16,
 }
 
 impl Header {
@@ -105,39 +105,39 @@ impl Header {
 
     #[inline]
     pub fn set_name_pos(&mut self, pos: usize) {
-        self.name_pos = pos;
+        self.name_pos = pos as u16;
         self.name_len = 0;
     }
 
     #[inline]
     pub fn update_name_len(&mut self, cnt: usize) {
-        self.name_len += cnt
+        self.name_len += cnt as u16
     }
 
     #[inline]
     pub fn set_value_pos(&mut self, pos: usize) {
-        self.value_pos = pos;
+        self.value_pos = pos as u16;
         self.value_len = 0;
     }
 
     #[inline]
     pub fn update_value_len(&mut self, cnt: usize) {
-        self.value_len += cnt
+        self.value_len += cnt as u16
     }
 
     #[inline]
-    pub fn end(&self) -> usize {
+    pub fn end(&self) -> u16 {
         self.value_pos + self.value_len
     }
 
     #[inline]
-    pub fn is_overflow(&self, max_size: usize) -> bool {
-        self.name_len + self.value_len >= max_size
+    pub fn is_overflow(&self, max_size: u16) -> bool {
+        (self.name_len + self.value_len) >= max_size
     }
 
     #[inline]
     pub fn value_range(&self) -> Range<usize> {
-        Range{ start: self.value_pos, end: self.value_pos + self.value_len }
+        Range{ start: self.value_pos as usize, end: (self.value_pos + self.value_len) as usize }
     }
 }
 

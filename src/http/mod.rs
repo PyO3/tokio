@@ -1,5 +1,5 @@
-mod codec;
+mod decoder;
 mod headers;
 
-pub use self::codec::{ContentCompression, Error,
-                      RequestDecoder, RequestMessage, RequestStatusLine, Version};
+pub use self::decoder::{ContentCompression, Error,
+                        RequestDecoder, RequestMessage, RequestStatusLine, Version};

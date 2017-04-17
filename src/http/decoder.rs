@@ -6,7 +6,7 @@ use std::ascii::AsciiExt;
 use std::error::Error as StdError;
 use std::collections::hash_map::DefaultHasher;
 use bytes::{Bytes, BytesMut};
-use tokio_io::codec::{Decoder};
+use tokio_io::codec::Decoder;
 
 use http::headers::{Header, Headers, WriteHeaders};
 
@@ -21,10 +21,10 @@ pub enum Version {
 /// Request status line
 #[derive(PartialEq, Debug)]
 pub struct RequestStatusLine {
-    meth_pos: usize,
-    meth_end: usize,
-    path_pos: usize,
-    path_end: usize,
+    meth_pos: u8,
+    meth_end: u8,
+    path_pos: u8,
+    path_end: u16,
     pub version: Version,
     bytes: Bytes,
 }
@@ -32,11 +32,13 @@ pub struct RequestStatusLine {
 impl RequestStatusLine {
 
     pub fn method(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(&self.bytes[self.meth_pos..self.meth_end]) }
+        unsafe { std::str::from_utf8_unchecked(
+            &self.bytes[(self.meth_pos as usize)..(self.meth_end as usize)]) }
     }
 
     pub fn path(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(&self.bytes[self.path_pos..self.path_end]) }
+        unsafe { std::str::from_utf8_unchecked(
+            &self.bytes[(self.path_pos as usize)..(self.path_end as usize)]) }
     }
 
 }
@@ -393,10 +395,10 @@ enum State {
 pub struct RequestDecoder {
     state: State,
     start: usize,
-    meth_pos: usize,
-    meth_end: usize,
-    path_pos: usize,
-    path_end: usize,
+    meth_pos: u8,
+    meth_end: u8,
+    path_end: u16,
+    path_pos: u8,
 
     version: Version,
     length: Option<u64>,
@@ -408,14 +410,13 @@ pub struct RequestDecoder {
 
     header: Header,
     has_header: bool,
-    header_tokens: usize,
     header_token: ParseTokens,
     header_name: ParseHeaderName,
     header_name_hash: DefaultHasher,
 
-    max_line_size: usize,
-    max_headers: usize,
-    max_field_size: usize,
+    max_line_size: u16,
+    max_headers: u16,
+    max_field_size: u16,
 }
 
 impl RequestDecoder {
@@ -426,8 +427,7 @@ impl RequestDecoder {
             meth_pos: 0, meth_end: 0, path_pos: 0, path_end: 0,
 
             headers: Headers::new(),
-            header: Header::new(), has_header: false,
-            header_tokens: 0, header_token: ParseTokens::New,
+            header: Header::new(), has_header: false, header_token: ParseTokens::New,
             header_name: ParseHeaderName::General, header_name_hash: DefaultHasher::new(),
 
             version: Version::Http10, length: None,
@@ -476,35 +476,35 @@ impl Decoder for RequestDecoder {
             State::Status(status) => match status {
                 ParseStatusLine::Method => match parse_token(&mut bytes, SP)? {
                     Status::Complete(l) => {
-                        if bytes.pos() > self.max_line_size {
+                        if bytes.pos() > self.max_line_size as usize {
                             return Err(Error::LineTooLong);
                         }
-                        self.meth_end = self.meth_end + l;
-                        self.path_pos = bytes.pos();
-                        self.path_end = self.path_pos;
+                        self.meth_end = self.meth_end + l as u8;
+                        self.path_pos = bytes.pos() as u8;
+                        self.path_end = self.path_pos as u16;
                         state = State::Status(ParseStatusLine::Path);
                     }
                     Status::Partial(l) => {
-                        if bytes.pos() > self.max_line_size {
+                        if bytes.pos() > self.max_line_size as usize {
                             return Err(Error::LineTooLong);
                         }
-                        self.meth_end = self.meth_end + l;
+                        self.meth_end = self.meth_end + l as u8;
                         break
                     }
                 },
                 ParseStatusLine::Path => match parse_path(&mut bytes)? {
                     Status::Complete(l) => {
-                        if bytes.pos() > self.max_line_size {
+                        if bytes.pos() > self.max_line_size as usize  {
                             return Err(Error::LineTooLong);
                         }
-                        self.path_end = self.path_end + l;
+                        self.path_end = self.path_end + l as u16;
                         state = State::Status(ParseStatusLine::Version);
                     }
                     Status::Partial(l) => {
-                        if bytes.pos() > self.max_line_size {
+                        if bytes.pos() > self.max_line_size as usize  {
                             return Err(Error::LineTooLong);
                         }
-                        self.path_end = self.path_end + l;
+                        self.path_end = self.path_end + l as u16;
                         break
                     }
                 },
