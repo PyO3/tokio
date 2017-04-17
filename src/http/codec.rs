@@ -1,9 +1,14 @@
 #![allow(dead_code)]
 
 use std;
+use std::hash::Hasher;
+use std::ascii::AsciiExt;
 use std::error::Error as StdError;
+use std::collections::hash_map::DefaultHasher;
 use bytes::{Bytes, BytesMut};
 use tokio_io::codec::{Decoder};
+
+use http::headers::{Header, Headers, WriteHeaders};
 
 
 /// Request http version
@@ -36,130 +41,6 @@ impl RequestStatusLine {
 
 }
 
-#[derive(Copy, Clone, Debug)]
-struct Header {
-    name_pos: usize,
-    name_len: usize,
-    value_pos: usize,
-    value_len: usize,
-}
-
-impl Header {
-
-    #[inline]
-    fn set_name_pos(&mut self, pos: usize) {
-        self.name_pos = pos;
-        self.name_len = 0;
-    }
-
-    #[inline]
-    fn update_name_len(&mut self, cnt: usize) {
-        self.name_len += cnt
-    }
-
-    #[inline]
-    fn set_value_pos(&mut self, pos: usize) {
-        self.value_pos = pos;
-        self.value_len = 0;
-    }
-
-    #[inline]
-    fn update_value_len(&mut self, cnt: usize) {
-        self.value_len += cnt
-    }
-
-    #[inline]
-    fn end(&self) -> usize {
-        self.value_pos + self.value_len
-    }
-
-    #[inline]
-    fn check_line_size(&self, max_size: usize) -> std::result::Result<(), Error> {
-        if self.name_len + self.value_len >= max_size {
-            Err(Error::LineTooLong)
-        } else {
-            Ok(())
-        }
-    }
-
-}
-
-
-const EMPTY_HEADER: Header = Header {
-    name_pos: 0,
-    name_len: 0,
-    value_pos: 0,
-    value_len: 0,
-};
-
-
-/// Request headers
-#[derive(Debug)]
-pub struct RequestHeaders {
-    headers: [Header; 8],
-    len: usize,
-    bytes: Bytes,
-}
-
-impl RequestHeaders {
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn get(&self, idx: usize) -> Option<(&str, &str)> {
-        if idx < self.len {
-            Some(
-                (unsafe { std::str::from_utf8_unchecked(
-                    &self.bytes[self.headers[idx].name_pos..
-                                self.headers[idx].name_pos+self.headers[idx].name_len]) },
-                 unsafe { std::str::from_utf8_unchecked(
-                     &self.bytes[self.headers[idx].value_pos..
-                                 self.headers[idx].value_pos+self.headers[idx].value_len]) },))
-        } else {
-            None
-        }
-    }
-
-    pub fn iter<'h>(&'h self) -> RequestHeadersIter<'h> {
-        RequestHeadersIter::new(self)
-    }
-
-}
-
-pub struct RequestHeadersIter<'h> {
-    len: usize,
-    pos: usize,
-    headers: &'h RequestHeaders,
-}
-
-impl <'h> RequestHeadersIter<'h> {
-
-    fn new(headers: &'h RequestHeaders) -> RequestHeadersIter<'h> {
-        RequestHeadersIter {
-            len: headers.len(),
-            pos: 0,
-            headers: headers
-        }
-    }
-}
-
-impl<'h> Iterator for RequestHeadersIter <'h> {
-    type Item = (&'h str, &'h str);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.len > self.pos {
-            let item = self.headers.get(self.pos);
-            self.pos += 1;
-            item
-        } else {
-            None
-        }
-    }
-}
-
-
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum ContentCompression {
     Default,
@@ -171,8 +52,11 @@ pub enum ContentCompression {
 #[derive(Debug)]
 pub enum RequestMessage {
     Status(RequestStatusLine),
-    Headers(RequestHeaders),
-    HeadersCompleted {close: bool, chunked: bool, upgrade: bool, compress: ContentCompression},
+    Headers {headers: Headers,
+             close: bool,
+             chunked: bool,
+             upgrade: bool,
+             compress: ContentCompression},
     Body(Bytes),
     Completed,
 }
@@ -520,12 +404,14 @@ pub struct RequestDecoder {
     chunked: bool,
     upgrade: bool,
     compress: ContentCompression,
+    headers: Headers,
 
-    headers: [Header; 8],
-    headers_idx: usize,
+    header: Header,
+    has_header: bool,
     header_tokens: usize,
     header_token: ParseTokens,
     header_name: ParseHeaderName,
+    header_name_hash: DefaultHasher,
 
     max_line_size: usize,
     max_headers: usize,
@@ -538,8 +424,11 @@ impl RequestDecoder {
         RequestDecoder {
             start: 0, state: State::Status(ParseStatusLine::Method),
             meth_pos: 0, meth_end: 0, path_pos: 0, path_end: 0,
-            headers: [EMPTY_HEADER; 8], headers_idx: 0, header_name: ParseHeaderName::General,
+
+            headers: Headers::new(),
+            header: Header::new(), has_header: false,
             header_tokens: 0, header_token: ParseTokens::New,
+            header_name: ParseHeaderName::General, header_name_hash: DefaultHasher::new(),
 
             version: Version::Http10, length: None,
             close: None, chunked: false, upgrade: false, compress: ContentCompression::Default,
@@ -567,24 +456,6 @@ impl RequestDecoder {
             },
             _ => (),
         }
-    }
-
-    fn headers_message(&mut self, src: &mut BytesMut) -> RequestHeaders {
-        let len = self.headers_idx;
-        let idx = len - 1;
-        let end = self.headers[idx].end() + 2; // 2: header does not include CRLF
-
-        let mut msg = RequestHeaders {
-            headers: [EMPTY_HEADER; 8],
-            len: len,
-            bytes: src.split_to(end).freeze(),
-        };
-        for idx in 0..len {
-            msg.headers[idx] = self.headers[idx];
-        }
-        self.headers_idx = 0;
-
-        msg
     }
 }
 
@@ -663,7 +534,6 @@ impl Decoder for RequestDecoder {
                             self.close = None;
                             self.length = None;
                             self.chunked = false;
-                            self.headers_idx = 0;
                             state = State::Header(ParseHeader::Eol);
                         },
                         Status::Partial(marker) => {
@@ -685,70 +555,65 @@ impl Decoder for RequestDecoder {
                             bytes.bump();
                             if let Some(ch) = bytes.next_maybe() {
                                 if ch == LF {
-                                    if self.headers_idx != 0 {
-                                        // send headers
-                                        self.start = 0;
-                                        self.state = state;
-                                        return Ok(Some(
-                                            RequestMessage::Headers(self.headers_message(src))));
-                                    } else {
-                                        src.split_to(bytes.pos());
-
-                                        let close = match self.close {
-                                            Some(close) => close,
-                                            None => self.version == Version::Http10,
-                                        };
-
-                                        let length = match self.length{
-                                            Some(length) =>
-                                                if self.chunked {
-                                                    return Err(Error::ContentLengthAndTE);
-                                                } else {
-                                                    length
-                                                },
-                                            None => 0,
-                                        };
-
-                                        self.start = 0;
-                                        if self.chunked {
-                                            self.state = State::Body(ParseBody::ChunkSize(0));
-                                        } else if length > 0 {
-                                            self.state = State::Body(ParseBody::Length(length));
-                                        } else {
-                                            self.state = State::Done;
-                                        }
-
-                                        return Ok(Some(
-                                            RequestMessage::HeadersCompleted {
-                                                close: close,
-                                                chunked: self.chunked,
-                                                upgrade: self.upgrade,
-                                                compress: self.compress
-                                            }));
+                                    if self.has_header {
+                                        self.headers.append(self.header);
                                     }
+                                    self.headers.flush(src);
+
+                                    let close = match self.close {
+                                        Some(close) => close,
+                                        None => self.version == Version::Http10,
+                                    };
+
+                                    let length = match self.length{
+                                        Some(length) =>
+                                            if self.chunked {
+                                                return Err(Error::ContentLengthAndTE);
+                                            } else {
+                                                length
+                                            },
+                                        None => 0,
+                                    };
+
+                                    self.start = 0;
+                                    if self.chunked {
+                                        self.state = State::Body(ParseBody::ChunkSize(0));
+                                    } else if length > 0 {
+                                        self.state = State::Body(ParseBody::Length(length));
+                                    } else {
+                                        self.state = State::Done;
+                                    }
+                                    let headers = std::mem::replace(
+                                        &mut self.headers, Headers::new());
+
+                                    return Ok(Some(
+                                        RequestMessage::Headers {
+                                            headers: headers,
+                                            close: close,
+                                            chunked: self.chunked,
+                                            upgrade: self.upgrade,
+                                            compress: self.compress
+                                        }));
                                 } else {
                                     return Err(Error::BadHeader);
                                 }
                             } else {
                                 break
                             }
-                        } else if is_ows(ch) && self.headers_idx != 0 {
+                        } else if is_ows(ch) && self.has_header {
                             // header value continuation
-                            self.headers_idx -= 1;
                             state = State::Header(ParseHeader::Value);
                         } else {
-                            // we can parse 8 headers at once
-                            if self.headers_idx == 8 {
-                                self.start = 0;
-                                self.state = state;
-                                return Ok(Some(
-                                    RequestMessage::Headers(self.headers_message(src))));
+                            // append processed header
+                            if self.has_header {
+                                self.headers.append(self.header);
+                            } else {
+                                self.has_header = true
                             }
-
-                            // header
+                            // new header
                             state = State::Header(ParseHeader::Name);
                             header_name = ParseHeaderName::New;
-                            self.headers[self.headers_idx].set_name_pos(bytes.pos());
+                            self.header.set_name_pos(bytes.pos());
                         },
                     None => break
                 },
@@ -758,9 +623,11 @@ impl Decoder for RequestDecoder {
                     for idx in 0..len {
                         let ch = bytes.next();
                         if ch == b':' {
-                            self.headers[self.headers_idx].update_name_len(idx);
-                            let _ = self.headers[self.headers_idx]
-                                .check_line_size(self.max_line_size)?;
+                            self.header.set_hash(self.header_name_hash.finish());
+                            self.header.update_name_len(idx);
+                            if self.header.is_overflow(self.max_line_size) {
+                                return Err(Error::LineTooLong)
+                            }
 
                             // move char pointer and prepare value parse
                             bytes.advance(idx+1);
@@ -776,19 +643,24 @@ impl Decoder for RequestDecoder {
                         } else if !is_token(ch) {
                             return Err(Error::BadHeader);
                         }
+                        let ch = ch.to_ascii_lowercase();
+                        self.header_name_hash.write_u8(ch);
+
                         // parse actual header name
-                        header_name = header_name.next(lower(ch));
+                        header_name = header_name.next(ch);
                     }
                     bytes.advance(len);
                     self.header_name = header_name;
-                    self.headers[self.headers_idx].update_name_len(len);
-                    let _ = self.headers[self.headers_idx].check_line_size(self.max_line_size)?;
+                    self.header.update_name_len(len);
+                    if self.header.is_overflow(self.max_line_size) {
+                        return Err(Error::LineTooLong)
+                    }
                     break
                 },
                 ParseHeader::OWS => match parse_ows(&mut bytes)? {
                     // strip OWS
                     Status::Complete(..) => {
-                        self.headers[self.headers_idx].set_value_pos(bytes.pos());
+                        self.header.set_value_pos(bytes.pos());
                         if let ParseHeaderName::ContentLength(..) = header_name {
                             state = State::Header(ParseHeader::ContentLength);
                         } else {
@@ -805,14 +677,11 @@ impl Decoder for RequestDecoder {
                         if ch == CR {
                             bytes.advance(idx+1);
                             state = State::Header(ParseHeader::ValueEol);
-                            self.headers[self.headers_idx].update_value_len(idx);
+                            self.header.update_value_len(idx);
 
                             // parse content-length value
                             let l = unsafe {
-                                std::str::from_utf8_unchecked(
-                                    &src[self.headers[self.headers_idx].value_pos..
-                                         self.headers[self.headers_idx].value_pos+
-                                         self.headers[self.headers_idx].value_len]) };
+                                std::str::from_utf8_unchecked(&src[self.header.value_range()]) };
                             match l.parse::<u64> () {
                                 Ok(v) => self.length = Some(v),
                                 Err(..) => return Err(Error::ContentLength)
@@ -823,7 +692,7 @@ impl Decoder for RequestDecoder {
                         }
                     }
                     bytes.advance(len);
-                    self.headers[self.headers_idx].update_name_len(len);
+                    self.header.update_name_len(len);
                     break
                 },
                 ParseHeader::Value => {
@@ -838,9 +707,10 @@ impl Decoder for RequestDecoder {
                                 self.update_msg_state(header_token);
                             }
                             state = State::Header(ParseHeader::ValueEol);
-                            self.headers[self.headers_idx].update_value_len(idx);
-                            let _ = self.headers[self.headers_idx]
-                                .check_line_size(self.max_line_size)?;
+                            self.header.update_value_len(idx);
+                            if self.header.is_overflow(self.max_line_size) {
+                                return Err(Error::LineTooLong)
+                            }
                             continue 'run
                         } else if ! (is_vchar(ch) || is_obs_text(ch) || is_ows(ch)) {
                             return Err(Error::BadHeader);
@@ -859,16 +729,16 @@ impl Decoder for RequestDecoder {
                     }
                     bytes.advance(len);
                     self.header_token = header_token;
-                    self.headers[self.headers_idx].update_value_len(len);
-                    let _ = self.headers[self.headers_idx].check_line_size(self.max_line_size)?;
+                    self.header.update_value_len(len);
+                    if self.header.is_overflow(self.max_line_size) {
+                        return Err(Error::LineTooLong)
+                    }
                     break
                 },
                 ParseHeader::ValueEol =>
                     match parse_crlf(&mut bytes, CRLF::LF, Error::BadHeader)? {
-                        Status::Complete(..) => {
-                            self.headers_idx += 1;
-                            state = State::Header(ParseHeader::Eol);
-                        },
+                        Status::Complete(..) =>
+                            state = State::Header(ParseHeader::Eol),
                         Status::Partial(..) => break
                     },
             },
@@ -901,8 +771,8 @@ impl Decoder for RequestDecoder {
                             let count = count + idx;
                             let origin = bytes.origin(count);
 
-                            let hex = unsafe { std::str::from_utf8_unchecked(
-                                &src[origin..origin+count]) };
+                            let hex = unsafe {
+                                std::str::from_utf8_unchecked(&src[origin..origin+count]) };
 
                             let size = match u64::from_str_radix(hex, 16) {
                                 Ok(v) => v,

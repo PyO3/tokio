@@ -38,72 +38,60 @@ macro_rules! expect_status {
 }
 
 macro_rules! expect_headers {
-    ($codec:ident($buf:ident): $(($hdr_name:expr, $hdr_val:expr)),+) => {
-        match $codec.decode(&mut $buf) {
-            Err(err) => assert!(false, format!("Got error: {:?}", err)),
-            Ok(None) => assert!(false, "Did not get any result"),
-            Ok(Some(msg)) => match msg {
-                RequestMessage::Headers(headers) => {
-                    let mut iter = headers.iter();
-
-                    $(
-                        if let Some(item) = iter.next() {
-                            assert_eq!(item.0, $hdr_name);
-                            assert_eq!(item.1, $hdr_val);
-                        } else {
-                            assert!(false, format!(
-                                "Header {} expected, none found", $hdr_name));
-                        };
-                    )*
-                }
-                _ => assert!(false, "RequestMessage::HeadersComplete is required"),
-            }
-        }
-    }
-}
-
-macro_rules! expect_headers_complete {
-    ($codec:ident($buf:ident)) => (
-        expect_headers_complete!(
+    ($codec:ident($buf:ident) $(,($hdr_name:expr, $hdr_val:expr))*) => (
+        expect_headers!(
             $codec($buf): close:false, chunked:false, upgrade:false,
-            compress:ContentCompression::Default);
+            compress:ContentCompression::Default $(,($hdr_name, $hdr_val))*);
     );
-    ($codec:ident($buf:ident): chunked:$chunked:expr) => (
-        expect_headers_complete!
+    ($codec:ident($buf:ident): chunked:$chunked:expr $(,($hdr_name:expr, $hdr_val:expr))*) => (
+        expect_headers!
             ($codec($buf): close:false, chunked:$chunked, upgrade:false,
-             compress:ContentCompression::Default);
+             compress:ContentCompression::Default $(,($hdr_name, $hdr_val))*);
     );
-    ($codec:ident($buf:ident): upgrade:$upgrade:expr) => (
-        expect_headers_complete!(
+    ($codec:ident($buf:ident): upgrade:$upgrade:expr $(,($hdr_name:expr, $hdr_val:expr))*) => (
+        expect_headers!(
             $codec($buf): close:false, chunked:false, upgrade:$upgrade,
-            compress:ContentCompression::Default);
+            compress:ContentCompression::Default $(,($hdr_name, $hdr_val))*);
     );
-    ($codec:ident($buf:ident): compress:$compress:expr) => (
-        expect_headers_complete!(
-            $codec($buf): close:false, chunked:false, upgrade:false, compress:$compress);
+    ($codec:ident($buf:ident): compress:$compress:expr $(,($hdr_name:expr, $hdr_val:expr))*) => (
+        expect_headers!(
+            $codec($buf): close:false, chunked:false, upgrade:false,
+            compress:$compress $(,($hdr_name, $hdr_val))*);
     );
-    ($codec:ident($buf:ident): close:$close:expr,
-     chunked:$chunked:expr, upgrade:$upgrade:expr) => (
-        expect_headers_complete!(
+    ($codec:ident($buf:ident): close:$close:expr, chunked:$chunked:expr, upgrade:$upgrade:expr
+     $(,($hdr_name:expr, $hdr_val:expr))*) => (
+        expect_headers!(
             $codec($buf): close:$close, chunked:$chunked, upgrade:$upgrade,
-            compress:ContentCompression::Default);
+            compress:ContentCompression::Default $(,($hdr_name, $hdr_val))*);
     );
     ($codec:ident($buf:ident): close:$close:expr,
-     chunked:$chunked:expr, upgrade:$upgrade:expr, compress:$compress:expr) => {
-        match $codec.decode(&mut $buf) {
-            Err(err) => assert!(false, format!("Got error: {:?}", err)),
-            Ok(None) => assert!(false, "Did not get any result"),
-            Ok(Some(msg)) => match msg {
-                RequestMessage::HeadersCompleted {close, chunked, upgrade, compress} => {
-                    assert_eq!(close, $close);
-                    assert_eq!(chunked, $chunked);
-                    assert_eq!(upgrade, $upgrade);
-                    assert_eq!(compress, $compress);
-                },
-                _ => assert!(false, "RequestMessage::HeadersComplete is required"),
+     chunked:$chunked:expr, upgrade:$upgrade:expr, compress:$compress:expr
+     $(,($hdr_name:expr, $hdr_val:expr))*)
+        => {
+            #[allow(unused_variables)]
+            match $codec.decode(&mut $buf) {
+                Err(err) => assert!(false, format!("Got error: {:?}", err)),
+                Ok(None) => assert!(false, "Did not get any result"),
+                Ok(Some(msg)) => match msg {
+                    RequestMessage::Headers {headers, close, chunked, upgrade, compress} => {
+                        assert_eq!(close, $close);
+                        assert_eq!(chunked, $chunked);
+                        assert_eq!(upgrade, $upgrade);
+                        assert_eq!(compress, $compress);
+
+                        $(
+                            if let Some(val) = headers.get($hdr_name) {
+                                assert_eq!(val, $hdr_val);
+                            } else {
+                                assert!(false, format!(
+                                    "Header {} expected, none found", $hdr_name));
+                            };
+                        )*;
+                    },
+                    _ => assert!(false, "RequestMessage::HeadersComplete is required"),
+                }
             }
         }
-    }
 }
 
 macro_rules! expect_body {
@@ -201,13 +189,13 @@ macro_rules! expect_eof_completed {
 test! { test_request_simple,
         "GET / HTTP/1.1\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/", Version::Http11);
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false);
         }}
 
 test! { test_request_simple_10,
         "POST / HTTP/1.0\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "POST", "/", Version::Http10);
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
@@ -215,8 +203,8 @@ test! { test_parse_body,
         "GET /test HTTP/1.1\r\n",
         "Content-Length: 4\r\n\r\nbody" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("Content-Length", "4"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
+                            ("Content-Length", "4"));
             expect_body!(codec(buf): "body");
             expect_completed!(codec(buf));
         }}
@@ -228,7 +216,7 @@ test! { test_parse_delayed,
 
             buf.extend(b"\r\n");
 
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
@@ -260,10 +248,9 @@ test! { test_parse_headers_multi,
         "Set-Cookie: c1=cookie1\r\n",
         "Set-Cookie: c2=cookie2\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
                             ("Set-Cookie", "c1=cookie1"),
                             ("Set-Cookie", "c2=cookie2"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
@@ -280,7 +267,7 @@ test! { test_parse_headers_max_multi,
         "Header9: val9\r\n",
         "Header10: val10\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
                             ("Header1", "val1"),
                             ("Header2", "val2"),
                             ("Header3", "val3"),
@@ -288,18 +275,16 @@ test! { test_parse_headers_max_multi,
                             ("Header5", "val5"),
                             ("Header6", "val6"),
                             ("Header7", "val7"),
-                            ("Header8", "val8"));
-            expect_headers!(codec(buf):
+                            ("Header8", "val8"),
                             ("Header9", "val9"),
                             ("Header10", "val10"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
 test! { test_conn_default_1_0,
         "GET /test HTTP/1.0\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http10);
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }
 }
@@ -307,7 +292,7 @@ test! { test_conn_default_1_0,
 test! { test_conn_default_1_1,
         "GET /test HTTP/1.1\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
@@ -315,8 +300,8 @@ test! { test_conn_close,
         "GET /test HTTP/1.1\r\n",
         "connection: close\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("connection", "close"));
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:false,
+                             ("connection", "close"));
             expect_completed!(codec(buf));
         }}
 
@@ -324,8 +309,8 @@ test! { test_conn_close_1_0,
         "GET /test HTTP/1.0\r\n",
         "connection: close\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http10);
-            expect_headers!(codec(buf): ("connection", "close"));
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:false,
+                            ("connection", "close"));
             expect_completed!(codec(buf));
         }}
 
@@ -333,8 +318,8 @@ test! { test_conn_keep_alive_1_0,
         "GET /test HTTP/1.0\r\n",
         "connection: keep-alive\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http10);
-            expect_headers!(codec(buf): ("connection", "keep-alive"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
+                            ("connection", "keep-alive"));
             expect_completed!(codec(buf));
         }}
 
@@ -342,8 +327,8 @@ test! { test_conn_other_1_0,
         "GET /test HTTP/1.0\r\n",
         "connection: test\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http10);
-            expect_headers!(codec(buf): ("connection", "test"));
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:false,
+                            ("connection", "test"));
             expect_completed!(codec(buf));
         }}
 
@@ -351,8 +336,8 @@ test! { test_conn_other_1_1,
         "GET /test HTTP/1.1\r\n",
         "connection: test\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("connection", "test"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
+                            ("connection", "test"));
             expect_completed!(codec(buf));
         }}
 
@@ -360,24 +345,22 @@ test! { test_request_chunked,
         "GET /test HTTP/1.1\r\n",
         "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): close:false, chunked:true, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:true, upgrade:false,
+                            ("transfer-encoding", "chunked"));
         }}
 
 test! { test_request_chunked_partial,
         "GET /test HTTP/1.1\r\n",
         "transfer-encoding: chunk\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunk"));
-            expect_headers_complete!(codec(buf): chunked:false);
+            expect_headers!(codec(buf): chunked:false, ("transfer-encoding", "chunk"));
         }}
 
 test! { test_special_headers_partial,
         "GET /test HTTP/1.1\r\n",
         "transfer-encod: chunked\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encod", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:false);
+            expect_headers!(codec(buf): chunked:false, ("transfer-encod", "chunked"));
         }}
 
 test! { test_conn_upgrade,
@@ -385,10 +368,9 @@ test! { test_conn_upgrade,
         "connection: upgrade\r\n",
         "upgrade: websocket\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:true,
                             ("connection", "upgrade"),
                             ("upgrade", "websocket"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:true);
             expect_completed!(codec(buf));
         }}
 
@@ -396,9 +378,8 @@ test! { test_conn_close_and_upgrade,
         "GET /test HTTP/1.1\r\n",
         "connection: close, upgrade\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): close:true, chunked:false, upgrade:true,
                             ("connection", "close, upgrade"));
-            expect_headers_complete!(codec(buf): close:true, chunked:false, upgrade:true);
             expect_completed!(codec(buf));
         }}
 
@@ -406,27 +387,24 @@ test! { test_compression_deflate,
         "GET /test HTTP/1.1\r\n",
         "content-Encoding: deflate\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): compress:ContentCompression::Deflate,
                             ("content-Encoding", "deflate"));
-            expect_headers_complete!(codec(buf): compress:ContentCompression::Deflate);
         }}
 
 test! { test_compression_gzip,
         "GET /test HTTP/1.1\r\n",
         "content-encoding: gzip\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): compress:ContentCompression::Gzip,
                             ("content-encoding", "gzip"));
-            expect_headers_complete!(codec(buf): compress:ContentCompression::Gzip);
         }}
 
 test! { test_compression_unknown,
         "GET /test HTTP/1.1\r\n",
         "content-encoding: compress\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): compress:ContentCompression::Default,
                             ("content-encoding", "compress"));
-            expect_headers_complete!(codec(buf): compress:ContentCompression::Default);
         }}
 
 // def test_headers_connect(parser):
@@ -506,10 +484,9 @@ test! { test_http_request_upgrade,
         "upgrade: websocket\r\n\r\n",
         "some raw data" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf):
+            expect_headers!(codec(buf): upgrade:true,
                             ("connection", "upgrade"),
                             ("upgrade", "websocket"));
-            expect_headers_complete!(codec(buf): upgrade:true);
             //except_bod!(codec(buf): "some raw data");
             //expect_completed!(codec(buf));
         }}
@@ -518,8 +495,8 @@ test! { test_http_request_parser_utf8,
         "GET /path HTTP/1.1\r\n",
         "x-test: тест\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/path", Version::Http11);
-            expect_headers!(codec(buf): ("x-test", "тест"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
+                            ("x-test", "тест"));
             expect_completed!(codec(buf));
         }}
 
@@ -528,15 +505,15 @@ test! { test_http_request_parser_non_utf8,
         "GET /path HTTP/1.1\r\n",
         "x-test: тест\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/path", Version::Http11);
-            expect_headers!(codec(buf): ("x-test", "тест"));
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false,
+                             ("x-test", "тест"));
             expect_completed!(codec(buf));
         }}
 
 test! { test_http_request_parser_two_slashes,
         "GET //path HTTP/1.1\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "//path", Version::Http11);
-            expect_headers_complete!(codec(buf): close:false, chunked:false, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:false, upgrade:false);
             expect_completed!(codec(buf));
         }}
 
@@ -561,8 +538,8 @@ test! { test_http_request_chunked_payload,
         "Transfer-encoding: chunked\r\n\r\n",
         "4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("Transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): close:false, chunked:true, upgrade:false);
+            expect_headers!(codec(buf): close:false, chunked:true, upgrade:false,
+                            ("Transfer-encoding", "chunked"));
             expect_body!(codec(buf): "data");
             expect_body!(codec(buf): "line");
             expect_completed!(codec(buf));
@@ -573,8 +550,7 @@ test! { test_http_request_chunked_payload_and_next_message,
         "GET /test HTTP/1.1\r\n",
         "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:true);
+            expect_headers!(codec(buf): chunked:true, ("transfer-encoding", "chunked"));
 
             buf.extend(b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n");
             buf.extend(b"POST /test2 HTTP/1.1\r\n");
@@ -585,16 +561,15 @@ test! { test_http_request_chunked_payload_and_next_message,
             expect_completed!(codec(buf));
 
             expect_status!(codec(buf): "POST", "/test2", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:true);
+            expect_headers!(codec(buf): chunked:true,
+                            ("transfer-encoding", "chunked"));
         }}
 
 test! { test_http_request_chunked_payload_chunks,
         "GET /test HTTP/1.1\r\n",
         "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:true);
+            expect_headers!(codec(buf): chunked:true, ("transfer-encoding", "chunked"));
 
             buf.extend(b"4\r\ndata\r");
             expect_body!(codec(buf): "data");
@@ -623,8 +598,7 @@ test! { test_parse_chunked_payload_chunk_extension,
         "GET /test HTTP/1.1\r\n",
         "transfer-encoding: chunked\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/test", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:true);
+            expect_headers!(codec(buf): chunked:true, ("transfer-encoding", "chunked"));
 
             buf.extend(b"4;test\r\ndata\r\n4\r\nline\r\n0\r\ntest: test\r\n\r\n".as_ref());
             expect_body!(codec(buf): "data");
@@ -636,8 +610,7 @@ test! { test_parse_length_payload,
         "GET /path HTTP/1.1\r\n",
         "content-length: 4\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "GET", "/path", Version::Http11);
-            expect_headers!(codec(buf): ("content-length", "4"));
-            expect_headers_complete!(codec(buf));
+            expect_headers!(codec(buf), ("content-length", "4"));
 
             buf.extend(b"da");
             expect_body!(codec(buf): "da");
@@ -650,7 +623,7 @@ test! { test_parse_length_payload,
 test! { test_parse_no_length_payload,
         "PUT / HTTP/1.1\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "PUT", "/", Version::Http11);
-            expect_headers_complete!(codec(buf));
+            expect_headers!(codec(buf));
             expect_eof_completed!(codec(buf));
         }}
 
@@ -658,8 +631,7 @@ test! { test_parse_eof_payload,
         "PUT / HTTP/1.1\r\n",
         "Content-Length: 4\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "PUT", "/", Version::Http11);
-            expect_headers!(codec(buf): ("Content-Length", "4"));
-            expect_headers_complete!(codec(buf));
+            expect_headers!(codec(buf), ("Content-Length", "4"));
 
             buf.extend(b"data");
             expect_eof_body!(codec(buf): &"data");
@@ -669,8 +641,7 @@ test! { test_parse_length_payload_eof,
         "PUT / HTTP/1.1\r\n",
         "Content-Length: 4\r\n\r\n" => |codec, buf| {
             expect_status!(codec(buf): "PUT", "/", Version::Http11);
-            expect_headers!(codec(buf): ("Content-Length", "4"));
-            expect_headers_complete!(codec(buf));
+            expect_headers!(codec(buf), ("Content-Length", "4"));
 
             buf.extend(b"da");
             expect_eof_error!(codec(buf): Error::PayloadNotCompleted);
@@ -681,8 +652,7 @@ test! { test_parse_chunked_payload_size_error,
         "transfer-encoding: chunked\r\n\r\n",
         "blah\r\n" => |codec, buf| {
             expect_status!(codec(buf): "PUT", "/", Version::Http11);
-            expect_headers!(codec(buf): ("transfer-encoding", "chunked"));
-            expect_headers_complete!(codec(buf): chunked:true);
+            expect_headers!(codec(buf): chunked:true, ("transfer-encoding", "chunked"));
             expect_error!(codec(buf): Error::TransferEncoding);
         }}
 
@@ -692,8 +662,7 @@ test! { test_http_payload_parser_length,
         "Content-Length: 2\r\n\r\n",
         "1245" => |codec, buf| {
             expect_status!(codec(buf): "PUT", "/", Version::Http11);
-            expect_headers!(codec(buf): ("Content-Length", "2"));
-            expect_headers_complete!(codec(buf));
+            expect_headers!(codec(buf), ("Content-Length", "2"));
             expect_body!(codec(buf): &"12");
             expect_completed!(codec(buf));
             assert_eq!(buf[..], b"45"[..]);
