@@ -3,6 +3,7 @@ mod headers;
 mod message;
 mod transport;
 mod pyreq;
+mod pytransport;
 
 pub use self::headers::{Headers};
 pub use self::decoder::{Error, RequestDecoder, RequestMessage};

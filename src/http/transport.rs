@@ -3,6 +3,7 @@
 
 use std::io;
 use std::net::SocketAddr;
+use std::convert::Into;
 use cpython::*;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
 use bytes::BytesMut;
@@ -10,56 +11,11 @@ use tokio_io::{AsyncRead};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use utils::{Classes, PyLogger, ToPyErr, with_py};
-use pybytes::{TokioBytes, create_bytes};
+use http;
+use http::pyreq;
+use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
 use pyunsafe::{GIL, Handle, Sender};
-
-
-pub enum HttpTransportMessage {
-    Bytes(PyBytes),
-    Close,
-}
-
-
-py_class!(pub class TokioHttpTransport |py| {
-    data handle: Handle;
-    data transport: Sender<HttpTransportMessage>;
-
-    def get_extra_info(&self, _name: PyString,
-                       default: Option<PyObject> = None ) -> PyResult<PyObject> {
-        Ok(
-            if let Some(ob) = default {
-                ob
-            } else {
-                py.None()
-            }
-        )
-    }
-
-    //
-    // write bytes to transport
-    //
-    def write(&self, data: PyBytes) -> PyResult<PyObject> {
-        //let bytes = Bytes::from(data.data(py));
-        let _ = self.transport(py).send(HttpTransportMessage::Bytes(data));
-        Ok(py.None())
-    }
-
-    //def drain(&self) -> PyResult<TokioFuture> {
-    //    let fut = create_future(py, self.handle(py).clone())?;
-    //    fut.set_result(py, py.None())?;
-    //    Ok(fut)
-    //}
-
-    //
-    // close transport
-    //
-    def close(&self) -> PyResult<PyObject> {
-        let _ = self.transport(py).send(HttpTransportMessage::Close);
-        Ok(py.None())
-    }
-
-});
+use utils::{PyLogger, with_py};
 
 
 pub fn http_transport_factory(handle: Handle, factory: &PyObject,
@@ -67,55 +23,21 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
     let gil = Python::acquire_gil();
     let py = gil.python();
 
-    // create protocol
-    let proto = factory.call(py, NoArgs, None)
-        .log_error(py, "Protocol factory error")?;
-
-    // get protocol callbacks
-    let connection_made = proto.getattr(py, "connection_made")?;
-    let connection_lost = proto.getattr(py, "connection_lost")?;
-    let connection_err = connection_lost.clone_ref(py);
-    let data_received = proto.getattr(py, "data_received")?;
+    let (tx, rx) = unsync::mpsc::unbounded();
+    let tr = PyHttpTransport::new(py, handle.clone(), Sender::new(tx), factory)?;
+    let tr2 = tr.clone_ref(py);
+    let tr3 = tr.clone_ref(py);
 
     // create internal wire transport
-    let transport = HttpTransport::new(py, handle.clone(), socket, data_received)
-        .log_error(py, "WireTransport error")?;
-
-    // connection made
-    connection_made.call(
-        py, PyTuple::new(
-            py, &[transport.transport.clone_ref(py).into_object()]), None)
-        .log_error(py, "Protocol.connection_made error")?;
+    let transport = HttpTransport::new(handle.clone(), socket, rx, tr,
+                                       tr3.get_data_received(py).clone_ref(py));
 
     // start connection processing
     handle.spawn(
         transport.map(move |_| {
-            trace!("Protocol.connection_lost(None)");
-            with_py(|py| {
-                let _ = connection_lost.call(py, PyTuple::new(py, &[py.None()]), None)
-                    .log_error(py, "connection_lost error");
-            });
+            tr2.connection_lost()
         }).map_err(move |err| {
-            match err.kind() {
-                io::ErrorKind::TimedOut => {
-                    trace!("socket.timeout");
-                    with_py(|py| {
-                        let e = Classes.SocketTimeout.call(
-                            py, NoArgs, None).unwrap();
-
-                        connection_err.call(py, PyTuple::new(py, &[e]), None)
-                            .into_log(py, "connection_lost error");
-                    });
-                },
-                _ => {
-                    trace!("Protocol.connection_lost(err): {:?}", err);
-                    with_py(|py| {
-                        let mut e = err.to_pyerr(py);
-                        connection_err.call(py, PyTuple::new(py, &[e.instance(py)]), None)
-                            .into_log(py, "connection_lost error");
-                    });
-                }
-            }
+            tr3.connection_error(err)
         })
     );
     Ok(())
@@ -123,53 +45,72 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
 
 
 struct HttpTransport {
+    handle: Handle,
     framed: Framed<TcpStream, HttpTransportCodec>,
-    intake: unsync::mpsc::UnboundedReceiver<HttpTransportMessage>,
-
-    transport: TokioHttpTransport,
+    intake: unsync::mpsc::UnboundedReceiver<PyHttpTransportMessage>,
+    transport: PyHttpTransport,
     data_received: PyObject,
 
     buf: Option<PyBytes>,
     flushed: bool,
     closing: bool,
+    req: Option<pyreq::PyRequest>,
 }
 
 impl HttpTransport {
 
-    fn new(py: Python, handle: Handle, socket: TcpStream, data_received: PyObject) -> PyResult<HttpTransport> {
-        let (tx, rx) = unsync::mpsc::unbounded();
+    fn new(handle: Handle, socket: TcpStream,
+           intake: unsync::mpsc::UnboundedReceiver<PyHttpTransportMessage>,
+           transport: PyHttpTransport, data_received: PyObject) -> HttpTransport {
 
-        let transport = TokioHttpTransport::create_instance(py, handle, Sender::new(tx))?;
-
-        Ok(HttpTransport {
-            framed: socket.framed(HttpTransportCodec),
-            intake: rx,
-
+        HttpTransport {
+            handle: handle,
+            framed: socket.framed(HttpTransportCodec::new()),
+            intake: intake,
             transport: transport,
             data_received: data_received,
 
             buf: None,
             flushed: false,
             closing: false,
-        })
+            req: None,
+        }
     }
 
     fn read_from_socket(&mut self) -> Poll<(), io::Error> {
         // poll for incoming data
         match self.framed.poll() {
-            Ok(Async::Ready(Some(bytes))) => {
-                with_py(|py| {
-                    trace!("Data recv: {}", bytes.__len__(py).unwrap());
-                    self.data_received.call(py, PyTuple::new(py, &[bytes.into_object()]),
-                                            None)
-                        .into_log(py, "data_received error");
-                });
-
+            Ok(Async::Ready(Some(msg))) => {
+                match msg {
+                    http::RequestMessage::Message(msg) => {
+                        with_py(|py| match pyreq::PyRequest::new(py, msg, self.handle.clone()) {
+                            Err(err) => {
+                                error!("{:?}", err);
+                                err.clone_ref(py).print(py);
+                            },
+                            Ok(req) => {
+                                self.req = Some(req.clone_ref(py));
+                                self.data_received.call(
+                                    py, PyTuple::new(py, &[req.into_object()]), None)
+                                    .into_log(py, "data_received error");
+                            }
+                        });
+                    },
+                    http::RequestMessage::Body(chunk) => {
+                    },
+                    http::RequestMessage::Completed => {
+                        if let Some(ref req) = self.req {
+                            req.content().feed_eof(GIL::python());
+                        }
+                        self.req = None;
+                    }
+                }
+                //self.transport.data_received(msg)?;
                 self.read_from_socket()
             },
             Ok(Async::Ready(None)) => Ok(Async::Ready(())),
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(err) => Err(err),
+            Err(err) => Err(err.into()),
         }
     }
 }
@@ -181,6 +122,10 @@ impl Future for HttpTransport
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self.closing {
+            return self.framed.close()
+        }
+
         if let Async::Ready(_) = self.read_from_socket()? {
             return Ok(Async::Ready(()))
         }
@@ -192,10 +137,13 @@ impl Future for HttpTransport
                 match self.intake.poll() {
                     Ok(Async::Ready(Some(msg))) => {
                         match msg {
-                            HttpTransportMessage::Bytes(bytes) =>
+                            PyHttpTransportMessage::Bytes(bytes) =>
                                 Some(bytes),
-                            HttpTransportMessage::Close =>
-                                return Ok(Async::Ready(())),
+                            PyHttpTransportMessage::Close(err) => {
+                                trace!("Start transport closing procesdure");
+                                self.closing = true;
+                                return self.framed.close()
+                            }
                         }
                     }
                     Ok(_) => None,
@@ -229,29 +177,25 @@ impl Future for HttpTransport
 }
 
 
-struct HttpTransportCodec;
+struct HttpTransportCodec {
+    decoder: http::RequestDecoder,
+}
+
+impl HttpTransportCodec {
+    fn new() -> HttpTransportCodec {
+        HttpTransportCodec {
+            decoder: http::RequestDecoder::new(),
+        }
+    }
+}
 
 impl Decoder for HttpTransportCodec {
-    type Item = TokioBytes;
-    type Error = io::Error;
+    type Item = http::RequestMessage;
+    type Error = http::Error;
 
+    #[inline]
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if !src.is_empty() {
-            let bytes = src.take().freeze();
-
-            let gil = Python::acquire_gil();
-            let py = gil.python();
-
-            match create_bytes(py, bytes) {
-                Ok(bytes) =>
-                    Ok(Some(bytes)),
-                Err(_) =>
-                    Err(io::Error::new(
-                        io::ErrorKind::Other, "Can not create TokioBytes instance")),
-            }
-        } else {
-            Ok(None)
-        }
+        self.decoder.decode(src)
     }
 
 }

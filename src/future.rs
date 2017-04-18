@@ -20,6 +20,16 @@ pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
     )
 }
 
+pub fn done_future(py: Python, h: Handle, result: PyObject) -> PyResult<TokioFuture> {
+    TokioFuture::create_instance(
+        py, h,
+        cell::Cell::new(State::Finished),
+        cell::RefCell::new(result),
+        cell::RefCell::new(None),
+        cell::RefCell::new(None),
+        cell::RefCell::new(None),
+    )
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum State {
@@ -385,7 +395,6 @@ impl TokioFuture {
             },
         }
     }
-
 }
 
 
