@@ -1,5 +1,8 @@
 mod decoder;
 mod headers;
+mod message;
+mod transport;
 
-pub use self::decoder::{ContentCompression, Error,
-                        RequestDecoder, RequestMessage, RequestStatusLine, Version};
+pub use self::decoder::{Error, RequestDecoder, RequestMessage};
+pub use self::message::{Version, Request, ContentCompression, ConnectionType};
+pub use self::transport::{http_transport_factory};

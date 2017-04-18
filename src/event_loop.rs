@@ -13,10 +13,11 @@ use tokio_signal;
 
 use addrinfo;
 use handle;
-use server;
+use http;
 use future::{TokioFuture, create_future, create_task};
-use utils;
+use server;
 use transport;
+use utils;
 use pyunsafe::Handle;
 
 
@@ -306,6 +307,27 @@ py_class!(pub class TokioEventLoop |py| {
             Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
             family, flags, sock, backlog, ssl, reuse_address, reuse_port,
             transport::tcp_transport_factory)
+    }
+
+    def create_http_server(&self, protocol_factory: PyObject,
+                           host: Option<PyString>, port: Option<u16> = None,
+                           family: i32 = 0,
+                           flags: i32 = addrinfo::AI_PASSIVE,
+                           sock: Option<PyObject> = None,
+                           backlog: i32 = 100,
+                           ssl: Option<PyObject> = None,
+                           reuse_address: bool = true,
+                           reuse_port: bool = true) -> PyResult<server::TokioServer> {
+        if let Some(ssl) = ssl {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, PyString::new(py, "ssl argument is not supported yet")));
+        }
+
+        server::create_server(
+            py, protocol_factory, self.handle(py).clone(),
+            Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
+            family, flags, sock, backlog, ssl, reuse_address, reuse_port,
+            http::http_transport_factory)
     }
 
     //

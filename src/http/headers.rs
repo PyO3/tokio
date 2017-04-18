@@ -50,6 +50,27 @@ impl Headers {
         }
     }
 
+    pub fn get_case(&self, name: &str) -> Option<&str> {
+        let mut hasher = self.hasher.borrow_mut();
+        for byte in name.bytes() {
+            hasher.write_u8(byte);
+        }
+        let hash = hasher.finish();
+
+        if let Some(ref header) = self.headers.get(&hash) {
+            if let Some(ref bytes) = self.bytes {
+                Some(
+                    unsafe {
+                        std::str::from_utf8_unchecked(&bytes[header.value_range()])
+                    })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     pub fn has(&self) -> bool {
         true
     }

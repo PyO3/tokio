@@ -8,57 +8,14 @@ use std::collections::hash_map::DefaultHasher;
 use bytes::{Bytes, BytesMut};
 use tokio_io::codec::Decoder;
 
-use http::headers::{Header, Headers, WriteHeaders};
+use http::headers::{Header, WriteHeaders};
+use http::message::{Version, ContentCompression, ConnectionType, Request, RequestUpdater};
 
-
-/// Request http version
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Version {
-    Http10,
-    Http11,
-}
-
-/// Request status line
-#[derive(PartialEq, Debug)]
-pub struct RequestStatusLine {
-    meth_pos: u8,
-    meth_end: u8,
-    path_pos: u8,
-    path_end: u16,
-    pub version: Version,
-    bytes: Bytes,
-}
-
-impl RequestStatusLine {
-
-    pub fn method(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(
-            &self.bytes[(self.meth_pos as usize)..(self.meth_end as usize)]) }
-    }
-
-    pub fn path(&self) -> &str {
-        unsafe { std::str::from_utf8_unchecked(
-            &self.bytes[(self.path_pos as usize)..(self.path_end as usize)]) }
-    }
-
-}
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum ContentCompression {
-    Default,
-    Gzip,
-    Deflate,
-}
 
 /// Parsed request
 #[derive(Debug)]
 pub enum RequestMessage {
-    Status(RequestStatusLine),
-    Headers {headers: Headers,
-             close: bool,
-             chunked: bool,
-             upgrade: bool,
-             compress: ContentCompression},
+    Message(Request),
     Body(Bytes),
     Completed,
 }
@@ -400,13 +357,10 @@ pub struct RequestDecoder {
     path_end: u16,
     path_pos: u8,
 
-    version: Version,
+    request: Request,
+
     length: Option<u64>,
-    close: Option<bool>,
     chunked: bool,
-    upgrade: bool,
-    compress: ContentCompression,
-    headers: Headers,
 
     header: Header,
     has_header: bool,
@@ -426,12 +380,12 @@ impl RequestDecoder {
             start: 0, state: State::Status(ParseStatusLine::Method),
             meth_pos: 0, meth_end: 0, path_pos: 0, path_end: 0,
 
-            headers: Headers::new(),
+            request: Request::new(),
+
             header: Header::new(), has_header: false, header_token: ParseTokens::New,
             header_name: ParseHeaderName::General, header_name_hash: DefaultHasher::new(),
 
-            version: Version::Http10, length: None,
-            close: None, chunked: false, upgrade: false, compress: ContentCompression::Default,
+            length: None, chunked: false,
 
             max_line_size: 8190, max_headers: 32768, max_field_size: 8190,
         }
@@ -439,19 +393,30 @@ impl RequestDecoder {
 
     fn update_msg_state(&mut self, token: ParseTokens) {
         match self.header_name {
-            ParseHeaderName::Connection(..) => match token {
-                ParseTokens::Close(..) => self.close = Some(true),
-                ParseTokens::KeepAlive(..) => self.close = Some(false),
-                ParseTokens::Upgrade(..) => self.upgrade = true,
-                _ => (),
-            },
+            ParseHeaderName::Connection(..) =>
+                if self.request.connection != ConnectionType::Upgrade {
+                    match token {
+                        ParseTokens::Close(..) =>
+                            self.request.connection = ConnectionType::Close,
+                        ParseTokens::KeepAlive(..) =>
+                            self.request.connection = ConnectionType::KeepAlive,
+                        ParseTokens::Upgrade(..) =>
+                            self.request.connection = ConnectionType::Upgrade,
+                        _ => (),
+                    }
+                },
             ParseHeaderName::TransferEncoding(..) => match token {
-                ParseTokens::Chunked(..) => self.chunked = true,
+                ParseTokens::Chunked(..) => {
+                    self.chunked = true;
+                    self.request.chunked = true;
+                },
                 _ => (),
             },
             ParseHeaderName::ContentEncoding(..) => match token {
-                ParseTokens::Gzip(..) => self.compress = ContentCompression::Gzip,
-                ParseTokens::Deflate(..) => self.compress = ContentCompression::Deflate,
+                ParseTokens::Gzip(..) =>
+                    self.request.compress = ContentCompression::Gzip,
+                ParseTokens::Deflate(..) =>
+                    self.request.compress = ContentCompression::Deflate,
                 _ => (),
             },
             _ => (),
@@ -471,7 +436,7 @@ impl Decoder for RequestDecoder {
 
         'run: loop {
             //println!("Start from: {:?}", state);
-        match state {
+            match state {
 
             State::Status(status) => match status {
                 ParseStatusLine::Method => match parse_token(&mut bytes, SP)? {
@@ -510,19 +475,17 @@ impl Decoder for RequestDecoder {
                 },
                 ParseStatusLine::Version => match parse_version(&mut bytes)? {
                     Status::Complete(ver) => {
-                        self.version = ver;
+                        self.request.version = ver;
+                        if ver == Version::Http10 {
+                            self.request.connection = ConnectionType::Close;
+                        }
                         self.start = 0;
-                        self.state = State::Status(ParseStatusLine::Eol(CRLF::CR));
-                        return Ok(
-                            Some(RequestMessage::Status(RequestStatusLine {
-                                meth_pos: self.meth_pos,
-                                meth_end: self.meth_end,
-                                path_pos: self.path_pos,
-                                path_end: self.path_end,
-                                version: ver,
-                                bytes: src.split_to(bytes.pos()).freeze(),
-                            }))
-                        )
+                        self.request.update_status(
+                            src.split_to(bytes.pos()).freeze(),
+                            (self.meth_pos, self.meth_end),
+                            (self.path_pos, self.path_end));
+                        bytes = BytesPtr::new(src.as_ref(), 0);
+                        state = State::Status(ParseStatusLine::Eol(CRLF::CR));
                     },
                     Status::Partial(..) => {
                         break
@@ -531,7 +494,6 @@ impl Decoder for RequestDecoder {
                 ParseStatusLine::Eol(marker) =>
                     match parse_crlf(&mut bytes, marker, Error::BadStatusLine)? {
                         Status::Complete(..) => {
-                            self.close = None;
                             self.length = None;
                             self.chunked = false;
                             state = State::Header(ParseHeader::Eol);
@@ -556,14 +518,9 @@ impl Decoder for RequestDecoder {
                             if let Some(ch) = bytes.next_maybe() {
                                 if ch == LF {
                                     if self.has_header {
-                                        self.headers.append(self.header);
+                                        self.request.headers.append(self.header);
                                     }
-                                    self.headers.flush(src);
-
-                                    let close = match self.close {
-                                        Some(close) => close,
-                                        None => self.version == Version::Http10,
-                                    };
+                                    self.request.headers.flush(src);
 
                                     let length = match self.length{
                                         Some(length) =>
@@ -583,17 +540,10 @@ impl Decoder for RequestDecoder {
                                     } else {
                                         self.state = State::Done;
                                     }
-                                    let headers = std::mem::replace(
-                                        &mut self.headers, Headers::new());
+                                    let request = std::mem::replace(
+                                        &mut self.request, Request::new());
 
-                                    return Ok(Some(
-                                        RequestMessage::Headers {
-                                            headers: headers,
-                                            close: close,
-                                            chunked: self.chunked,
-                                            upgrade: self.upgrade,
-                                            compress: self.compress
-                                        }));
+                                    return Ok(Some(RequestMessage::Message(request)));
                                 } else {
                                     return Err(Error::BadHeader);
                                 }
@@ -606,7 +556,7 @@ impl Decoder for RequestDecoder {
                         } else {
                             // append processed header
                             if self.has_header {
-                                self.headers.append(self.header);
+                                self.request.headers.append(self.header);
                             } else {
                                 self.has_header = true
                             }
@@ -904,7 +854,6 @@ impl Decoder for RequestDecoder {
                 self.start = 0;
                 self.meth_pos = 0;
                 self.meth_end = 0;
-                self.compress = ContentCompression::Default;
                 self.state = State::Status(ParseStatusLine::Method);
                 return Ok(Some(RequestMessage::Completed))
             }
