@@ -669,6 +669,16 @@ test! { test_http_payload_parser_length,
         }}
 
 
+test! { test_http_request_websocket,
+        "GET /path HTTP/1.1\r\n",
+        "Upgrade: Websocket\r\n\r\n" => |codec, buf| {
+            expect_status!(msg => codec(buf) => "GET", "/path", Version::Http11);
+            expect_headers!(msg => conn:ConnectionType::KeepAlive, chunked:false,
+                            ("upgrade", "Websocket"));
+            assert_eq!(msg.websocket, true);
+            expect_completed!(codec(buf));
+        }}
+
 //_comp = zlib.compressobj(wbits=-zlib.MAX_WBITS)
 //_COMPRESSED = b''.join([_comp.compress(b'data'), _comp.flush()])
 

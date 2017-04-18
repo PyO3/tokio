@@ -151,6 +151,20 @@ macro_rules! match_hname {
     })
 }
 
+macro_rules! match_token {
+    ($enu:ident::$hdr:ident($idx:ident) == $ch:ident, $token:ident) => ({
+        let next = $idx + 1;
+        if next == $token.len {
+            $enu::General
+        } else if $token.token[next] != $ch.to_ascii_lowercase() {
+            $enu::General
+        } else {
+            $enu::$hdr(next)
+        }
+    })
+}
+
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum ParseHeaderName {
     New,
@@ -165,7 +179,7 @@ enum ParseHeaderName {
 
     ProxyConnection(usize),
     TransferEncoding(usize),
-    Websocket(usize),
+    Upgrade(usize),
 }
 
 
@@ -177,32 +191,21 @@ impl ParseHeaderName {
             ParseHeaderName::General => ParseHeaderName::General,
 
             ParseHeaderName::Con(idx) => {
-                let next = idx + 1;
-                if next == 1 && ch == b'o' {
-                    ParseHeaderName::Con(1)
-                } else if next == 2 && ch == b'n' {
-                    ParseHeaderName::Con(2)
-                } else if next == 3 {
-                    if ch == b'n' {
-                        ParseHeaderName::Connection(3)
-                    } else if ch == b't' {
-                        ParseHeaderName::Content(3)
-                    } else {
-                        ParseHeaderName::General
-                    }
-                } else {
-                    ParseHeaderName::General
+                match idx + 1 {
+                    1 if ch == b'o' => ParseHeaderName::Con(1),
+                    2 if ch == b'n' => ParseHeaderName::Con(2),
+                    3 if ch == b'n' => ParseHeaderName::Connection(3),
+                    3 if ch == b't' => ParseHeaderName::Content(3),
+                    _ => ParseHeaderName::General
                 }
             },
             ParseHeaderName::Content(idx) => {
                 let next = idx + 1;
                 if next == 8 {
-                    if ch == b'e' {
-                        ParseHeaderName::ContentEncoding(next)
-                    } else if ch == b'l' {
-                        ParseHeaderName::ContentLength(next)
-                    } else {
-                        ParseHeaderName::General
+                    match ch {
+                        b'e' => ParseHeaderName::ContentEncoding(next),
+                        b'l' => ParseHeaderName::ContentLength(next),
+                        _    => ParseHeaderName::General
                     }
                 } else if CONTENT.token[next] != ch {
                     ParseHeaderName::General
@@ -225,15 +228,15 @@ impl ParseHeaderName {
             ParseHeaderName::TransferEncoding(idx) => {
                 match_hname!(ParseHeaderName::TransferEncoding(idx) == ch, TRANSFER_ENCODING)
             },
-            ParseHeaderName::Websocket(idx) => {
-                match_hname!(ParseHeaderName::Websocket(idx) == ch, WEBSOCKET)
+            ParseHeaderName::Upgrade(idx) => {
+                match_hname!(ParseHeaderName::Upgrade(idx) == ch, UPGRADE)
             },
             ParseHeaderName::New => {
                 match ch {
                     b'c' => ParseHeaderName::Con(0),
                     b'p' => ParseHeaderName::ProxyConnection(0),
                     b't' => ParseHeaderName::TransferEncoding(0),
-                    b'w' => ParseHeaderName::Websocket(0),
+                    b'u' => ParseHeaderName::Upgrade(0),
                     _    => ParseHeaderName::General,
                 }
             },
@@ -248,7 +251,7 @@ impl ParseHeaderName {
             ParseHeaderName::ContentEncoding(idx) => idx+1 == CONTENT_ENCODING.len,
             ParseHeaderName::ProxyConnection(idx) => idx+1 == PROXY_CONNECTION.len,
             ParseHeaderName::TransferEncoding(idx) => idx+1 == TRANSFER_ENCODING.len,
-            ParseHeaderName::Websocket(idx) => idx+1 == WEBSOCKET.len,
+            ParseHeaderName::Upgrade(idx) => idx+1 == UPGRADE.len,
             _ => true
         }
     }
@@ -264,6 +267,7 @@ enum ParseTokens {
     Gzip(usize),
     Deflate(usize),
     KeepAlive(usize),
+    Websocket(usize),
     Upgrade(usize),
 }
 
@@ -273,42 +277,40 @@ impl ParseTokens {
     fn next(&self, ch: u8) -> ParseTokens {
         match *self {
             ParseTokens::General => ParseTokens::General,
-            ParseTokens::C => {
-                if ch == b'h' {
-                    ParseTokens::Chunked(1)
-                } else if ch == b'l' {
-                    ParseTokens::Close(1)
-                } else {
-                    ParseTokens::General
-                }
+            ParseTokens::C => match ch.to_ascii_lowercase() {
+                b'h' => ParseTokens::Chunked(1),
+                b'l' => ParseTokens::Close(1),
+                _    => ParseTokens::General,
             },
             ParseTokens::Chunked(idx) => {
-                match_hname!(ParseTokens::Chunked(idx) == ch, CHUNKED)
+                match_token!(ParseTokens::Chunked(idx) == ch, CHUNKED)
             },
             ParseTokens::Close(idx) => {
-                match_hname!(ParseTokens::Close(idx) == ch, CLOSE)
+                match_token!(ParseTokens::Close(idx) == ch, CLOSE)
             },
             ParseTokens::Gzip(idx) => {
-                match_hname!(ParseTokens::Gzip(idx) == ch, GZIP)
+                match_token!(ParseTokens::Gzip(idx) == ch, GZIP)
             },
             ParseTokens::Deflate(idx) => {
-                match_hname!(ParseTokens::Deflate(idx) == ch, DEFLATE)
+                match_token!(ParseTokens::Deflate(idx) == ch, DEFLATE)
             },
             ParseTokens::KeepAlive(idx) => {
-                match_hname!(ParseTokens::KeepAlive(idx) == ch, KEEP_ALIVE)
+                match_token!(ParseTokens::KeepAlive(idx) == ch, KEEP_ALIVE)
+            },
+            ParseTokens::Websocket(idx) => {
+                match_token!(ParseTokens::Websocket(idx) == ch, WEBSOCKET)
             },
             ParseTokens::Upgrade(idx) => {
-                match_hname!(ParseTokens::Upgrade(idx) == ch, UPGRADE)
+                match_token!(ParseTokens::Upgrade(idx) == ch, UPGRADE)
             },
-            ParseTokens::New => {
-                match ch {
-                    b'c' => ParseTokens::C,
-                    b'g' => ParseTokens::Gzip(0),
-                    b'd' => ParseTokens::Deflate(0),
-                    b'k' => ParseTokens::KeepAlive(0),
-                    b'u' => ParseTokens::Upgrade(0),
-                    _    => ParseTokens::General,
-                }
+            ParseTokens::New => match ch.to_ascii_lowercase() {
+                b'c' => ParseTokens::C,
+                b'g' => ParseTokens::Gzip(0),
+                b'd' => ParseTokens::Deflate(0),
+                b'k' => ParseTokens::KeepAlive(0),
+                b'w' => ParseTokens::Websocket(0),
+                b'u' => ParseTokens::Upgrade(0),
+                _    => ParseTokens::General,
             },
         }
     }
@@ -321,6 +323,7 @@ impl ParseTokens {
             ParseTokens::Gzip(idx) => idx+1 == GZIP.len,
             ParseTokens::Deflate(idx) => idx+1 == DEFLATE.len,
             ParseTokens::KeepAlive(idx) => idx+1 == KEEP_ALIVE.len,
+            ParseTokens::Websocket(idx) => idx+1 == WEBSOCKET.len,
             ParseTokens::Upgrade(idx) => idx+1 == UPGRADE.len,
             _ => false
         }
@@ -417,6 +420,11 @@ impl RequestDecoder {
                     self.request.compress = ContentCompression::Gzip,
                 ParseTokens::Deflate(..) =>
                     self.request.compress = ContentCompression::Deflate,
+                _ => (),
+            },
+            ParseHeaderName::Upgrade(..) => match token {
+                ParseTokens::Websocket(..) =>
+                    self.request.websocket = true,
                 _ => (),
             },
             _ => (),
@@ -941,7 +949,6 @@ const CONTENT_LENGTH: Token = Token {len: 14, token: b"content-length"};
 const CONTENT_ENCODING: Token = Token {len: 16, token: b"content-encoding"};
 const TRANSFER_ENCODING: Token = Token {len: 17, token: b"transfer-encoding"};
 const WEBSOCKET: Token = Token {len: 9, token: b"websocket"};
-
 const CHUNKED: Token = Token {len: 7, token: b"chunked"};
 const KEEP_ALIVE: Token = Token {len: 10, token: b"keep-alive"};
 const CLOSE: Token = Token {len: 5, token: b"close"};
