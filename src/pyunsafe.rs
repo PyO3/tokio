@@ -2,6 +2,7 @@
 use std::ops::Deref;
 use std::clone::Clone;
 use tokio_core::reactor;
+use futures::{Future, Poll};
 use futures::unsync::{mpsc, oneshot};
 use cpython::Python;
 
@@ -92,4 +93,27 @@ impl<T> OneshotSender<T> {
         self.0.send(msg)
     }
 
+}
+
+
+#[doc(hidden)]
+pub struct OneshotReceiver<T> (oneshot::Receiver<T>);
+
+unsafe impl<T> Send for OneshotReceiver<T> {}
+
+impl<T> OneshotReceiver<T> {
+
+    pub fn new(receiver: oneshot::Receiver<T>) -> Self {
+        OneshotReceiver(receiver)
+    }
+
+}
+
+impl<T> Future for OneshotReceiver<T> {
+    type Item = T;
+    type Error = oneshot::Canceled;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0.poll()
+    }
 }

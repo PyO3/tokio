@@ -2,16 +2,21 @@
 
 use std::cell;
 use cpython::*;
-use futures::future;
+use futures::{future, unsync, Poll};
+// use futures::task::{Task, park};
 use boxfnonce::SendBoxFnOnce;
 
 use utils::{Classes, PyLogger, with_py};
-use pyunsafe::Handle;
+use pyunsafe::{GIL, Handle, OneshotReceiver, OneshotSender};
 
 
 pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
+    let (tx, rx) = unsync::oneshot::channel();
+
     TokioFuture::create_instance(
         py, h,
+        cell::RefCell::new(Some(OneshotSender::new(tx))),
+        cell::RefCell::new(Some(OneshotReceiver::new(rx))),
         cell::Cell::new(State::Pending),
         cell::RefCell::new(py.None()),
         cell::RefCell::new(None),
@@ -23,6 +28,8 @@ pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
 pub fn done_future(py: Python, h: Handle, result: PyObject) -> PyResult<TokioFuture> {
     TokioFuture::create_instance(
         py, h,
+        cell::RefCell::new(None),
+        cell::RefCell::new(None),
         cell::Cell::new(State::Finished),
         cell::RefCell::new(result),
         cell::RefCell::new(None),
@@ -43,6 +50,8 @@ type Callback = SendBoxFnOnce<(TokioFuture,)>;
 
 py_class!(pub class TokioFuture |py| {
     data _loop: Handle;
+    data _sender: cell::RefCell<Option<OneshotSender<PyResult<PyObject>>>>;
+    data _receiver: cell::RefCell<Option<OneshotReceiver<PyResult<PyObject>>>>;
     data _state: cell::Cell<State>;
     data _result: cell::RefCell<PyObject>;
     data _exception: cell::RefCell<Option<PyObject>>;
@@ -164,18 +173,17 @@ py_class!(pub class TokioFuture |py| {
                 }
             },
             _ => {
-                let fut = self.clone_ref(py);
+                //let fut = self.clone_ref(py);
 
                 // schedule callback
-                self._loop(py).spawn_fn(move|| {
+                //self._loop(py).spawn_fn(move|| {
                     // call python callback
-                    with_py(|py| {
-                        cb.call(py, (fut,).to_py_object(py), None)
-                            .into_log(py, "future callback error");
-                    });
+                    //with_py(|py| {
+                cb.call(py, (self,).to_py_object(py), None)
+                    .into_log(py, "future callback error");
+                //});
 
-                    future::ok(())
-                })
+                //future::ok(())
             },
         }
 
@@ -203,6 +211,12 @@ py_class!(pub class TokioFuture |py| {
 
         match state.get() {
             State::Pending => {
+                // complete oneshot channel
+                if let Some(sender) = self._sender(py).borrow_mut().take() {
+                    let _ = sender.send(Ok(result.clone_ref(py)));
+                }
+
+                // set result
                 state.set(State::Finished);
                 *self._result(py).borrow_mut() = result;
 
@@ -266,7 +280,12 @@ py_class!(pub class TokioFuture |py| {
                 //    raise TypeError("StopIteration interacts badly with generators "
                 //                    "and cannot be raised into a Future")
                 state.set(State::Finished);
-                *self._exception(py).borrow_mut() = Some(exc);
+                *self._exception(py).borrow_mut() = Some(exc.clone_ref(py));
+
+                // complete oneshot channel
+                if let Some(sender) = self._sender(py).borrow_mut().take() {
+                    let _ = sender.send(Err(PyErr::from_instance(py, exc.clone_ref(py))));
+                }
 
                 // schedule callback
                 let callbacks = self._callbacks(py).borrow_mut().take();
@@ -365,8 +384,6 @@ py_class!(pub class TokioFutureIter |py| {
 
 });
 
-
-
 impl TokioFuture {
 
     //
@@ -396,6 +413,21 @@ impl TokioFuture {
         }
     }
 }
+
+impl future::Future for TokioFuture {
+    type Item = PyResult<PyObject>;
+    type Error = unsync::oneshot::Canceled;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Some(ref mut rx) = *self._receiver(GIL::python()).borrow_mut() {
+            rx.poll()
+        } else {
+            Err(unsync::oneshot::Canceled)
+        }
+    }
+}
+
+
 
 
 pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {

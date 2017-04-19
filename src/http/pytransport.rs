@@ -6,15 +6,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 use cpython::*;
-use futures::unsync::{oneshot, mpsc};
+use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
-use boxfnonce::SendBoxFnOnce;
 
 use future::{create_task, done_future, TokioFuture};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
-use pyunsafe::{GIL, Handle, Sender, OneshotSender};
+use pyunsafe::{GIL, Handle, Sender};
 
 
 pub enum PyHttpTransportMessage {
@@ -215,9 +214,8 @@ struct RequestHandler {
     h: Handle,
     tr: PyHttpTransport,
     handler: PyObject,
-    fut: Option<TokioFuture>,
-    event: Option<oneshot::Receiver<PyResult<PyObject>>>,
-    inflight: Option<PyRequest>,
+    task: TokioFuture,
+    inflight: PyRequest,
 }
 
 impl RequestHandler {
@@ -225,45 +223,30 @@ impl RequestHandler {
     fn new(h: Handle, msg: http::Request, tx: Sender<codec::EncoderMessage>,
            tr: PyHttpTransport, handler: PyObject) -> PyResult<RequestHandler> {
 
-        let mut handler = RequestHandler {
+        let (task, req) = RequestHandler::start_task(h.clone(), msg, tx, &handler)?;
+
+        Ok(RequestHandler {
             h: h,
             tr: tr,
             handler: handler,
-            fut: None,
-            event: None,
-            inflight: None,
-        };
-        handler.start_task(msg, tx)?;
-
-        Ok(handler)
+            task: task,
+            inflight: req,
+        })
     }
 
-    pub fn start_task(&mut self,
-                      msg: http::Request,
-                      sender: Sender<codec::EncoderMessage>) -> PyResult<()> {
-        // communication
-        let (tx, rx) = oneshot::channel::<PyResult<PyObject>>();
-        let tx = OneshotSender::new(tx);
-
+    pub fn start_task(h: Handle, msg: http::Request,
+                      sender: Sender<codec::EncoderMessage>,
+                      handler: &PyObject) -> PyResult<(TokioFuture, PyRequest)> {
         // start python task
         with_py(|py| {
-            let req = pyreq::PyRequest::new(py, msg, self.h.clone(), sender)?;
+            let req = pyreq::PyRequest::new(py, msg, h.clone(), sender)?;
             req.content().feed_eof(py);
 
-            let coro = self.handler.call(
+            let coro = handler.call(
                 py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
 
-            let task = create_task(py, coro, self.h.clone())?;
-            let _ = task.add_callback(py, SendBoxFnOnce::from(move |fut: TokioFuture| {
-                let res = fut.result(Python::acquire_gil().python());
-                let _ = tx.send(res);
-            }));
-
-            self.fut = Some(task);
-            self.event = Some(rx);
-            self.inflight = Some(req);
-
-            Ok(())
+            let task = create_task(py, coro, h)?;
+            Ok((task, req))
         })
     }
 }
@@ -274,12 +257,7 @@ impl Future for RequestHandler {
     type Error = PyErr;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let result = match self.event {
-            None => return Ok(Async::Ready(())),
-            Some(ref mut ev) => {
-                ev.poll()
-            }
-        };
+        let result = self.task.poll();
 
         // process result from python task
         match result {
@@ -299,7 +277,10 @@ impl Future for RequestHandler {
                         return Ok(Async::Ready(()))
                     }
                 };
-                let _ = self.start_task(msg, sender)?;
+                let (task, req) = RequestHandler::start_task(
+                    self.h.clone(), msg, sender, &self.handler)?;
+                self.inflight = req;
+                self.task = task;
                 self.poll()
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
@@ -309,5 +290,4 @@ impl Future for RequestHandler {
             }
         }
     }
-
 }
