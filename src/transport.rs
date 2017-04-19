@@ -49,7 +49,7 @@ py_class!(pub class TokioTcpTransport |py| {
     }
 
     //def drain(&self) -> PyResult<PyFuture> {
-    //    let fut = create_future(py, self.handle(py).clone())?;
+    //    let fut = PyFuture::new(py, self.handle(py).clone())?;
     //    fut.set_result(py, py.None())?;
     //    Ok(fut)
     //}

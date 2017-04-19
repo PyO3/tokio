@@ -14,7 +14,7 @@ use tokio_signal;
 use addrinfo;
 use handle;
 use http;
-use pyfuture::{PyFuture, create_future, create_task};
+use ::{PyFuture, PyTask};
 use server;
 use transport;
 use utils;
@@ -93,7 +93,7 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
-        create_future(py, self.handle(py).clone())
+        PyFuture::new(py, self.handle(py).clone())
     }
 
     //
@@ -101,14 +101,14 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return a task object.
     //
-    def create_task(&self, coro: PyObject) -> PyResult<PyFuture> {
+    def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
         if self.debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        create_task(py, coro, self.handle(py).clone())
+        PyTask::new(py, coro, self.handle(py).clone())
     }
 
     //

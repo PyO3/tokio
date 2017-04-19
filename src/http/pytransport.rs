@@ -9,7 +9,7 @@ use cpython::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
-use pyfuture::{create_task, done_future, PyFuture};
+use ::{PyFuture, PyTask};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
@@ -59,7 +59,7 @@ py_class!(pub class PyHttpTransport |py| {
     // send buffered data to socket
     //
     def drain(&self) -> PyResult<PyFuture> {
-        Ok(done_future(py, self._loop(py).clone(), py.None())?)
+        Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?)
     }
 
     //
@@ -214,7 +214,7 @@ struct RequestHandler {
     h: Handle,
     tr: PyHttpTransport,
     handler: PyObject,
-    task: PyFuture,
+    task: PyTask,
     inflight: PyRequest,
 }
 
@@ -236,7 +236,7 @@ impl RequestHandler {
 
     pub fn start_task(h: Handle, msg: http::Request,
                       sender: Sender<codec::EncoderMessage>,
-                      handler: &PyObject) -> PyResult<(PyFuture, PyRequest)> {
+                      handler: &PyObject) -> PyResult<(PyTask, PyRequest)> {
         // start python task
         with_py(|py| {
             let req = pyreq::PyRequest::new(py, msg, h.clone(), sender)?;
@@ -245,7 +245,7 @@ impl RequestHandler {
             let coro = handler.call(
                 py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
 
-            let task = create_task(py, coro, h)?;
+            let task = PyTask::new(py, coro, h)?;
             Ok((task, req))
         })
     }

@@ -6,42 +6,12 @@ use futures::{future, unsync, Poll};
 // use futures::task::{Task, park};
 use boxfnonce::SendBoxFnOnce;
 
-use pytask::PyTask;
 use utils::{Classes, PyLogger, with_py};
 use pyunsafe::{GIL, Handle, OneshotReceiver, OneshotSender};
-
-#[derive(Copy, Clone, Debug)]
-pub enum State {
-    Pending,
-    Cancelled,
-    Finished,
-}
-
-pub enum Entities {
-    Future(PyFuture),
-    Task(PyTask),
-}
-
-impl Entities {
-    pub fn cancel(&self, py: Python) -> PyResult<bool> {
-        match *self {
-            Entities::Future(ref fut) => fut.cancel(py),
-            Entities::Task(ref fut) => fut.cancel(py),
-        }
-    }
-
-    pub fn result(&self, py: Python) -> PyResult<PyObject> {
-        match *self {
-            Entities::Future(ref fut) => fut.result(py),
-            Entities::Task(ref fut) => fut.result(py),
-        }
-    }
-}
-
-pub type Callback = SendBoxFnOnce<(Entities,)>;
+use pyfuture::{State, PyFuture, Entities, Callback};
 
 
-py_class!(pub class PyFuture |py| {
+py_class!(pub class PyTask |py| {
     data _loop: Handle;
     data _sender: cell::RefCell<Option<OneshotSender<PyResult<PyObject>>>>;
     data _receiver: cell::RefCell<Option<OneshotReceiver<PyResult<PyObject>>>>;
@@ -49,6 +19,8 @@ py_class!(pub class PyFuture |py| {
     data _result: cell::RefCell<PyObject>;
     data _exception: cell::RefCell<Option<PyObject>>;
     data _callbacks: cell::RefCell<Option<Vec<PyObject>>>;
+    data _waiter: cell::RefCell<Option<Entities>>;
+    data _must_cancel: cell::Cell<bool>;
 
     // rust callbacks
     data _rcallbacks: cell::RefCell<Option<Vec<Callback>>>;
@@ -61,12 +33,14 @@ py_class!(pub class PyFuture |py| {
     // return True.
     //
     def cancel(&self) -> PyResult<bool> {
-        let state = self._state(py);
-
-        match state.get() {
+        match self._state(py).get() {
             State::Pending => {
-                state.set(State::Cancelled);
-                self.schedule_callbacks(py);
+                if let Some(ref waiter) = *self._waiter(py).borrow() {
+                    if waiter.cancel(py)? {
+                        return Ok(true);
+                    }
+                }
+                self._must_cancel(py).set(true);
                 Ok(true)
             }
             _ => Ok(false)
@@ -200,7 +174,6 @@ py_class!(pub class PyFuture |py| {
     // InvalidStateError.
     //
     def set_result(&self, result: PyObject) -> PyResult<PyObject> {
-        //println!("set result {:?}", result);
         let state = self._state(py);
 
         match state.get() {
@@ -257,12 +230,12 @@ py_class!(pub class PyFuture |py| {
     //
     // awaitable
     //
-    def __iter__(&self) -> PyResult<PyFutureIter> {
-        PyFutureIter::create_instance(py, self.clone_ref(py))
+    def __iter__(&self) -> PyResult<PyTaskIter> {
+        PyTaskIter::create_instance(py, self.clone_ref(py))
     }
 
-    def __await__(&self) -> PyResult<PyFutureIter> {
-        PyFutureIter::create_instance(py, self.clone_ref(py))
+    def __await__(&self) -> PyResult<PyTaskIter> {
+        PyTaskIter::create_instance(py, self.clone_ref(py))
     }
 
     //
@@ -283,13 +256,13 @@ py_class!(pub class PyFuture |py| {
 
 });
 
-impl PyFuture {
+impl PyTask {
 
-    pub fn new(py: Python, h: Handle) -> PyResult<PyFuture> {
+    pub fn new(py: Python, coro: PyObject, handle: Handle) -> PyResult<PyTask> {
         let (tx, rx) = unsync::oneshot::channel();
 
-        PyFuture::create_instance(
-            py, h,
+        let task = PyTask::create_instance(
+            py, handle.clone(),
             cell::RefCell::new(Some(OneshotSender::new(tx))),
             cell::RefCell::new(Some(OneshotReceiver::new(rx))),
             cell::Cell::new(State::Pending),
@@ -297,20 +270,43 @@ impl PyFuture {
             cell::RefCell::new(None),
             cell::RefCell::new(Some(Vec::new())),
             cell::RefCell::new(None),
-        )
+            cell::Cell::new(false),
+            cell::RefCell::new(None),
+        )?;
+
+        let fut = task.clone_ref(py);
+
+        handle.spawn_fn(move|| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            // execute one step
+            task_step(py, fut, coro, None);
+
+            future::ok(())
+        });
+
+        Ok(task)
     }
 
-    pub fn done_fut(py: Python, h: Handle, result: PyObject) -> PyResult<PyFuture> {
-        PyFuture::create_instance(
-            py, h,
-            cell::RefCell::new(None),
-            cell::RefCell::new(None),
-            cell::Cell::new(State::Finished),
-            cell::RefCell::new(result),
-            cell::RefCell::new(None),
-            cell::RefCell::new(None),
-            cell::RefCell::new(None),
-        )
+    //
+    // Cancel the future and schedule callbacks.
+    //
+    // If the future is already done or cancelled, return False.  Otherwise,
+    // change the future's state to cancelled, schedule the callbacks and
+    // return True.
+    //
+    fn cancel_fut(&self, py: Python) -> PyResult<bool> {
+        let state = self._state(py);
+
+        match state.get() {
+            State::Pending => {
+                state.set(State::Cancelled);
+                self.schedule_callbacks(py);
+                Ok(true)
+            }
+            _ => Ok(false)
+        }
     }
 
     //
@@ -333,7 +329,7 @@ impl PyFuture {
 
                 // schedule callback
                 self._loop(py).spawn_fn(move|| {
-                    cb.call(Entities::Future(rfut));
+                    cb.call(Entities::Task(rfut));
                     future::ok(())
                 })
             },
@@ -346,6 +342,7 @@ impl PyFuture {
             let _ = sender.send(self.result(py));
         }
 
+        // schedule callbacks
         let callbacks = self._callbacks(py).borrow_mut().take();
         let mut rcallbacks = self._rcallbacks(py).borrow_mut().take();
 
@@ -363,7 +360,7 @@ impl PyFuture {
                     if let Some(ref mut rcallbacks) = rcallbacks {
                         loop {
                             match rcallbacks.pop() {
-                                Some(cb) => cb.call(Entities::Future(fut.clone_ref(py))),
+                                Some(cb) => cb.call(Entities::Task(fut.clone_ref(py))),
                                 None => break
                             }
                         }
@@ -376,7 +373,7 @@ impl PyFuture {
     }
 }
 
-impl future::Future for PyFuture {
+impl future::Future for PyTask {
     type Item = PyResult<PyObject>;
     type Error = unsync::oneshot::Canceled;
 
@@ -389,11 +386,10 @@ impl future::Future for PyFuture {
     }
 }
 
+py_class!(pub class PyTaskIter |py| {
+    data _fut: PyTask;
 
-py_class!(pub class PyFutureIter |py| {
-    data _fut: PyFuture;
-
-    def __iter__(&self) -> PyResult<PyFutureIter> {
+    def __iter__(&self) -> PyResult<PyTaskIter> {
         Ok(self.clone_ref(py))
     }
 
@@ -431,5 +427,103 @@ py_class!(pub class PyFutureIter |py| {
 
         self.__next__(py)
     }
-
 });
+
+
+//
+// wakeup task from future
+//
+fn wakeup_task(fut: PyTask, coro: PyObject, rfut: Entities) {
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+
+    match rfut.result(py) {
+        Ok(_) => task_step(py, fut, coro, None),
+        Err(mut err) => task_step(py, fut, coro, Some(err.instance(py))),
+    }
+}
+
+//
+// execute task step
+//
+fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>) {
+    // cancel if needed
+    let mut exc = exc;
+    if task._must_cancel(py).get() {
+        exc = Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+    }
+    *task._waiter(py).borrow_mut() = None;
+
+    // call either coro.throw(exc) or coro.send(None).
+    let res = match exc {
+        None => coro.call_method(py, "send", PyTuple::new(py, &[py.None()]), None),
+        Some(exc) => coro.call_method(py, "throw", PyTuple::new(py, &[exc]), None),
+    };
+
+    // handle coroutine result
+    match res {
+        Err(mut err) => {
+            if err.matches(py, &Classes.StopIteration) {
+                task.set_result(py, err.instance(py).getattr(py, "value").unwrap())
+                    .into_log(py, "can not get StopIteration.value");
+            }
+            else if err.matches(py, &Classes.CancelledError) {
+                task.cancel(py).into_log(py, "can not cancel task");
+            }
+            else if err.matches(py, &Classes.BaseException) {
+                task.set_exception(py, err.instance(py))
+                    .into_log(py, "can not set task exception");
+            }
+            else {
+                // log exception
+                err.into_log(py, "error executing task step");
+            }
+        },
+        Ok(result) => {
+            if result == py.None() {
+                // call soon
+                let task2 = task.clone_ref(py);
+                task._loop(py).spawn_fn(move|| {
+                    // get python GIL
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
+
+                    // wakeup task
+                    task_step(py, task2, coro, None);
+
+                    future::ok(())
+                });
+            }
+            else if let Ok(res) = PyFuture::downcast_from(py, result.clone_ref(py)) {
+                // store ref to future
+                *task._waiter(py).borrow_mut() = Some(Entities::Future(res.clone_ref(py)));
+
+                // cancel if needed
+                if task._must_cancel(py).get() {
+                    let _ = res.cancel(py);
+                    task._must_cancel(py).set(false)
+                }
+
+                // schedule wakeup on done
+                let _ = res.add_callback(py, SendBoxFnOnce::from(move |rfut| {
+                    wakeup_task(task, coro, rfut);
+                }));
+            }
+            else if let Ok(res) = PyTask::downcast_from(py, result) {
+                // store ref to future
+                *task._waiter(py).borrow_mut() = Some(Entities::Task(res.clone_ref(py)));
+
+                // cancel if needed
+                if task._must_cancel(py).get() {
+                    let _ = res.cancel(py);
+                    task._must_cancel(py).set(false)
+                }
+
+                // schedule wakeup on done
+                let _ = res.add_callback(py, SendBoxFnOnce::from(move |rfut| {
+                    wakeup_task(task, coro, rfut);
+                }));
+            }
+        },
+    }
+}
