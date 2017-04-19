@@ -16,7 +16,7 @@ pub mod http;
 pub mod addrinfo;
 pub mod utils;
 pub mod handle;
-pub mod future;
+pub mod pyfuture;
 pub mod pybytes;
 pub mod pyunsafe;
 mod remote;
@@ -26,7 +26,7 @@ mod server;
 
 pub use utils::{Classes, PyLogger, ToPyErr, with_py};
 pub use pybytes::TokioBytes;
-pub use future::TokioFuture;
+pub use pyfuture::PyFuture;
 pub use handle::{TokioHandle, TokioTimerHandle};
 pub use event_loop::{TokioEventLoop, new_event_loop};
 pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
@@ -46,7 +46,7 @@ py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
 pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<RemoteTokioEventLoop>(py)?;
-    m.add_class::<future::TokioFuture>(py)?;
+    m.add_class::<pyfuture::PyFuture>(py)?;
     m.add_class::<handle::TokioHandle>(py)?;
     m.add_class::<handle::TokioTimerHandle>(py)?;
     m.add_class::<server::TokioServer>(py)?;

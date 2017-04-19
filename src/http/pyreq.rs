@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use cpython::*;
 use bytes::BytesMut;
 
-use ::future;
+use ::pyfuture;
 use pyunsafe::{GIL, Handle, Sender};
 use http::codec::EncoderMessage;
 use http::{Request, Version, Headers, ConnectionType, ContentCompression};
@@ -106,7 +106,7 @@ py_class!(pub class PyRequest |py| {
     }
 
     def _prepare_hook(&self, resp: &PyObject) -> PyResult<PyObject> {
-        Ok(future::done_future(py, self.handle(py).clone(), py.None())?.into_object())
+        Ok(pyfuture::done_future(py, self.handle(py).clone(), py.None())?.into_object())
     }
 
 });
@@ -180,7 +180,7 @@ py_class!(pub class StreamReader |py| {
     }
 
     def readany(&self) -> PyResult<PyObject> {
-        Ok(future::done_future(py, self._handle(py).clone(), py.None())?.into_object())
+        Ok(pyfuture::done_future(py, self._handle(py).clone(), py.None())?.into_object())
     }
 
     def readchunk(&self) -> PyResult<PyObject> {
@@ -304,7 +304,7 @@ py_class!(pub class PayloadWriter |py| {
 
     def write(&self, chunk: PyBytes, drain: bool = true) -> PyResult<PyObject> {
         self.send_maybe(py, EncoderMessage::PyBytes(chunk));
-        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(pyfuture::done_future(py, self._loop(py).clone(), py.None())?.into_object())
     }
 
     // Build Request message from status line and headers object
@@ -347,11 +347,11 @@ py_class!(pub class PayloadWriter |py| {
         }
         self._sender(py).borrow_mut().take();
 
-        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(pyfuture::done_future(py, self._loop(py).clone(), py.None())?.into_object())
     }
 
     def drain(&self, last: bool = false) -> PyResult<PyObject> {
-        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(pyfuture::done_future(py, self._loop(py).clone(), py.None())?.into_object())
     }
 
 });

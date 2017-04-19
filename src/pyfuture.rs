@@ -10,10 +10,10 @@ use utils::{Classes, PyLogger, with_py};
 use pyunsafe::{GIL, Handle, OneshotReceiver, OneshotSender};
 
 
-pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
+pub fn create_future(py: Python, h: Handle) -> PyResult<PyFuture> {
     let (tx, rx) = unsync::oneshot::channel();
 
-    TokioFuture::create_instance(
+    PyFuture::create_instance(
         py, h,
         cell::RefCell::new(Some(OneshotSender::new(tx))),
         cell::RefCell::new(Some(OneshotReceiver::new(rx))),
@@ -25,8 +25,8 @@ pub fn create_future(py: Python, h: Handle) -> PyResult<TokioFuture> {
     )
 }
 
-pub fn done_future(py: Python, h: Handle, result: PyObject) -> PyResult<TokioFuture> {
-    TokioFuture::create_instance(
+pub fn done_future(py: Python, h: Handle, result: PyObject) -> PyResult<PyFuture> {
+    PyFuture::create_instance(
         py, h,
         cell::RefCell::new(None),
         cell::RefCell::new(None),
@@ -45,10 +45,10 @@ pub enum State {
     Finished,
 }
 
-type Callback = SendBoxFnOnce<(TokioFuture,)>;
+type Callback = SendBoxFnOnce<(PyFuture,)>;
 
 
-py_class!(pub class TokioFuture |py| {
+py_class!(pub class PyFuture |py| {
     data _loop: Handle;
     data _sender: cell::RefCell<Option<OneshotSender<PyResult<PyObject>>>>;
     data _receiver: cell::RefCell<Option<OneshotReceiver<PyResult<PyObject>>>>;
@@ -313,12 +313,12 @@ py_class!(pub class TokioFuture |py| {
     //
     // awaitable
     //
-    def __iter__(&self) -> PyResult<TokioFutureIter> {
-        TokioFutureIter::create_instance(py, self.clone_ref(py))
+    def __iter__(&self) -> PyResult<PyFutureIter> {
+        PyFutureIter::create_instance(py, self.clone_ref(py))
     }
 
-    def __await__(&self) -> PyResult<TokioFutureIter> {
-        TokioFutureIter::create_instance(py, self.clone_ref(py))
+    def __await__(&self) -> PyResult<PyFutureIter> {
+        PyFutureIter::create_instance(py, self.clone_ref(py))
     }
 
     //
@@ -340,10 +340,10 @@ py_class!(pub class TokioFuture |py| {
 });
 
 
-py_class!(pub class TokioFutureIter |py| {
-    data _fut: TokioFuture;
+py_class!(pub class PyFutureIter |py| {
+    data _fut: PyFuture;
 
-    def __iter__(&self) -> PyResult<TokioFutureIter> {
+    def __iter__(&self) -> PyResult<PyFutureIter> {
         Ok(self.clone_ref(py))
     }
 
@@ -384,7 +384,7 @@ py_class!(pub class TokioFutureIter |py| {
 
 });
 
-impl TokioFuture {
+impl PyFuture {
 
     //
     // Add future completion callback
@@ -414,7 +414,7 @@ impl TokioFuture {
     }
 }
 
-impl future::Future for TokioFuture {
+impl future::Future for PyFuture {
     type Item = PyResult<PyObject>;
     type Error = unsync::oneshot::Canceled;
 
@@ -428,9 +428,7 @@ impl future::Future for TokioFuture {
 }
 
 
-
-
-pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<TokioFuture> {
+pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<PyFuture> {
     let fut = create_future(py, handle.clone())?;
     let fut2 = fut.clone_ref(py);
 
@@ -451,7 +449,7 @@ pub fn create_task(py: Python, coro: PyObject, handle: Handle) -> PyResult<Tokio
 //
 // wakeup task from future
 //
-fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
+fn wakeup_task(fut: PyFuture, coro: PyObject, rfut: PyFuture) {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
@@ -464,7 +462,7 @@ fn wakeup_task(fut: TokioFuture, coro: PyObject, rfut: TokioFuture) {
 //
 // execute task step
 //
-fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>) {
+fn task_step(py: Python, fut: PyFuture, coro: PyObject, exc: Option<PyObject>) {
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
         None => coro.call_method(py, "send", PyTuple::new(py, &[py.None()]), None),
@@ -505,7 +503,7 @@ fn task_step(py: Python, fut: TokioFuture, coro: PyObject, exc: Option<PyObject>
                     future::ok(())
                 });
             }
-            else if let Ok(res) = TokioFuture::downcast_from(py, result) {
+            else if let Ok(res) = PyFuture::downcast_from(py, result) {
                 // schedule wakeup on done
                 let _ = res.add_callback(py, SendBoxFnOnce::from(move |rfut| {
                     wakeup_task(fut, coro, rfut);

@@ -7,7 +7,7 @@ use net2::unix::UnixTcpBuilderExt;
 use tokio_core::net::{TcpListener, Incoming};
 
 use addrinfo;
-use future;
+use pyfuture;
 use utils::ToPyErr;
 use pyunsafe;
 use transport::TransportFactory;
@@ -92,8 +92,8 @@ py_class!(pub class TokioServer |py| {
         Ok(py.None())
     }
 
-    def wait_closed(&self) -> PyResult<future::TokioFuture> {
-        let fut = future::create_future(py, self.handle(py).clone())?;
+    def wait_closed(&self) -> PyResult<pyfuture::PyFuture> {
+        let fut = pyfuture::create_future(py, self.handle(py).clone())?;
         fut.set_result(py, true.to_py_object(py).into_object())?;
         Ok(fut)
     }

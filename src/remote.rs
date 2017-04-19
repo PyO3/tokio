@@ -11,7 +11,7 @@ use handle;
 use server;
 use http;
 use transport;
-use future::{TokioFuture, create_future, create_task};
+use pyfuture::{PyFuture, create_future, create_task};
 use pyunsafe::{GIL, Handle};
 use event_loop::{TokioEventLoop, new_event_loop};
 
@@ -50,7 +50,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     data evloop: TokioEventLoop;
     data handle: reactor::Remote;
 
-    def create_future(&self) -> PyResult<TokioFuture> {
+    def create_future(&self) -> PyResult<PyFuture> {
         let res = self.execute_in_loop(py, move|py, h| {
             create_future(py, h)
         });
@@ -61,7 +61,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
         }
     }
 
-    def create_task(&self, coro: PyObject) -> PyResult<TokioFuture> {
+    def create_task(&self, coro: PyObject) -> PyResult<PyFuture> {
         let res = self.execute_in_loop(py, move|py, h| {
             create_task(py, coro, h)
         });

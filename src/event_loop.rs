@@ -14,7 +14,7 @@ use tokio_signal;
 use addrinfo;
 use handle;
 use http;
-use future::{TokioFuture, create_future, create_task};
+use pyfuture::{PyFuture, create_future, create_task};
 use server;
 use transport;
 use utils;
@@ -86,7 +86,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Create a Future object attached to the loop.
     //
-    def create_future(&self) -> PyResult<TokioFuture> {
+    def create_future(&self) -> PyResult<PyFuture> {
         if self.debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
@@ -101,7 +101,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return a task object.
     //
-    def create_task(&self, coro: PyObject) -> PyResult<TokioFuture> {
+    def create_task(&self, coro: PyObject) -> PyResult<PyFuture> {
         if self.debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
@@ -399,7 +399,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Return the Future's result, or raise its exception.
     //
     def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
-        match TokioFuture::downcast_from(py, future) {
+        match PyFuture::downcast_from(py, future) {
             Ok(fut) => {
                 let res = py.allow_threads(|| {
                     CORE.with(|cell| {

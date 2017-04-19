@@ -6,7 +6,7 @@ use std::os::raw::c_long;
 use std::time::Duration;
 use std::error::Error;
 
-use future::TokioFuture;
+use pyfuture::PyFuture;
 use addrinfo::LookupError;
 
 
@@ -96,7 +96,7 @@ lazy_static! {
 
         WorkingClasses {
             // asyncio types
-            Future: py.get_type::<TokioFuture>(),
+            Future: py.get_type::<PyFuture>(),
 
             CancelledError: cancelled,
             InvalidStateError: invalid_state,

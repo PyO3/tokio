@@ -9,7 +9,7 @@ use cpython::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
-use future::{create_task, done_future, TokioFuture};
+use pyfuture::{create_task, done_future, PyFuture};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
@@ -58,7 +58,7 @@ py_class!(pub class PyHttpTransport |py| {
     //
     // send buffered data to socket
     //
-    def drain(&self) -> PyResult<TokioFuture> {
+    def drain(&self) -> PyResult<PyFuture> {
         Ok(done_future(py, self._loop(py).clone(), py.None())?)
     }
 
@@ -214,7 +214,7 @@ struct RequestHandler {
     h: Handle,
     tr: PyHttpTransport,
     handler: PyObject,
-    task: TokioFuture,
+    task: PyFuture,
     inflight: PyRequest,
 }
 
@@ -236,7 +236,7 @@ impl RequestHandler {
 
     pub fn start_task(h: Handle, msg: http::Request,
                       sender: Sender<codec::EncoderMessage>,
-                      handler: &PyObject) -> PyResult<(TokioFuture, PyRequest)> {
+                      handler: &PyObject) -> PyResult<(PyFuture, PyRequest)> {
         // start python task
         with_py(|py| {
             let req = pyreq::PyRequest::new(py, msg, h.clone(), sender)?;
