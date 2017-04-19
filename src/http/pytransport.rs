@@ -6,22 +6,22 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 use cpython::*;
-use futures::sync::{oneshot};
+use futures::unsync::{oneshot, mpsc};
 use futures::{Async, Future, Poll};
 use boxfnonce::SendBoxFnOnce;
 
 use future::{create_task, done_future, TokioFuture};
-use http::{self, pyreq};
-use http::pyreq::PyRequest;
+use http::{self, pyreq, codec};
+use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
-use pyunsafe::{GIL, Handle, Sender};
+use pyunsafe::{GIL, Handle, Sender, OneshotSender};
+
 
 pub enum PyHttpTransportMessage {
-    Bytes(PyBytes),
     Close(Option<PyErr>),
 }
 
-const CONCURENCY_LEVEL: usize = 2;
+const CONCURENCY_LEVEL: usize = 1;
 
 
 py_class!(pub class PyHttpTransport |py| {
@@ -34,7 +34,8 @@ py_class!(pub class PyHttpTransport |py| {
     data req_count: Cell<usize>;
 
     data inflight: Cell<usize>;
-    data reqs: RefCell<VecDeque<http::Request>>;
+    data reqs: RefCell<VecDeque<(http::Request, Sender<codec::EncoderMessage>)>>;
+    data payloads: RefCell<VecDeque<StreamReader>>;
 
     def get_extra_info(&self, _name: PyString,
                        default: Option<PyObject> = None ) -> PyResult<PyObject> {
@@ -51,10 +52,8 @@ py_class!(pub class PyHttpTransport |py| {
     // write bytes to transport
     //
     def write(&self, data: PyBytes) -> PyResult<PyObject> {
-        //println!("got bytes {:?}", data.clone_ref(py).into_object());
-        //let bytes = Bytes::from(data.data(py));
-        let _ = self.transport(py).send(PyHttpTransportMessage::Bytes(data));
-        Ok(py.None())
+        Err(PyErr::new::<exc::RuntimeError, _>(
+            py, "write() method is not available, use PayloadWriter"))
     }
 
     //
@@ -81,7 +80,8 @@ impl PyHttpTransport {
         self._data_received(py).clone_ref(py)
     }
 
-    pub fn new(py: Python, h: Handle, sender: Sender<PyHttpTransportMessage>,
+    pub fn new(py: Python, h: Handle,
+               sender: Sender<PyHttpTransportMessage>,
                factory: &PyObject) -> PyResult<PyHttpTransport> {
         // create protocol
         let proto = factory.call(py, NoArgs, None)
@@ -92,11 +92,13 @@ impl PyHttpTransport {
         let connection_lost = proto.getattr(py, "connection_lost")?;
         let data_received = proto.getattr(py, "data_received")?;
         let request_handler = proto.getattr(py, "handle_request")?;
+        //let request_handler = proto.getattr(py, "_request_handler")?;
 
         let transport = PyHttpTransport::create_instance(
             py, h, connection_lost, data_received, request_handler, sender,
             RefCell::new(None), Cell::new(0), Cell::new(0),
-            RefCell::new(VecDeque::with_capacity(4)))?;
+            RefCell::new(VecDeque::with_capacity(12)),
+            RefCell::new(VecDeque::with_capacity(CONCURENCY_LEVEL)))?;
 
         // connection made
         connection_made.call(
@@ -110,6 +112,8 @@ impl PyHttpTransport {
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
         with_py(|py| {
+            self.reqs(py).borrow_mut().clear();
+
             self._connection_lost(py).call(py, PyTuple::new(py, &[py.None()]), None)
                 .into_log(py, "connection_lost error");
         });
@@ -118,6 +122,8 @@ impl PyHttpTransport {
     pub fn connection_error(&self, err: io::Error) {
         trace!("Protocol.connection_lost({:?})", err);
         with_py(|py| {
+            self.reqs(py).borrow_mut().clear();
+
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
@@ -142,18 +148,26 @@ impl PyHttpTransport {
         });
     }
 
-    pub fn data_received(&self, msg: http::RequestMessage) -> PyResult<()> {
+    pub fn data_received(&self, msg: http::RequestMessage)
+                         -> PyResult<Option<mpsc::UnboundedReceiver<codec::EncoderMessage>>> {
         match msg {
             http::RequestMessage::Message(msg) => {
-                let h = self._loop(GIL::python()).clone();
-                let req = with_py(|py| {
-                    if let Ok(req) = pyreq::PyRequest::new(py, msg, h) {
-                        let _ = self._data_received(py).call(
-                            py, PyTuple::new(
-                                py, &[req.into_object()]), None);
+                let (sender, recv) = mpsc::unbounded();
+
+                with_py(|py| match pyreq::PyRequest::new(
+                    py, msg, self._loop(py).clone(), Sender::new(sender)) {
+                    Err(err) => {
+                        error!("{:?}", err);
+                        err.clone_ref(py).print(py);
+                    },
+                    Ok(req) => {
+                        req.content().feed_eof(py);
+                        self._data_received(py).call(
+                            py, PyTuple::new(py, &[req.into_object()]), None)
+                            .into_log(py, "data_received error");
                     }
                 });
-                return Ok(());
+                return Ok(Some(recv));
 
                 let py = GIL::python();
                 let count = self.req_count(py);
@@ -161,37 +175,38 @@ impl PyHttpTransport {
 
                 let inflight = self.inflight(py);
                 if inflight.get() < CONCURENCY_LEVEL {
-                    println!("start task {}", inflight.get());
                     inflight.set(inflight.get() + 1);
 
                     // start handler task
                     let tx = self.transport(py).clone();
                     let handler = RequestHandler::new(
-                        self._loop(py).clone(),
-                        msg, self.clone_ref(py), self._request_handler(py).clone_ref(py))?;
+                        self._loop(py).clone(), msg, Sender::new(sender),
+                        self.clone_ref(py), self._request_handler(py).clone_ref(py))?;
+
                     self._loop(GIL::python()).spawn(handler.map_err(move |err| {
                         // close connection with error
                         let _ = tx.send(PyHttpTransportMessage::Close(Some(err)));
                     }));
                 } else {
-                    println!("wait");
-                    self.reqs(py).borrow_mut().push_back(msg);
+                    //println!("wait");
+                    self.reqs(py).borrow_mut().push_back((msg, Sender::new(sender)));
                 }
+                return Ok(Some(recv));
             },
             http::RequestMessage::Body(chunk) => {
 
             },
             http::RequestMessage::Completed => {
-                with_py(|py| {
-                    let mut req = self.req(py).borrow_mut();
-                    if let Some(ref req) = *req {
-                        req.content().feed_eof(py);
-                    }
-                    *req = None;
-                });
+                //with_py(|py| {
+                //    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
+                //        payload.feed_eof(py);
+                //    } else {
+                        //println!("not found");
+                //    }
+                //});
             }
         };
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -200,28 +215,59 @@ struct RequestHandler {
     h: Handle,
     tr: PyHttpTransport,
     handler: PyObject,
-    task: Option<TokioFuture>,
+    fut: Option<TokioFuture>,
     event: Option<oneshot::Receiver<PyResult<PyObject>>>,
-    inflight: PyRequest,
+    inflight: Option<PyRequest>,
 }
 
 impl RequestHandler {
 
-    fn new(h: Handle, msg: http::Request,
+    fn new(h: Handle, msg: http::Request, tx: Sender<codec::EncoderMessage>,
            tr: PyHttpTransport, handler: PyObject) -> PyResult<RequestHandler> {
 
-        let req = with_py(|py| pyreq::PyRequest::new(py, msg, h.clone()))?;
-
-        Ok(RequestHandler {
+        let mut handler = RequestHandler {
             h: h,
             tr: tr,
             handler: handler,
-            task: None,
+            fut: None,
             event: None,
-            inflight: req,
+            inflight: None,
+        };
+        handler.start_task(msg, tx)?;
+
+        Ok(handler)
+    }
+
+    pub fn start_task(&mut self,
+                      msg: http::Request,
+                      sender: Sender<codec::EncoderMessage>) -> PyResult<()> {
+        // communication
+        let (tx, rx) = oneshot::channel::<PyResult<PyObject>>();
+        let tx = OneshotSender::new(tx);
+
+        // start python task
+        with_py(|py| {
+            let req = pyreq::PyRequest::new(py, msg, self.h.clone(), sender)?;
+            req.content().feed_eof(py);
+
+            let coro = self.handler.call(
+                py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
+
+            let task = create_task(py, coro, self.h.clone())?;
+            let _ = task.add_callback(py, SendBoxFnOnce::from(move |fut: TokioFuture| {
+                let res = fut.result(Python::acquire_gil().python());
+                let _ = tx.send(res);
+            }));
+
+            self.fut = Some(task);
+            self.event = Some(rx);
+            self.inflight = Some(req);
+
+            Ok(())
         })
     }
 }
+
 
 impl Future for RequestHandler {
     type Item = ();
@@ -229,37 +275,7 @@ impl Future for RequestHandler {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let result = match self.event {
-            None => {
-                // first run
-                let (tx, mut rx) = oneshot::channel::<PyResult<PyObject>>();
-
-                // start python task
-                let task = with_py(|py| {
-                    let coro = match self.handler.call(
-                        py, PyTuple::new(
-                            py, &[self.inflight.clone_ref(py).into_object()]), None) {
-                        Ok(coro) => coro,
-                        Err(err) => return Err(err)
-                    };
-
-                    let task = try!(create_task(py, coro, self.h.clone()));
-                    let _ = task.add_callback(py, SendBoxFnOnce::from(move |fut: TokioFuture| {
-                        let res = fut.result(Python::acquire_gil().python());
-                        let _ = tx.send(res);
-                    }));
-                    Ok(task)
-                });
-
-                match task {
-                    Ok(task) => {
-                        let res = rx.poll();
-                        self.event = Some(rx);
-                        self.task = Some(task);
-                        res
-                    },
-                    Err(err) => return Err(err),
-                }
-            },
+            None => return Ok(Async::Ready(())),
             Some(ref mut ev) => {
                 ev.poll()
             }
@@ -269,27 +285,21 @@ impl Future for RequestHandler {
         match result {
             Ok(Async::Ready(res)) => {
                 // select next message
-                match self.tr.reqs(GIL::python()).borrow_mut().pop_front() {
-                    Some(msg) => {
-                        let res = with_py(|py| pyreq::PyRequest::new(py, msg, self.h.clone()));
-
-                        match res {
-                            Err(err) => return Err(err),
-                            Ok(req) => {
-                                // start new task
-                                self.event = None;
-                                self.inflight = req;
-                            },
-                        };
-                    },
+                //if self.tr.reqs(GIL::python()).borrow_mut().len() > 0 {
+                //    println!("num: {}", self.tr.reqs(GIL::python()).borrow_mut().len());
+                //}
+                let (msg, sender) = match self.tr.reqs(GIL::python()).borrow_mut().pop_front() {
+                    Some((msg, sender)) => (msg, sender),
                     None => {
                         // nothing to process, decrease number of inflight tasks and exit
                         let inflight = self.tr.inflight(GIL::python());
                         inflight.set(inflight.get() - 1);
 
+                        //println!("no requests in queue");
                         return Ok(Async::Ready(()))
                     }
                 };
+                let _ = self.start_task(msg, sender)?;
                 self.poll()
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),

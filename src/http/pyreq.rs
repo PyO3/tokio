@@ -1,10 +1,12 @@
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use cpython::*;
+use bytes::BytesMut;
 
 use ::future;
-use pyunsafe::{GIL, Handle};
-use http::{Request, Version, Headers, ConnectionType};
+use pyunsafe::{GIL, Handle, Sender};
+use http::codec::EncoderMessage;
+use http::{Request, Version, Headers, ConnectionType, ContentCompression};
 
 
 py_class!(pub class PyRequest |py| {
@@ -17,7 +19,7 @@ py_class!(pub class PyRequest |py| {
     data headers: RawHeaders;
     data _content: StreamReader;
     data _match_info: RefCell<PyObject>;
-    data _writer: RefCell<PyObject>;
+    data _writer: PayloadWriter;
     data _time_service: RefCell<PyObject>;
 
     property _method {
@@ -83,12 +85,13 @@ py_class!(pub class PyRequest |py| {
     }
 
     property _writer {
-        get(&slf) -> PyResult<PyObject> {
-            Ok(slf._writer(py).borrow().clone_ref(py))
+        get(&slf) -> PyResult<PayloadWriter> {
+            Ok(slf._writer(py).clone_ref(py))
         }
-        set(&slf, value: &PyObject) -> PyResult<()> {
-            *slf._writer(py).borrow_mut() = value.clone_ref(py);
-            Ok(())
+    }
+    property writer {
+        get(&slf) -> PyResult<PayloadWriter> {
+            Ok(slf._writer(py).clone_ref(py))
         }
     }
 
@@ -110,7 +113,8 @@ py_class!(pub class PyRequest |py| {
 
 
 impl PyRequest {
-    pub fn new(py: Python, req: Request, h: Handle) -> PyResult<PyRequest> {
+    pub fn new(py: Python, req: Request,
+               h: Handle, sender: Sender<EncoderMessage>) -> PyResult<PyRequest> {
         let conn = req.connection;
         let meth = PyString::new(py, req.method());
         let path = PyString::new(py, req.path());
@@ -125,11 +129,12 @@ impl PyRequest {
         };
         let content = StreamReader::new(py, h.clone())?;
         let headers = RawHeaders::create_instance(py, req.headers)?;
+        let writer = PayloadWriter::new(py, h.clone(), sender)?;
 
         PyRequest::create_instance(
             py, h, conn, meth, url, path,
             version, headers, content,
-            RefCell::new(py.None()), RefCell::new(py.None()), RefCell::new(py.None()))
+            RefCell::new(py.None()), writer, RefCell::new(py.None()))
     }
 
     pub fn content(&self) -> &StreamReader {
@@ -176,7 +181,6 @@ py_class!(pub class StreamReader |py| {
 
     def readany(&self) -> PyResult<PyObject> {
         Ok(future::done_future(py, self._handle(py).clone(), py.None())?.into_object())
-        //Ok(py.None())
     }
 
     def readchunk(&self) -> PyResult<PyObject> {
@@ -246,4 +250,127 @@ impl Url {
         Url::create_instance(py, path)
     }
 
+}
+
+
+const SEP: &'static [u8] = b": ";
+const END: &'static [u8] = b"\r\n";
+
+
+py_class!(pub class PayloadWriter |py| {
+    data _loop: Handle;
+    data _sender: RefCell<Option<Sender<EncoderMessage>>>;
+    data _length: Cell<u64>;
+    data _chunked: Cell<bool>;
+    data _compress: Cell<ContentCompression>;
+
+    property length {
+        get(&slf) -> PyResult<u64> {
+            Ok(slf._length(py).get())
+        }
+        set(&slf, value: u64) -> PyResult<()> {
+            slf._length(py).set(value);
+            Ok(())
+        }
+    }
+    property output_size {
+        get(&slf) -> PyResult<u64> {
+            Ok(slf._length(py).get())
+        }
+    }
+
+    def enable_chunking(&self) -> PyResult<PyObject> {
+        self._chunked(py).set(true);
+        Ok(py.None())
+    }
+
+    def enable_compression(&self, encoding: Option<PyString>) -> PyResult<PyObject> {
+        let enc = if let Some(encoding) = encoding {
+            let enc = encoding.to_string(py)?;
+            if enc == "deflate" {
+                ContentCompression::Deflate
+            } else if enc == "gzip" {
+                ContentCompression::Gzip
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(py, py.None()));
+            }
+        } else {
+            ContentCompression::Deflate
+        };
+        self._compress(py).set(enc);
+
+        Ok(py.None())
+    }
+
+    def write(&self, chunk: PyBytes, drain: bool = true) -> PyResult<PyObject> {
+        self.send_maybe(py, EncoderMessage::PyBytes(chunk));
+        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+    }
+
+    // Build Request message from status line and headers object
+    // status_line - string with \r\n
+    // headers = dict like object
+    def write_headers(&self, status_line: &PyString, headers: &PyObject) -> PyResult<PyObject> {
+        let mut buf = BytesMut::with_capacity(2048);
+
+        buf.extend(status_line.to_string(py)?.as_bytes());
+
+        let items = headers.call_method(py, "items", NoArgs, None)?;
+        let items = items.call_method(py, "__iter__", NoArgs, None)?;
+        let mut iter = PyIterator::from_object(py, items)?;
+        loop {
+            if let Some(item) = iter.next() {
+                let item = PyTuple::downcast_from(py, item?)?;
+                if item.len(py) < 2 {
+                    return Err(PyErr::new::<exc::ValueError, _>(py, py.None()));
+                }
+                let key = PyString::downcast_from(py, item.get_item(py, 0))?;
+                buf.extend(key.to_string(py)?.as_bytes());
+                buf.extend(SEP);
+
+                let value = PyString::downcast_from(py, item.get_item(py, 1))?;
+                buf.extend(value.to_string(py)?.as_bytes());
+                buf.extend(END);
+            } else {
+                break
+            }
+        }
+        buf.extend(END);
+        self.send_maybe(py, EncoderMessage::Bytes(buf.freeze()));
+
+        Ok(py.None())
+    }
+
+    def write_eof(&self, chunk: Option<PyBytes>) -> PyResult<PyObject> {
+        if let Some(chunk) = chunk {
+            self.send_maybe(py, EncoderMessage::PyBytes(chunk));
+        }
+        self._sender(py).borrow_mut().take();
+
+        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+    }
+
+    def drain(&self, last: bool = false) -> PyResult<PyObject> {
+        Ok(future::done_future(py, self._loop(py).clone(), py.None())?.into_object())
+    }
+
+});
+
+
+impl PayloadWriter {
+
+    pub fn new(py: Python, h: Handle, sender: Sender<EncoderMessage>) -> PyResult<PayloadWriter> {
+        PayloadWriter::create_instance(
+            py, h, RefCell::new(Some(sender)),
+            Cell::new(0),
+            Cell::new(false),
+            Cell::new(ContentCompression::Default))
+    }
+
+    fn send_maybe(&self, py: Python, msg: EncoderMessage) {
+        if let Some(ref mut sender) = *self._sender(py).borrow_mut() {
+            let _ = sender.send(msg);
+        }
+    }
+    
 }

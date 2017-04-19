@@ -53,29 +53,27 @@ impl Deref for Handle {
 
 
 #[doc(hidden)]
-pub struct Sender<T> {
-    pub s: mpsc::UnboundedSender<T>,
-}
+pub struct Sender<T> (mpsc::UnboundedSender<T>);
 
 unsafe impl<T> Send for Sender<T> {}
-
-impl<T> Sender<T> {
-
-    pub fn new(sender: mpsc::UnboundedSender<T>) -> Self {
-        Sender{s: sender}
-    }
-
-    pub fn send(&self, msg: T) -> Result<(), mpsc::SendError<T>> {
-        self.s.send(msg)
-    }
-
-}
 
 impl<T> Clone for Sender<T> {
 
     fn clone(&self) -> Self {
-        Sender{s: self.s.clone()}
+        Sender(self.0.clone())
     }
+}
+
+impl<T> Sender<T> {
+
+    pub fn new(sender: mpsc::UnboundedSender<T>) -> Self {
+        Sender(sender)
+    }
+
+    pub fn send(&self, msg: T) -> Result<(), mpsc::SendError<T>> {
+        self.0.send(msg)
+    }
+
 }
 
 

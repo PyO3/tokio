@@ -1,3 +1,4 @@
+mod codec;
 mod decoder;
 mod headers;
 mod message;
