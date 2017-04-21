@@ -263,6 +263,10 @@ py_class!(pub class RemoteTokioEventLoop |py| {
 
 impl RemoteTokioEventLoop {
 
+    pub fn remote(&self, py: Python) -> reactor::Remote {
+        self.handle(py).clone()
+    }
+
     pub fn execute_in_loop<T, F>(&self, py: Python, f: F) -> Option<T>
         where T : Send + 'static, F : FnOnce(Python, Handle) -> T + Send + 'static
     {
