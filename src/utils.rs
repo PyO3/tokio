@@ -55,7 +55,7 @@ lazy_static! {
             invalid_state = PyType::extract(
                 py, &asyncio.get(py, "InvalidStateError").unwrap()).unwrap();
             timeout = PyType::extract(
-                py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap()
+                py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap();
         } else {
             let tokio = if let Ok(tokio) = PyModule::new(py, "tokio") {
                 tokio

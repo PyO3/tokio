@@ -4,29 +4,64 @@
 use std::io;
 use std::net::SocketAddr;
 use cpython::*;
+use futures::unsync::mpsc;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
-use bytes::BytesMut;
-use tokio_io::{AsyncRead};
+use bytes::{Bytes, BytesMut};
+use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use utils::{PyLogger, ToPyErr, with_py};
-use pybytes::{TokioBytes, create_bytes};
+use utils::{Classes, PyLogger, ToPyErr, with_py};
+use pybytes;
+use pyfuture::PyFuture;
 use pyunsafe::{GIL, Handle, Sender};
 
 // Transport factory
-pub type TransportFactory = fn(Handle, &PyObject, TcpStream, SocketAddr) -> io::Result<()>;
+pub type TransportFactory = fn(Handle, &PyObject, TcpStream, Option<SocketAddr>)
+                               -> io::Result<(PyObject, PyObject)>;
 
-
-pub enum TokioTcpTransportMessage {
+pub enum TcpTransportMessage {
     Bytes(PyBytes),
     Close,
 }
 
 
-py_class!(pub class TokioTcpTransport |py| {
-    data handle: Handle;
-    data transport: Sender<TokioTcpTransportMessage>;
+pub fn tcp_transport_factory<T>(
+    handle: Handle, factory: &PyObject,
+    socket: T, _peer: Option<SocketAddr>) -> Result<(PyObject, PyObject), io::Error>
+
+    where T: AsyncRead + AsyncWrite + 'static
+{
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+
+    // create protocol
+    let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
+
+    let (tx, rx) = mpsc::unbounded();
+    let tr = PyTcpTransport::new(py, handle.clone(), Sender::new(tx), &proto)?;
+    let conn_lost = tr.clone_ref(py);
+    let conn_err = tr.clone_ref(py);
+
+    // create transport and then call connection_made on protocol
+    let transport = TcpTransport::new(socket, rx, tr.clone_ref(py));
+
+    handle.spawn(
+        transport.map(move |_| {
+            conn_lost.connection_lost()
+        }).map_err(move |err| {
+            conn_err.connection_error(err)
+        })
+    );
+    Ok((tr.into_object(), proto))
+}
+
+
+py_class!(pub class PyTcpTransport |py| {
+    data _handle: Handle;
+    data _connection_lost: PyObject;
+    data _data_received: PyObject;
+    data _transport: Sender<TcpTransportMessage>;
 
     def get_extra_info(&self, _name: PyString,
                        default: Option<PyObject> = None ) -> PyResult<PyObject> {
@@ -44,142 +79,157 @@ py_class!(pub class TokioTcpTransport |py| {
     //
     def write(&self, data: PyBytes) -> PyResult<PyObject> {
         //let bytes = Bytes::from(data.data(py));
-        let _ = self.transport(py).send(TokioTcpTransportMessage::Bytes(data));
+        let _ = self._transport(py).send(TcpTransportMessage::Bytes(data));
         Ok(py.None())
     }
 
-    //def drain(&self) -> PyResult<PyFuture> {
-    //    let fut = PyFuture::new(py, self.handle(py).clone())?;
-    //    fut.set_result(py, py.None())?;
-    //    Ok(fut)
-    //}
+    //
+    // write all data to socket
+    //
+    def drain(&self) -> PyResult<PyFuture> {
+        let fut = PyFuture::new(py, self._handle(py).clone())?;
+        fut.set_result(py, py.None())?;
+        Ok(fut)
+    }
 
     //
     // close transport
     //
     def close(&self) -> PyResult<PyObject> {
-        let _ = self.transport(py).send(TokioTcpTransportMessage::Close);
+        let _ = self._transport(py).send(TcpTransportMessage::Close);
         Ok(py.None())
     }
 
 });
 
+impl PyTcpTransport {
 
-pub fn tcp_transport_factory(handle: Handle, factory: &PyObject,
-                             socket: TcpStream, _peer: SocketAddr) -> Result<(), io::Error> {
-    let gil = Python::acquire_gil();
-    let py = gil.python();
+    pub fn new(py: Python, h: Handle,
+               sender: Sender<TcpTransportMessage>,
+               protocol: &PyObject) -> PyResult<PyTcpTransport> {
 
-    // create protocol
-    let proto = factory.call(py, NoArgs, None)
-        .log_error(py, "Protocol factory failure")?;
-
-    // create transport and then call connection_made on protocol
-    let transport = TcpTransport::new(py, handle.clone(), socket, proto)?;
-
-    debug!("connectino_made");
-    let _ = transport.connection_made.call(
-        py, PyTuple::new(py, &[transport.transport.clone_ref(py).into_object()]), None)
-        .log_error(py, "Protocol.connection_made error")?;
-
-    handle.spawn(transport.map_err(|e| {
-        println!("Error: {:?}", e);
-    }));
-
-    Ok(())
-}
-
-
-struct TcpTransport {
-    framed: Framed<TcpStream, TcpTransportCodec>,
-    intake: unsync::mpsc::UnboundedReceiver<TokioTcpTransportMessage>,
-
-    //protocol: PyObject,
-    transport: TokioTcpTransport,
-    connection_made: PyObject,
-    connection_lost: PyObject,
-    data_received: PyObject,
-    //eof_received: PyObject,
-
-    buf: Option<PyBytes>,
-    flushed: bool
-}
-
-impl TcpTransport {
-
-    fn new(py: Python, handle: Handle, socket: TcpStream, protocol: PyObject) -> PyResult<TcpTransport> {
-        let (tx, rx) = unsync::mpsc::unbounded();
-
-        let transport = TokioTcpTransport::create_instance(py, handle, Sender::new(tx))?;
+        // get protocol callbacks
         let connection_made = protocol.getattr(py, "connection_made")?;
         let connection_lost = protocol.getattr(py, "connection_lost")?;
         let data_received = protocol.getattr(py, "data_received")?;
-        //let eof_received = protocol.getattr(py, "eof_received")?;
 
-        Ok(TcpTransport {
-            framed: socket.framed(TcpTransportCodec),
-            intake: rx,
+        let transport = PyTcpTransport::create_instance(
+            py, h, connection_lost, data_received, sender)?;
 
-            //protocol: protocol,
-            transport: transport,
-            connection_made: connection_made,
-            connection_lost: connection_lost,
-            data_received: data_received,
-            //eof_received: eof_received,
+        // connection made
+        connection_made.call(
+            py, PyTuple::new(
+                py, &[transport.clone_ref(py).into_object()]), None)
+            .log_error(py, "Protocol.connection_made error")?;
 
-            buf: None,
-            flushed: false,
-        })
+        Ok(transport)
     }
 
-    fn read_from_socket(&mut self) -> Poll<(), io::Error> {
-        // poll for incoming data
-        match self.framed.poll() {
-            Ok(Async::Ready(Some(bytes))) => {
-                with_py(|py| {
-                    trace!("Data recv: {}", bytes.__len__(py).unwrap());
-                    self.data_received.call(py, PyTuple::new(py, &[bytes.into_object()]),
-                                            None)
-                        .into_log(py, "data_received error");
-                });
+    pub fn connection_lost(&self) {
+        trace!("Protocol.connection_lost(None)");
+        with_py(|py| {
+            self._connection_lost(py).call(py, PyTuple::new(py, &[py.None()]), None)
+                .into_log(py, "connection_lost error");
+        });
+    }
 
-                self.read_from_socket()
-            },
-            Ok(Async::Ready(None)) => {
-                debug!("connectino_lost");
-                with_py(|py| {
-                    self.connection_lost.call(py, PyTuple::new(py, &[py.None()]),
-                                              None)
-                        .into_log(py, "connection_lost error");
-                });
-                Ok(Async::Ready(()))
-            },
-            Ok(Async::NotReady) => {
-                Ok(Async::NotReady)
-            },
-            Err(err) => {
-                debug!("connection_lost: {:?}", err);
-                with_py(|py| {
-                    let mut e = err.to_pyerr(py);
-                    self.connection_lost.call(py, PyTuple::new(py, &[e.instance(py)]), None)
-                        .into_log(py, "connection_lost error");
-                });
+    pub fn connection_error(&self, err: io::Error) {
+        trace!("Protocol.connection_lost({:?})", err);
+        with_py(|py| {
+            match err.kind() {
+                io::ErrorKind::TimedOut => {
+                    trace!("socket.timeout");
+                    with_py(|py| {
+                        let e = Classes.SocketTimeout.call(
+                            py, NoArgs, None).unwrap();
 
-                Err(err)
+                        self._connection_lost(py).call(py, PyTuple::new(py, &[e]), None)
+                            .into_log(py, "connection_lost error");
+                    });
+                },
+                _ => {
+                    trace!("Protocol.connection_lost(err): {:?}", err);
+                    with_py(|py| {
+                        let mut e = err.to_pyerr(py);
+                        self._connection_lost(py).call(py,
+                                                       PyTuple::new(py, &[e.instance(py)]), None)
+                            .into_log(py, "connection_lost error");
+                    });
+                }
             }
+        });
+    }
+
+    pub fn data_received(&self, bytes: Bytes) {
+        with_py(|py| {
+            let _ = pybytes::PyBytes::new(py, bytes)
+                .map_err(|e| e.into_log(py, "can not create PyBytes"))
+                .map(|bytes|
+                     self._data_received(py).call(py, (bytes,).to_py_object(py), None)
+                     .into_log(py, "data_received error"));
+        });
+    }
+
+}
+
+
+struct TcpTransport<T> {
+    framed: Framed<T, TcpTransportCodec>,
+    intake: unsync::mpsc::UnboundedReceiver<TcpTransportMessage>,
+    transport: PyTcpTransport,
+
+    buf: Option<PyBytes>,
+    incoming_eof: bool,
+    flushed: bool,
+    closing: bool,
+}
+
+impl<T> TcpTransport<T>
+    where T: AsyncRead + AsyncWrite
+{
+
+    fn new(socket: T,
+           intake: mpsc::UnboundedReceiver<TcpTransportMessage>,
+           transport: PyTcpTransport) -> TcpTransport<T> {
+
+        TcpTransport {
+            framed: socket.framed(TcpTransportCodec),
+            intake: intake,
+            transport: transport,
+
+            buf: None,
+            incoming_eof: false,
+            flushed: false,
+            closing: false,
         }
     }
 }
 
 
-impl Future for TcpTransport
+impl<T> Future for TcpTransport<T>
+    where T: AsyncRead + AsyncWrite
 {
     type Item = ();
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Async::Ready(_) = self.read_from_socket()? {
-            return Ok(Async::Ready(()))
+        // poll for incoming data
+        if !self.incoming_eof {
+            loop {
+                match self.framed.poll() {
+                    Ok(Async::Ready(Some(bytes))) => {
+                        self.transport.data_received(bytes);
+                        continue
+                    },
+                    Ok(Async::Ready(None)) => {
+                        debug!("connectino_lost");
+                        self.incoming_eof = true;
+                    },
+                    Ok(Async::NotReady) => (),
+                    Err(err) => return Err(err.into())
+                }
+                break
+            }
         }
 
         loop {
@@ -189,9 +239,9 @@ impl Future for TcpTransport
                 match self.intake.poll() {
                     Ok(Async::Ready(Some(msg))) => {
                         match msg {
-                            TokioTcpTransportMessage::Bytes(bytes) =>
+                            TcpTransportMessage::Bytes(bytes) =>
                                 Some(bytes),
-                            TokioTcpTransportMessage::Close =>
+                            TcpTransportMessage::Close =>
                                 return Ok(Async::Ready(())),
                         }
                     }
@@ -229,28 +279,16 @@ impl Future for TcpTransport
 struct TcpTransportCodec;
 
 impl Decoder for TcpTransportCodec {
-    type Item = TokioBytes;
+    type Item = Bytes;
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if !src.is_empty() {
-            let bytes = src.take().freeze();
-
-            let gil = Python::acquire_gil();
-            let py = gil.python();
-
-            match create_bytes(py, bytes) {
-                Ok(bytes) =>
-                    Ok(Some(bytes)),
-                Err(_) =>
-                    Err(io::Error::new(
-                        io::ErrorKind::Other, "Can not create TokioBytes instance")),
-            }
+            Ok(Some(src.take().freeze()))
         } else {
             Ok(None)
         }
     }
-
 }
 
 impl Encoder for TcpTransportCodec {

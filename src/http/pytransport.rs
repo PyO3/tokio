@@ -75,17 +75,9 @@ py_class!(pub class PyHttpTransport |py| {
 
 impl PyHttpTransport {
 
-    pub fn get_data_received(&self, py: Python) -> PyObject {
-        self._data_received(py).clone_ref(py)
-    }
-
     pub fn new(py: Python, h: Handle,
                sender: Sender<PyHttpTransportMessage>,
-               factory: &PyObject) -> PyResult<PyHttpTransport> {
-        // create protocol
-        let proto = factory.call(py, NoArgs, None)
-            .log_error(py, "Protocol factory error")?;
-
+               proto: &PyObject) -> PyResult<PyHttpTransport> {
         // get protocol callbacks
         let connection_made = proto.getattr(py, "connection_made")?;
         let connection_lost = proto.getattr(py, "connection_lost")?;
@@ -245,7 +237,7 @@ impl RequestHandler {
             let coro = handler.call(
                 py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
 
-            let task = PyTask::new(py, coro, h)?;
+            let task = PyTask::new(py, coro, py.None(), h)?;
             Ok((task, req))
         })
     }

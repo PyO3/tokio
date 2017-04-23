@@ -64,6 +64,23 @@ impl _PyFuture {
         }
     }
 
+    pub fn done_res(py: Python, h: Handle, result: PyResult<PyObject>) -> _PyFuture {
+        match result {
+            Ok(result) => _PyFuture::done_fut(h, result),
+            Err(mut err) =>
+                _PyFuture {
+                    h: h,
+                    sender: None,
+                    receiver: None,
+                    state: State::Finished,
+                    result: None,
+                    exception: Some(err.instance(py)),
+                    callbacks: None,
+                    rcallbacks: None,
+                }
+        }
+    }
+
     #[inline]
     pub fn state(&self) -> State {
         self.state
@@ -131,6 +148,13 @@ impl _PyFuture {
         }
     }
 
+    pub fn get_result(&self, py: Python) -> PyResult<PyObject> {
+        match self.result {
+            Some(ref res) => Ok(res.clone_ref(py)),
+            None => Ok(py.None())
+        }
+    }
+
     //
     // Return the exception that was set on this future.
     //
@@ -153,6 +177,13 @@ impl _PyFuture {
                     Some(ref err) => Ok(err.clone_ref(py)),
                     None => Ok(py.None()),
                 }
+        }
+    }
+
+    pub fn get_exception(&self, py: Python) -> PyResult<PyObject> {
+        match self.exception {
+            Some(ref exc) => Ok(exc.clone_ref(py)),
+            None => Ok(py.None())
         }
     }
 
@@ -181,6 +212,26 @@ impl _PyFuture {
         }
 
         Ok(py.None())
+    }
+
+    //
+    // Mark the future done and set its result.
+    //
+    pub fn set(&mut self, py: Python, result: PyResult<PyObject>, sender: PyObject) -> bool {
+        match self.state {
+            State::Pending => {
+                match result {
+                    Ok(result) =>
+                        self.result = Some(result),
+                    Err(mut err) =>
+                        self.exception = Some(err.instance(py))
+                }
+                self.schedule_callbacks(py, State::Finished, sender);
+
+                true
+            },
+            _ => false
+        }
     }
 
     //
@@ -369,6 +420,15 @@ py_class!(pub class PyFuture |py| {
     }
 
     //
+    // some ugly api called incapsulaton
+    //
+    property _result {
+        get(&slf) -> PyResult<PyObject> {
+            slf._fut(py).borrow().get_result(py)
+        }
+    }
+
+    //
     // Return the exception that was set on this future.
     //
     // The exception (or None if no exception was set) is returned only if
@@ -378,6 +438,15 @@ py_class!(pub class PyFuture |py| {
     //
     def exception(&self) -> PyResult<PyObject> {
         self._fut(py).borrow().exception(py)
+    }
+
+    //
+    // some ugly api called incapsulaton
+    //
+    property _exception {
+        get(&slf) -> PyResult<PyObject> {
+            slf._fut(py).borrow().get_exception(py)
+        }
     }
 
     //
@@ -435,6 +504,15 @@ py_class!(pub class PyFuture |py| {
     }
 
     //
+    // isfuture support
+    //
+    property _asyncio_future_blocking {
+        get(&slf) -> PyResult<PyBool> {
+            Ok(py.False())
+        }
+    }
+
+    //
     // Python GC support
     //
     def __traverse__(&self, visit) {
@@ -460,6 +538,15 @@ impl PyFuture {
 
     pub fn done_fut(py: Python, h: Handle, result: PyObject) -> PyResult<PyFuture> {
         PyFuture::create_instance(py, cell::RefCell::new(_PyFuture::done_fut(h, result)))
+    }
+
+    pub fn done_res(py: Python, h: Handle, result: PyResult<PyObject>) -> PyResult<PyFuture> {
+        PyFuture::create_instance(
+            py, cell::RefCell::new(_PyFuture::done_res(py, h, result)))
+    }
+
+    pub fn set(&self, py: Python, result: PyResult<PyObject>) -> bool {
+        self._fut(py).borrow_mut().set(py, result, self.clone_ref(py).into_object())
     }
 
     pub fn state(&self, py: Python) -> State {

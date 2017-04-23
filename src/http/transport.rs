@@ -11,21 +11,26 @@ use tokio_core::net::TcpStream;
 
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
+use utils::PyLogger;
 use pyunsafe::{Handle, Sender};
 
 
 pub fn http_transport_factory(handle: Handle, factory: &PyObject,
-                              socket: TcpStream, _peer: SocketAddr) -> Result<(), io::Error> {
+                              socket: TcpStream, _peer: Option<SocketAddr>)
+                              -> Result<(PyObject, PyObject), io::Error> {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
+    // create protocol
+    let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
+
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyHttpTransport::new(py, handle.clone(), Sender::new(tx), factory)?;
+    let tr = PyHttpTransport::new(py, handle.clone(), Sender::new(tx), &proto)?;
     let tr2 = tr.clone_ref(py);
     let tr3 = tr.clone_ref(py);
 
     // create internal wire transport
-    let transport = HttpTransport::new(socket, rx, tr);
+    let transport = HttpTransport::new(socket, rx, tr.clone_ref(py));
 
     // start connection processing
     handle.spawn(
@@ -35,7 +40,7 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
             tr3.connection_error(err)
         })
     );
-    Ok(())
+    Ok((tr.into_object(), py.None()))
 }
 
 

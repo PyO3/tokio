@@ -18,7 +18,7 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
                      family: i32, flags: i32, _sock: Option<PyObject>,
                      backlog: i32, _ssl: Option<PyObject>,
                      reuse_address: bool, reuse_port: bool,
-                     transport_factory: TransportFactory) -> PyResult<TokioServer> {
+                     transport_factory: TransportFactory) -> PyResult<PyFuture> {
 
     let lookup = match addrinfo::lookup_addrinfo(
             &host.unwrap(), port.unwrap_or(0), family, flags, addrinfo::SocketType::Stream) {
@@ -74,7 +74,9 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
                       transport_factory, factory.clone_ref(py), rx);
     }
 
-    TokioServer::create_instance(py, handle, RefCell::new(Some(handles)))
+    let srv = TokioServer::create_instance(py, handle.clone(), RefCell::new(Some(handles)))?;
+
+    PyFuture::done_fut(py, handle.clone(), srv.into_object())
 }
 
 
@@ -145,7 +147,7 @@ impl Future for Server
                 match option {
                     Async::Ready(Some((socket, peer))) => {
                         (self.transport)(
-                            self.handle.clone(), &self.factory, socket, peer)?;
+                            self.handle.clone(), &self.factory, socket, Some(peer))?;
 
                         // we can not just return Async::NotReady here,
                         // because self.stream is not registered within mio anymore

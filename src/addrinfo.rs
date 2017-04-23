@@ -9,6 +9,10 @@ use std::ptr;
 use std::io;
 use std::fmt;
 use std::error::Error;
+use std::thread;
+
+use chan;
+use futures::sync::oneshot;
 
 pub const AI_PASSIVE: libc::c_int = 0x0020;
 
@@ -27,7 +31,7 @@ pub enum Family {
 
 
 impl Family {
-    fn from_int(int: libc::c_int) -> Self {
+    pub fn from_int(int: libc::c_int) -> Self {
         match int {
             0 => Family::Unspec,
             libc::AF_INET => Family::Inet,
@@ -36,7 +40,7 @@ impl Family {
         }
     }
 
-    fn to_int(&self) -> libc::c_int {
+    pub fn to_int(&self) -> libc::c_int {
         match *self {
             Family::Unspec => 0,
             Family::Inet => libc::AF_INET,
@@ -62,7 +66,7 @@ pub enum SocketType {
 
 
 impl SocketType {
-    fn from_int(int: libc::c_int) -> Self {
+    pub fn from_int(int: libc::c_int) -> Self {
         match int {
             libc::SOCK_STREAM => SocketType::Stream,
             libc::SOCK_DGRAM => SocketType::DGram,
@@ -71,7 +75,7 @@ impl SocketType {
         }
     }
 
-    fn to_int(&self) -> libc::c_int {
+    pub fn to_int(&self) -> libc::c_int {
         match *self {
             SocketType::Stream => libc::SOCK_STREAM,
             SocketType::DGram => libc::SOCK_DGRAM,
@@ -100,7 +104,7 @@ pub enum Protocol {
 
 
 impl Protocol {
-    fn from_int(int: libc::c_int) -> Self {
+    pub fn from_int(int: libc::c_int) -> Self {
         match int {
             0 => Protocol::Unspec,
             1 => Protocol::Local,
@@ -111,7 +115,7 @@ impl Protocol {
         }
     }
 
-    fn to_int(&self) -> libc::c_int {
+    pub fn to_int(&self) -> libc::c_int {
         match *self {
             Protocol::Unspec => 0,
             Protocol::Local => libc::PF_LOCAL,
@@ -179,6 +183,28 @@ fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> 
         }
         _ => {
             Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid argument"))
+        }
+    }
+}
+
+
+pub struct LookupParams {
+    host: String,
+    port: u16,
+    family: libc::c_int,
+    flags: libc::c_int,
+    socktype: SocketType,
+}
+
+impl LookupParams {
+    pub fn new(host: String, port: u16,
+               family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> LookupParams {
+        LookupParams {
+            host: host,
+            port: port,
+            family: family,
+            flags: flags,
+            socktype: socktype,
         }
     }
 }
@@ -305,4 +331,54 @@ impl fmt::Debug for LookupError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.description())
     }
+}
+
+
+// Address info lookup workers
+pub type LookupResultSender = oneshot::Sender<Result<Vec<AddrInfo>, LookupError>>;
+pub type LookupResultReceiver = oneshot::Receiver<Result<Vec<AddrInfo>, LookupError>>;
+
+pub type LookupWorkerSender = chan::Sender<(LookupParams, LookupResultSender)>;
+pub type LookupWorkerReceiver = chan::Receiver<(LookupParams, LookupResultSender)>;
+
+
+pub fn start_workers(num: usize) -> LookupWorkerSender {
+    let (tx, rx) = chan::async();
+
+    for _ in 0..num {
+        let r: LookupWorkerReceiver = rx.clone();
+        thread::spawn(move || {
+            loop {
+                match r.recv() {
+                    None => return,
+                    Some((params, tx)) => {
+                        match lookup_addrinfo(params.host.as_str(), params.port,
+                                              params.family, params.flags, params.socktype) {
+                            Err(err) => {
+                                let _ = tx.send(Err(err));
+                            },
+                            Ok(lookup) => {
+                                let _ = tx.send(Ok(lookup.collect()));
+                            },
+                        };
+                    }
+                }
+            }
+        });
+    }
+
+    tx
+}
+
+pub fn lookup(sender: &LookupWorkerSender,
+              host: String, port: u16,
+              family: libc::c_int, flags: libc::c_int, socktype: SocketType)
+              -> LookupResultReceiver {
+    // prepare work item
+    let params = LookupParams::new(host, port, family, flags, socktype);
+
+    let (tx, rx) = oneshot::channel();
+    sender.send((params, tx));
+
+    rx
 }

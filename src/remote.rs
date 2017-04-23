@@ -63,7 +63,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
 
     def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
         let res = self.execute_in_loop(py, move|py, h| {
-            PyTask::new(py, coro, h)
+            PyTask::new(py, coro, py.None(), h)
         });
         match res {
             Some(Ok(srv)) => Ok(srv),
@@ -190,7 +190,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                       backlog: i32 = 100,
                       ssl: Option<PyObject> = None,
                       reuse_address: bool = true,
-                      reuse_port: bool = true) -> PyResult<server::TokioServer> {
+                      reuse_port: bool = true) -> PyResult<PyFuture> {
 
         if let Some(_) = ssl {
             return Err(
@@ -235,7 +235,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                            backlog: i32 = 100,
                            ssl: Option<PyObject> = None,
                            reuse_address: bool = true,
-                           reuse_port: bool = true) -> PyResult<server::TokioServer> {
+                           reuse_port: bool = true) -> PyResult<PyFuture> {
 
         if let Some(_) = ssl {
             return Err(

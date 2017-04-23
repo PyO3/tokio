@@ -1,10 +1,13 @@
+extern crate chan;
 extern crate libc;
 extern crate net2;
 extern crate bytes;
 extern crate futures;
+extern crate native_tls;
 extern crate tokio_io;
 extern crate tokio_core;
 extern crate tokio_signal;
+extern crate tokio_tls;
 extern crate boxfnonce;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
@@ -24,15 +27,17 @@ mod remote;
 mod event_loop;
 mod transport;
 mod server;
+mod client;
 
 pub use utils::{Classes, PyLogger, ToPyErr, with_py};
-pub use pybytes::TokioBytes;
+pub use pybytes::PyBytes;
 pub use pyfuture::PyFuture;
 pub use pytask::PyTask;
 pub use handle::{TokioHandle, TokioTimerHandle};
 pub use event_loop::{TokioEventLoop, new_event_loop};
 pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
 pub use server::create_server;
+pub use client::create_connection;
 
 
 py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {

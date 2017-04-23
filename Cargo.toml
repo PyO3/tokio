@@ -5,14 +5,17 @@ authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
 [dependencies]
 boxfnonce = "*"
+chan = "0.1"
 log = "0.3"
 net2 = "0.2"
 libc = "0.2"
 lazy_static = "0.2"
 bytes = "0.4"
 futures = "0.1"
+native-tls = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
+tokio-tls = "0.1"
 
 #tokio-signal = "*"
 tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }

@@ -12,7 +12,8 @@ use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
 py_class!(pub class PyTask |py| {
-    data _loop: Handle;
+    data _loop: PyObject;
+    data _handle: Handle;
     data _fut: cell::RefCell<_PyFuture>;
     data _waiter: cell::RefCell<Option<PyObject>>;
     data _must_cancel: cell::Cell<bool>;
@@ -65,6 +66,15 @@ py_class!(pub class PyTask |py| {
     }
 
     //
+    // some ugly api called incapsulaton
+    //
+    property _result {
+        get(&slf) -> PyResult<PyObject> {
+            slf._fut(py).borrow().get_result(py)
+        }
+    }
+
+    //
     // Return the exception that was set on this future.
     //
     // The exception (or None if no exception was set) is returned only if
@@ -74,6 +84,15 @@ py_class!(pub class PyTask |py| {
     //
     def exception(&self) -> PyResult<PyObject> {
         self._fut(py).borrow().exception(py)
+    }
+
+    //
+    // some ugly api called incapsulaton
+    //
+    property _exception {
+        get(&slf) -> PyResult<PyObject> {
+            slf._fut(py).borrow().get_exception(py)
+        }
     }
 
     //
@@ -153,14 +172,30 @@ py_class!(pub class PyTask |py| {
         }
     }
 
+    property _log_destroy_pending {
+        get(&slf) -> PyResult<PyBool> {
+            Ok(py.False())
+        }
+        set(&slf, value: PyObject) -> PyResult<()> {
+            Ok(())
+        }
+    }
+
+    property _asyncio_future_blocking {
+        get(&slf) -> PyResult<PyBool> {
+            Ok(py.False())
+        }
+    }
+
 });
 
 
 impl PyTask {
 
-    pub fn new(py: Python, coro: PyObject, handle: Handle) -> PyResult<PyTask> {
+    pub fn new(py: Python, coro: PyObject,
+               evloop: PyObject, handle: Handle) -> PyResult<PyTask> {
         let task = PyTask::create_instance(
-            py, handle.clone(), cell::RefCell::new(_PyFuture::new(handle.clone())),
+            py, evloop, handle.clone(), cell::RefCell::new(_PyFuture::new(handle.clone())),
             cell::RefCell::new(None),
             cell::Cell::new(false),
         )?;
@@ -343,7 +378,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 if retry < INPLACE_RETRY {
                     task_step(py, task2, coro, None, retry+1);
                 } else {
-                    task._loop(py).spawn_fn(move|| {
+                    task._handle(py).spawn_fn(move|| {
                         // get python GIL
                         let gil = Python::acquire_gil();
                         let py = gil.python();

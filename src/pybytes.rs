@@ -7,15 +7,10 @@ use cpython::_detail::ffi;
 use bytes::{Bytes, BytesMut};
 
 
-pub fn create_bytes(py: Python, bytes: Bytes) -> PyResult<TokioBytes> {
-    TokioBytes::create_instance(py, bytes)
-}
-
-
 //
 // Buffer interface for Bytes
 //
-py_class!(pub class TokioBytes |py| {
+py_class!(pub class PyBytes |py| {
     data _bytes: Bytes;
 
     def __len__(&self) -> PyResult<usize> {
@@ -58,15 +53,15 @@ py_class!(pub class TokioBytes |py| {
 });
 
 
-impl TokioBytes {
+impl PyBytes {
 
-    pub fn create(py: Python, src: Bytes) -> PyResult<TokioBytes> {
-        TokioBytes::create_instance(py, src)
+    pub fn new(py: Python, bytes: Bytes) -> PyResult<PyBytes> {
+        PyBytes::create_instance(py, bytes)
     }
 
-    pub fn from(py: Python, src: &mut BytesMut, length: usize) -> Result<TokioBytes, io::Error> {
+    pub fn from(py: Python, src: &mut BytesMut, length: usize) -> Result<PyBytes, io::Error> {
         let bytes = src.split_to(length).freeze();
-        match TokioBytes::create(py, bytes) {
+        match PyBytes::new(py, bytes) {
             Ok(bytes) => Ok(bytes),
             Err(_) =>
                 Err(io::Error::new(
