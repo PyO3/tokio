@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use std::io;
+use std::cell::RefCell;
 use std::net::SocketAddr;
 use cpython::*;
 use futures::unsync::mpsc;
@@ -62,6 +63,7 @@ py_class!(pub class PyTcpTransport |py| {
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _transport: Sender<TcpTransportMessage>;
+    data _drain: RefCell<Option<PyFuture>>;
 
     def get_extra_info(&self, _name: PyString,
                        default: Option<PyObject> = None ) -> PyResult<PyObject> {
@@ -87,9 +89,13 @@ py_class!(pub class PyTcpTransport |py| {
     // write all data to socket
     //
     def drain(&self) -> PyResult<PyFuture> {
-        let fut = PyFuture::new(py, self._handle(py).clone())?;
-        fut.set_result(py, py.None())?;
-        Ok(fut)
+        if let Some(ref fut) = *self._drain(py).borrow() {
+            Ok(fut.clone_ref(py))
+        } else {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
+            Ok(fut)
+        }
     }
 
     //
@@ -114,7 +120,7 @@ impl PyTcpTransport {
         let data_received = protocol.getattr(py, "data_received")?;
 
         let transport = PyTcpTransport::create_instance(
-            py, h, connection_lost, data_received, sender)?;
+            py, h, connection_lost, data_received, sender, RefCell::new(None))?;
 
         // connection made
         connection_made.call(
@@ -170,6 +176,15 @@ impl PyTcpTransport {
         });
     }
 
+    pub fn drained(&self) {
+        with_py(|py| match self._drain(py).borrow_mut().take() {
+            Some(fut) => {
+                let _ = fut.set(py, Ok(py.None()));
+            },
+            None => (),
+        });
+    }
+    
 }
 
 
@@ -241,8 +256,10 @@ impl<T> Future for TcpTransport<T>
                         match msg {
                             TcpTransportMessage::Bytes(bytes) =>
                                 Some(bytes),
-                            TcpTransportMessage::Close =>
-                                return Ok(Async::Ready(())),
+                            TcpTransportMessage::Close => {
+                                self.closing = true;
+                                None
+                            }
                         }
                     }
                     Ok(_) => None,
@@ -269,9 +286,22 @@ impl<T> Future for TcpTransport<T>
         // flush sink
         if !self.flushed {
             self.flushed = self.framed.poll_complete()?.is_ready();
+
+            if self.flushed {
+                self.transport.drained();
+            }
         }
 
-        Ok(Async::NotReady)
+        // close
+        if self.closing {
+            return self.framed.close()
+        }
+
+        if self.flushed && self.incoming_eof {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 }
 

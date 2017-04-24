@@ -237,7 +237,7 @@ impl RequestHandler {
             let coro = handler.call(
                 py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
 
-            let task = PyTask::new(py, coro, py.None(), h)?;
+            let task = PyTask::new(py, coro, None, h)?;
             Ok((task, req))
         })
     }

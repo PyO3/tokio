@@ -63,7 +63,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
 
     def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
         let res = self.execute_in_loop(py, move|py, h| {
-            PyTask::new(py, coro, py.None(), h)
+            PyTask::new(py, coro, None, h)
         });
         match res {
             Some(Ok(srv)) => Ok(srv),

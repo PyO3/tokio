@@ -262,7 +262,7 @@ pub fn check_min_length(py: Python, args: &PyTuple, len: usize) -> PyResult<()> 
 pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Duration> {
     if let Ok(f) = PyFloat::downcast_from(py, value.clone_ref(py)) {
         let val = f.value(py);
-        Ok(Duration::new(val.ceil() as u64, (val.fract() * 1_000_000.0) as u32))
+        Ok(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32))
     } else if let Ok(i) = PyInt::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
             Ok(Duration::new((val * 1000) as u64, 0))

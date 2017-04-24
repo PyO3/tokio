@@ -50,7 +50,9 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             addrinfo::start_workers(5),
             RefCell::new(None),
             RefCell::new(py.None()),
-            Cell::new(false));
+            Cell::new(false),
+            RefCell::new(None),
+        );
 
         *cell.borrow_mut() = Some(core);
         evloop
@@ -93,6 +95,17 @@ py_class!(pub class TokioEventLoop |py| {
     data _runner: RefCell<Option<oneshot::Sender<bool>>>;
     data _exception_handler: RefCell<PyObject>;
     data _debug: Cell<bool>;
+    data _current_task: RefCell<Option<PyObject>>;
+
+    //
+    // Return the currently running task in an event loop or None.
+    //
+    def current_task(&self) -> PyResult<PyObject> {
+        match *self._current_task(py).borrow() {
+            Some(ref task) => Ok(task.clone_ref(py).into_object()),
+            None => Ok(py.None())
+        }
+    }
 
     //
     // Create a Future object attached to the loop.
@@ -119,7 +132,7 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
-        PyTask::new(py, coro, self.clone_ref(py).into_object(), self.handle(py).clone())
+        PyTask::new(py, coro, Some(self.clone_ref(py)), self.handle(py).clone())
     }
 
     //
@@ -129,7 +142,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def time(&self) -> PyResult<f64> {
         let time = self.instant(py).elapsed();
-        Ok(time.as_secs() as f64 + (time.subsec_nanos() as f64 / 1_000_000.0))
+        Ok(time.as_secs() as f64 + (time.subsec_nanos() as f64 / 1_000_000_000.0))
     }
 
     //
@@ -709,8 +722,8 @@ py_class!(pub class TokioEventLoop |py| {
     def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
         let fut = match PyTask::downcast_from(py, future.clone_ref(py)) {
             Ok(fut) => fut,
-            Err(_) => PyTask::new(py, future,
-                                  self.clone_ref(py).into_object(), self.handle(py).clone())?,
+            Err(_) => PyTask::new(
+                py, future, Some(self.clone_ref(py)), self.handle(py).clone())?,
         };
 
         let res = py.allow_threads(|| {
@@ -783,4 +796,7 @@ impl TokioEventLoop {
         self.handle(py).remote().clone()
     }
 
+    pub fn set_current_task(&self, py: Python, task: PyObject) {
+        *self._current_task(py).borrow_mut() = Some(task)
+    }
 }

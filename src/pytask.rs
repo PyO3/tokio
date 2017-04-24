@@ -6,13 +6,14 @@ use futures::{future, unsync, Poll};
 // use futures::task::{Task, park};
 use boxfnonce::SendBoxFnOnce;
 
+use ::TokioEventLoop;
 use utils::{Classes, PyLogger};
 use pyunsafe::{GIL, Handle};
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
 py_class!(pub class PyTask |py| {
-    data _loop: PyObject;
+    data _loop: Option<TokioEventLoop>;
     data _handle: Handle;
     data _fut: cell::RefCell<_PyFuture>;
     data _waiter: cell::RefCell<Option<PyObject>>;
@@ -193,7 +194,7 @@ py_class!(pub class PyTask |py| {
 impl PyTask {
 
     pub fn new(py: Python, coro: PyObject,
-               evloop: PyObject, handle: Handle) -> PyResult<PyTask> {
+               evloop: Option<TokioEventLoop>, handle: Handle) -> PyResult<PyTask> {
         let task = PyTask::create_instance(
             py, evloop, handle.clone(), cell::RefCell::new(_PyFuture::new(handle.clone())),
             cell::RefCell::new(None),
@@ -303,12 +304,18 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
     }
     *task._waiter(py).borrow_mut() = None;
 
+    // set current task
+    if let Some(ref evloop) = *task._loop(py) {
+        evloop.set_current_task(py, task.clone_ref(py).into_object());
+    }
+
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
         None => coro.call_method(py, "send", PyTuple::new(py, &[py.None()]), None),
         Some(exc) => coro.call_method(py, "throw", PyTuple::new(py, &[exc]), None),
     };
 
+    // println!("result: {:?}", res);
     // handle coroutine result
     match res {
         Err(mut err) => {
