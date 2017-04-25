@@ -425,6 +425,12 @@ py_class!(pub class RawHeaders |py| {
 
 });
 
+impl RawHeaders {
+    pub fn new(py: Python, headers: Headers) -> PyResult<RawHeaders> {
+        RawHeaders::create_instance(py, headers)
+    }
+}
+
 
 impl Stream for StreamReader {
     type Item = PyResult<pybytes::PyBytes>;
