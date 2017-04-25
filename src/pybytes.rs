@@ -69,4 +69,22 @@ impl PyBytes {
         }
     }
 
+    pub fn extend_into(&self, py: Python, dst: &mut BytesMut)  {
+        dst.extend(self._bytes(py).as_ref())
+    }
+
+    pub fn len(&self, py: Python) -> usize {
+        self._bytes(py).len()
+    }
+
+    pub fn slice_to(&self, py: Python, end: usize) -> PyResult<PyBytes> {
+        let bytes = self._bytes(py).slice_to(end);
+        PyBytes::create_instance(py, bytes)
+    }
+
+    pub fn slice_from(&self, py: Python, begin: usize) -> PyResult<PyBytes> {
+        let bytes = self._bytes(py).slice_from(begin);
+        PyBytes::create_instance(py, bytes)
+    }
+
 }

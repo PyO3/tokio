@@ -9,7 +9,7 @@ use cpython::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
-use ::{PyFuture, PyTask};
+use ::{PyFuture, PyTask, pybytes};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
@@ -152,7 +152,7 @@ impl PyHttpTransport {
                         err.clone_ref(py).print(py);
                     },
                     Ok(req) => {
-                        req.content().feed_eof(py);
+                        self.payloads(py).borrow_mut().push_back(req.content().clone_ref(py));
                         self._data_received(py).call(
                             py, PyTuple::new(py, &[req.into_object()]), None)
                             .into_log(py, "data_received error");
@@ -185,16 +185,25 @@ impl PyHttpTransport {
                 return Ok(Some(recv));
             },
             http::RequestMessage::Body(chunk) => {
-
+                with_py(|py| {
+                    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
+                        match pybytes::PyBytes::new(py, chunk) {
+                            Ok(bytes) => payload.feed_data(py, bytes),
+                            Err(err) =>  {
+                                // close connection with error
+                                let _ = self.transport(py).send(
+                                    PyHttpTransportMessage::Close(Some(err)));
+                            }
+                        }
+                    }
+                });
             },
             http::RequestMessage::Completed => {
-                //with_py(|py| {
-                //    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
-                //        payload.feed_eof(py);
-                //    } else {
-                        //println!("not found");
-                //    }
-                //});
+                with_py(|py| {
+                    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
+                        payload.feed_eof(py);
+                    }
+                });
             }
         };
         Ok(None)

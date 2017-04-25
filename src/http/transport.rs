@@ -95,7 +95,8 @@ impl Future for HttpTransport
                     },
                     Ok(Async::Ready(None)) => {
                         // TODO send eof_received to pytransport
-                        self.incoming_eof = true;
+                        // self.incoming_eof = true;
+                        return Ok(Async::Ready(()))
                     },
                     Ok(Async::NotReady) => (),
                     Err(err) => return Err(err.into()),

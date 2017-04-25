@@ -1,9 +1,13 @@
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
-use cpython::*;
-use bytes::BytesMut;
+use std::iter::Iterator;
+use std::collections::VecDeque;
 
-use ::PyFuture;
+use cpython::*;
+use bytes::{Bytes, BytesMut};
+use futures::{Async, Future, Poll, Stream, future};
+
+use ::{PyFuture, pybytes, with_py};
 use pyunsafe::{GIL, Handle, Sender};
 use http::codec::EncoderMessage;
 use http::{Request, Version, Headers, ConnectionType, ContentCompression};
@@ -145,10 +149,26 @@ impl PyRequest {
 
 py_class!(pub class StreamReader |py| {
     data _handle: Handle;
+    data _size: Cell<usize>;
+    data _total_bytes: Cell<usize>;
     data _eof: Cell<bool>;
+    data _eof_waiter: RefCell<Option<PyFuture>>;
+    data _waiter: RefCell<Option<PyFuture>>;
+    data _buffer: RefCell<VecDeque<pybytes::PyBytes>>;
+    data _exception: RefCell<Option<PyObject>>;
+
+    property total_bytes {
+        get(&slf) -> PyResult<usize> {
+            Ok(slf._total_bytes(py).get())
+        }
+    }
 
     def exception(&self) -> PyResult<PyObject> {
-        Ok(py.None())
+        if let Some(ref exc) = *self._exception(py).borrow() {
+            Ok(exc.clone_ref(py))
+        } else {
+            Ok(py.None())
+        }
     }
 
     def on_eof(&self) -> PyResult<PyObject> {
@@ -160,11 +180,27 @@ py_class!(pub class StreamReader |py| {
     }
 
     def at_eof(&self) -> PyResult<PyObject> {
-        Ok(py.None())
+        if self._eof(py).get() && self._buffer(py).borrow().len() == 0 {
+            Ok(py.True().into_object())
+        } else {
+            Ok(py.True().into_object())
+        }
     }
 
     def wait_eof(&self) -> PyResult<PyObject> {
-        Ok(py.None())
+        let fut = if let Some(ref fut) = *self._eof_waiter(py).borrow() {
+            Some(fut.clone_ref(py))
+        } else {
+            None
+        };
+
+        if let Some(fut) = fut {
+            Ok(fut.into_object())
+        } else {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            *self._eof_waiter(py).borrow_mut() = Some(fut.clone_ref(py));
+            Ok(fut.into_object())
+        }
     }
 
     def unread_data(&self) -> PyResult<PyObject> {
@@ -175,24 +211,119 @@ py_class!(pub class StreamReader |py| {
         Ok(py.None())
     }
 
-    def read(&self, n: i32 = -1) -> PyResult<PyObject> {
-        Ok(py.None())
+    def read(&self, n: isize = -1) -> PyResult<PyObject> {
+        if n == 0 {
+            let chunk = pybytes::PyBytes::new(py, Bytes::new())?.into_object();
+            Ok(PyFuture::done_fut(py, self._handle(py).clone(), chunk)?.into_object())
+        } else if n < 0 {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut_read = fut.clone_ref(py);
+
+            let stream = self.clone_ref(py).collect().and_then(move |chunks| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                let mut size = 0;
+                for chunk in chunks.iter() {
+                    if let &Ok(ref chunk) = chunk {
+                        size += chunk.len(py);
+                    }
+                }
+
+                let mut buf = BytesMut::with_capacity(size);
+                for chunk in chunks {
+                    chunk.unwrap().extend_into(py, &mut buf);
+                }
+                fut_read.set(py, pybytes::PyBytes::new(
+                    py, buf.freeze()).map(|b| b.into_object()));
+                future::ok(())
+            });
+            self._handle(py).spawn(stream.map_err(|_| {}));
+
+            Ok(fut.into_object())
+
+        } else {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut_read = fut.clone_ref(py);
+            *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
+
+            // wait until we get more data
+            let stream = self.clone_ref(py);
+            let waiter = fut.clone_ref(py).and_then(move |_| {
+                with_py(|py| fut_read.set(
+                    py, stream._read_nowait(py, n).map(|b| b.into_object())));
+                future::ok(())
+            });
+            self._handle(py).spawn(waiter.map_err(|_| {}));
+
+            Ok(fut.into_object())
+        }
     }
 
     def readany(&self) -> PyResult<PyObject> {
-        Ok(PyFuture::done_fut(py, self._handle(py).clone(), py.None())?.into_object())
+        if let Some(ref exc) = *self._exception(py).borrow() {
+            Err(PyErr::from_instance(py, exc.clone_ref(py)))
+        } else if self._buffer(py).borrow().is_empty() && !self._eof(py).get() {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut_read = fut.clone_ref(py);
+            *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
+
+            // wait until we get more data
+            let stream = self.clone_ref(py);
+            let waiter = fut.clone_ref(py).and_then(move |_| {
+                with_py(|py| fut_read.set(py, stream._read_nowait(py, -1)
+                                          .map(|b| b.into_object())));
+                future::ok(())
+            }).map_err(|_| {});
+            self._handle(py).spawn(waiter);
+
+            Ok(fut.into_object())
+        } else {
+            let chunk = self._read_nowait(py, -1)?;
+            Ok(PyFuture::done_fut(py, self._handle(py).clone(),
+                                  chunk.into_object())?.into_object())
+        }
     }
 
     def readchunk(&self) -> PyResult<PyObject> {
-        Ok(py.None())
+        if let Some(ref exc) = *self._exception(py).borrow() {
+            Err(PyErr::from_instance(py, exc.clone_ref(py)))
+        } else if self._buffer(py).borrow().is_empty() && !self._eof(py).get() {
+            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut_read = fut.clone_ref(py);
+            *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
+
+            // wait until we get more data
+            let stream = self.clone_ref(py);
+            let waiter = fut.clone_ref(py).and_then(move |_| {
+                with_py(|py|
+                        fut_read.set(
+                            py, stream._read_nowait_chunk(py, -1).map(|b| b.into_object())));
+                future::ok(())
+            }).map_err(|_| {});
+            self._handle(py).spawn(waiter);
+
+            Ok(fut.into_object())
+        } else {
+            let chunk = self._read_nowait_chunk(py, -1)?;
+            Ok(PyFuture::done_fut(py, self._handle(py).clone(),
+                                  chunk.into_object())?.into_object())
+        }
     }
 
     def readexactly(&self) -> PyResult<PyObject> {
         Ok(py.None())
     }
 
-    def read_nowait(&self) -> PyResult<PyObject> {
-        Ok(py.None())
+    def read_nowait(&self, n: isize = -1) -> PyResult<PyObject> {
+        if let Some(ref exc) = *self._exception(py).borrow() {
+            Err(PyErr::from_instance(py, exc.clone_ref(py)))
+        } else if let Some(_) = *self._waiter(py).borrow() {
+            Err(PyErr::new::<exc::RuntimeError, _>(
+                py, "Called while some coroutine is waiting for incoming data."))
+        } else {
+            self._read_nowait(py, n).map(|b| b.into_object())
+        }
     }
 
 });
@@ -201,9 +332,14 @@ py_class!(pub class StreamReader |py| {
 impl StreamReader {
 
     fn new(py: Python, h: Handle) -> PyResult<StreamReader> {
-        StreamReader::create_instance(py, h, Cell::new(false))
+        StreamReader::create_instance(
+            py, h, Cell::new(0), Cell::new(0), Cell::new(false),
+            RefCell::new(None),
+            RefCell::new(None),
+            RefCell::new(VecDeque::new()),
+            RefCell::new(None))
     }
-    
+
     pub fn set_exception(&self) {
     }
 
@@ -211,9 +347,67 @@ impl StreamReader {
         self._eof(py).set(true)
     }
 
-    pub fn feed_data(&self) {
+    pub fn feed_data(&self, py: Python, bytes: pybytes::PyBytes) {
+        let mut total_bytes = self._total_bytes(py);
+        total_bytes.set(total_bytes.get() + bytes.len(py));
+        self._buffer(py).borrow_mut().push_back(bytes);
+
+        if let Some(fut) = self._waiter(py).borrow_mut().take() {
+            let _ = fut.set(py, Ok(py.None()));
+        }
     }
 
+    pub fn _read_nowait_chunk(&self, py: Python, n: isize) -> PyResult<pybytes::PyBytes> {
+        let size = if n < 0 { 0 } else { n as usize };
+        let mut buffer = self._buffer(py).borrow_mut();
+
+        let mut first_chunk = buffer.pop_front().unwrap();
+        let result = if n != -1 && first_chunk.len(py) > size {
+            buffer.push_front(first_chunk.slice_from(py, size)?);
+            first_chunk.slice_to(py, size)?
+        } else {
+            first_chunk
+        };
+
+        self._size(py).set(self._size(py).get() - result.len(py));
+        Ok(result)
+    }
+
+    pub fn _read_nowait(&self, py: Python, n: isize) -> PyResult<pybytes::PyBytes> {
+        let mut size = 0;
+        let mut chunks = Vec::new();
+        let mut counter = if n < 0 { 0 } else { n as usize };
+        let mut buffer = self._buffer(py).borrow_mut();
+
+        loop {
+            if let Some(chunk) = buffer.pop_front() {
+                let result = if n != -1 && chunk.len(py) > counter {
+                    buffer.push_front(chunk.slice_from(py, counter)?);
+                    chunk.slice_to(py, counter)?
+                } else {
+                    chunk
+                };
+                size += result.len(py);
+                if counter > 0 {
+                    counter = counter - result.len(py)
+                } else {
+                    break
+                }
+            } else {
+                break
+            }
+        }
+
+        if chunks.len() == 1 {
+            Ok(pybytes::PyBytes::new(py, chunks.pop().unwrap())?)
+        } else {
+            let mut buf = BytesMut::with_capacity(size);
+            for chunk in chunks {
+                buf.extend(chunk);
+            }
+            Ok(pybytes::PyBytes::new(py, buf.freeze())?)
+        }
+    }
 }
 
 
@@ -230,6 +424,35 @@ py_class!(pub class RawHeaders |py| {
     }
 
 });
+
+
+impl Stream for StreamReader {
+    type Item = PyResult<pybytes::PyBytes>;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        if self._size(py).get() > 0 {
+            Ok(Async::Ready(Some(self._read_nowait_chunk(py, -1))))
+        } else {
+            let mut fut = if let Some(fut) = self._waiter(py).borrow_mut().take() {
+                fut
+            } else {
+                PyFuture::new(py, self._handle(py).clone()).unwrap()
+            };
+
+            match fut.poll() {
+                Ok(Async::Ready(_)) => {
+                    self.poll()
+                },
+                Ok(Async::NotReady) => Ok(Async::NotReady),
+                Err(e) => Err(())
+            }
+        }
+    }
+}
 
 
 py_class!(pub class Url |py| {
