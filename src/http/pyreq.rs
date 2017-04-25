@@ -423,6 +423,19 @@ py_class!(pub class RawHeaders |py| {
         }
     }
 
+    def __getitem__(&self, key: PyString) -> PyResult<PyObject> {
+        self.get(py, &key)
+    }
+
+    def __contains__(&self, key: PyString) -> PyResult<bool> {
+        let key = key.to_string(py)?;
+        if let Some(val) = self.headers(py).get(key.borrow()) {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
 });
 
 impl RawHeaders {
