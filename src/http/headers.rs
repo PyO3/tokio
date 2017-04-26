@@ -16,7 +16,6 @@ pub struct Headers {
     headers: HashMap<u64, Header>,
     bytes: Option<Bytes>,
     last_pos: u16,
-    hasher: RefCell<DefaultHasher>
 }
 
 impl Headers {
@@ -25,7 +24,6 @@ impl Headers {
         Headers { headers: HashMap::with_capacity(64),
                   bytes: None,
                   last_pos: 0,
-                  hasher: RefCell::new(DefaultHasher::new()),
         }
     }
 
@@ -52,7 +50,7 @@ impl Headers {
     }
     
     pub fn get(&self, name: &str) -> Option<&str> {
-        let mut hasher = self.hasher.borrow_mut();
+        let mut hasher = DefaultHasher::new();
         for byte in name.bytes().map(|b| b.to_ascii_lowercase()) {
             hasher.write_u8(byte);
         }
@@ -73,7 +71,7 @@ impl Headers {
     }
 
     pub fn get_case(&self, name: &str) -> Option<&str> {
-        let mut hasher = self.hasher.borrow_mut();
+        let mut hasher = DefaultHasher::new(); //self.hasher.borrow_mut();
         for byte in name.bytes() {
             hasher.write_u8(byte);
         }

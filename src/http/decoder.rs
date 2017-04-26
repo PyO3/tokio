@@ -443,7 +443,7 @@ impl Decoder for RequestDecoder {
         let mut header_token = self.header_token;
 
         'run: loop {
-            //println!("Start from: {:?}", state);
+            // println!("Start from: {:?}", state);
             match state {
 
             State::Status(status) => match status {
@@ -581,7 +581,9 @@ impl Decoder for RequestDecoder {
                     for idx in 0..len {
                         let ch = bytes.next();
                         if ch == b':' {
-                            self.header.set_hash(self.header_name_hash.finish());
+                            let h = self.header_name_hash.finish();
+                            self.header_name_hash = DefaultHasher::new();
+                            self.header.set_hash(h);
                             self.header.update_name_len(idx);
                             if self.header.is_overflow(self.max_line_size) {
                                 return Err(Error::LineTooLong)
