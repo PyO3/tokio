@@ -39,11 +39,18 @@ py_class!(pub class PyBytes |py| {
             (*view).obj = ptr::null_mut();
         }
 
-        if flags != 0 {
+        if view == ptr::null_mut() {
+            unsafe {
+                let msg = ::std::ffi::CStr::from_ptr("View is null\0".as_ptr() as *const _);
+                ffi::PyErr_SetString(ffi::PyExc_BufferError, msg.as_ptr());
+            }
+            return false;
+        }
+
+        if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
             unsafe {
                 let msg = ::std::ffi::CStr::from_ptr(
-                    concat!(
-                        "Only simple, read-only buffer is available","\0").as_ptr() as *const _);
+                    "Object is not writable\0".as_ptr() as *const _);
                 ffi::PyErr_SetString(ffi::PyExc_BufferError, msg.as_ptr());
             }
             return false;
@@ -52,19 +59,33 @@ py_class!(pub class PyBytes |py| {
         let bytes = self._bytes(py);
 
         unsafe {
-            (*view).buf = bytes.as_ref().as_ptr() as *mut c_void;
+            (*view).buf = bytes.as_ptr() as *mut c_void;
             (*view).len = bytes.len() as isize;
             (*view).readonly = 1;
             (*view).itemsize = 1;
+
             (*view).format = ptr::null_mut();
+            if (flags & ffi::PyBUF_FORMAT) == ffi::PyBUF_FORMAT {
+                let msg = ::std::ffi::CStr::from_ptr("B\0".as_ptr() as *const _);
+                (*view).format = msg.as_ptr() as *mut _;
+            }
+
             (*view).ndim = 1;
             (*view).shape = ptr::null_mut();
+            if (flags & ffi::PyBUF_ND) == ffi::PyBUF_ND {
+                (*view).shape = (&((*view).len)) as *const _ as *mut _;
+            }
+
             (*view).strides = ptr::null_mut();
+            if (flags & ffi::PyBUF_STRIDES) == ffi::PyBUF_STRIDES {
+                (*view).strides = &((*view).itemsize) as *const _ as *mut _;
+            }
+
             (*view).suboffsets = ptr::null_mut();
             (*view).internal = ptr::null_mut();
         }
 
-        return true
+        true
     }
 
 });

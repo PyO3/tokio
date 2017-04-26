@@ -414,17 +414,26 @@ impl StreamReader {
 py_class!(pub class RawHeaders |py| {
     data headers: Headers;
 
-    def get(&self, key: &PyString) -> PyResult<PyObject> {
+    def get(&self, key: &PyString, default: Option<PyObject> = None) -> PyResult<PyObject> {
         let key = key.to_string(py)?;
         if let Some(val) = self.headers(py).get(key.borrow()) {
             Ok(PyString::new(py, val).into_object())
         } else {
-            Ok(py.None())
+            if let Some(default) = default {
+                Ok(default)
+            } else {
+                Ok(py.None())
+            }
         }
     }
 
     def __getitem__(&self, key: PyString) -> PyResult<PyObject> {
-        self.get(py, &key)
+        let key = key.to_string(py)?;
+        if let Some(val) = self.headers(py).get(key.borrow()) {
+            Ok(PyString::new(py, val).into_object())
+        } else {
+            Err(PyErr::new::<exc::KeyError, _>(py, "item not found"))
+        }
     }
 
     def __contains__(&self, key: PyString) -> PyResult<bool> {
