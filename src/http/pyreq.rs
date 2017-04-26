@@ -414,6 +414,17 @@ impl StreamReader {
 py_class!(pub class RawHeaders |py| {
     data headers: Headers;
 
+    def items(&self) -> PyResult<PyObject> {
+        let mut items = Vec::new();
+
+        for (name, value) in self.headers(py).headers() {
+            items.push(
+                (PyString::new(py, name.as_str()),
+                 PyString::new(py, value.as_str())).to_py_object(py).into_object());
+        }
+        Ok(PyList::new(py, items.as_slice()).into_object())
+    }
+
     def get(&self, key: &PyString, default: Option<PyObject> = None) -> PyResult<PyObject> {
         let key = key.to_string(py)?;
         if let Some(val) = self.headers(py).get(key.borrow()) {

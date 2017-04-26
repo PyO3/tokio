@@ -29,6 +29,28 @@ impl Headers {
         }
     }
 
+    pub fn headers(&self) -> Vec<(String, String)> {
+        let mut vec = Vec::new();
+
+        if let Some(ref bytes) = self.bytes {
+            for header in self.headers.values() {
+                vec.push((
+                    String::from(
+                        unsafe {
+                            std::str::from_utf8_unchecked(&bytes[header.name_range()])
+                        }
+                    ),
+
+                    String::from(
+                        unsafe {
+                            std::str::from_utf8_unchecked(&bytes[header.value_range()])
+                        }
+                    )));
+            }
+        }
+        vec
+    }
+    
     pub fn get(&self, name: &str) -> Option<&str> {
         let mut hasher = self.hasher.borrow_mut();
         for byte in name.bytes().map(|b| b.to_ascii_lowercase()) {
@@ -154,6 +176,11 @@ impl Header {
     #[inline]
     pub fn is_overflow(&self, max_size: u16) -> bool {
         (self.name_len + self.value_len) >= max_size
+    }
+
+    #[inline]
+    pub fn name_range(&self) -> Range<usize> {
+        Range{ start: self.name_pos as usize, end: (self.name_pos + self.name_len) as usize }
     }
 
     #[inline]
