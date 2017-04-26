@@ -196,6 +196,18 @@ test! { test_request_simple_10,
             expect_completed!(codec(buf));
         }}
 
+test! { test_request_simple_with_prefix_cr,
+        "\rGET / HTTP/1.1\r\n\r\n" => |codec, buf| {
+            expect_status!(msg => codec(buf) => "GET", "/", Version::Http11);
+            expect_headers!(msg => conn:ConnectionType::KeepAlive, chunked:false);
+        }}
+
+test! { test_request_simple_with_prefix_crlf,
+        "\r\nGET / HTTP/1.1\r\n\r\n" => |codec, buf| {
+            expect_status!(msg => codec(buf) => "GET", "/", Version::Http11);
+            expect_headers!(msg => conn:ConnectionType::KeepAlive, chunked:false);
+        }}
+
 test! { test_parse_body,
         "GET /test HTTP/1.1\r\n",
         "Content-Length: 4\r\n\r\nbody" => |codec, buf| {

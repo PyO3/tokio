@@ -132,6 +132,7 @@ enum ParseHeader {
 
 #[derive(Copy, Clone, Debug)]
 enum ParseStatusLine {
+    Skip(CRLF),
     Method,
     Path,
     Version,
@@ -380,7 +381,7 @@ impl RequestDecoder {
 
     pub fn new() -> RequestDecoder {
         RequestDecoder {
-            start: 0, state: State::Status(ParseStatusLine::Method),
+            start: 0, state: State::Status(ParseStatusLine::Skip(CRLF::CR)),
             meth_pos: 0, meth_end: 0, path_pos: 0, path_end: 0,
 
             request: Request::new(),
@@ -447,6 +448,37 @@ impl Decoder for RequestDecoder {
             match state {
 
             State::Status(status) => match status {
+                // post requests may add extract CRLF after payload
+                ParseStatusLine::Skip(marker) => {
+                    if let Some(ch) = bytes.get_maybe() {
+                        match marker {
+                            CRLF::CR => match ch {
+                                CR => {
+                                    bytes.bump();
+                                    state = State::Status(ParseStatusLine::Skip(CRLF::LF));
+                                    continue
+                                },
+                                LF => {
+                                    bytes.bump();
+                                    state = State::Status(ParseStatusLine::Method);
+                                }
+                                _ => {
+                                    state = State::Status(ParseStatusLine::Method);
+                                }
+                            },
+                            CRLF::LF => {
+                                if ch == LF {
+                                    bytes.bump();
+                                }
+                                state = State::Status(ParseStatusLine::Method);
+                            }
+                        }
+                        self.meth_pos = bytes.pos() as u8;
+                        self.meth_end = self.meth_pos;
+                    } else {
+                        break
+                    }
+                },
                 ParseStatusLine::Method => match parse_token(&mut bytes, SP)? {
                     Status::Complete(l) => {
                         if bytes.pos() > self.max_line_size as usize {
@@ -470,7 +502,7 @@ impl Decoder for RequestDecoder {
                         if bytes.pos() > self.max_line_size as usize  {
                             return Err(Error::LineTooLong);
                         }
-                        self.path_end = self.path_end + l as u16;
+                       self.path_end = self.path_end + l as u16;
                         state = State::Status(ParseStatusLine::Version);
                     }
                     Status::Partial(l) => {
@@ -864,7 +896,7 @@ impl Decoder for RequestDecoder {
                 self.start = 0;
                 self.meth_pos = 0;
                 self.meth_end = 0;
-                self.state = State::Status(ParseStatusLine::Method);
+                self.state = State::Status(ParseStatusLine::Skip(CRLF::CR));
                 return Ok(Some(RequestMessage::Completed))
             }
             }}
