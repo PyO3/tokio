@@ -2,7 +2,7 @@ use std::io;
 use std::ptr;
 use libc::c_void;
 
-use cpython::*;
+use cpython::{self, exc, Python, ToPyObject, PyResult, PyErr};
 use cpython::_detail::ffi;
 use bytes::{Bytes, BytesMut};
 
@@ -15,6 +15,23 @@ py_class!(pub class PyBytes |py| {
 
     def __len__(&self) -> PyResult<usize> {
         Ok(self._bytes(py).len())
+    }
+
+    def __getitem__(&self, key: i32) -> PyResult<cpython::PyBytes> {
+        if key < 0 {
+            Err(PyErr::new::<exc::IndexError, _>(
+                py, "Index out of range".to_py_object(py)))
+        } else {
+            let key = key as usize;
+            let bytes = self._bytes(py);
+
+            if key < bytes.len() {
+                Ok(cpython::PyBytes::new(py, &bytes[key..key+1]))
+            } else {
+                Err(PyErr::new::<exc::IndexError, _>(
+                    py, "Index out of range".to_py_object(py)))
+            }
+        }
     }
 
     def __buffer_get__(&self, view, flags) -> bool {
