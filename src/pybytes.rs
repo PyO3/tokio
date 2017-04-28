@@ -2,9 +2,10 @@ use std::io;
 use std::ptr;
 use libc::c_void;
 
-use cpython::{self, exc, Python, ToPyObject, PyResult, PyErr};
+use cpython::{exc, Python, PyClone,
+              PyResult, PyObject, PySlice, PyErr, PythonObjectWithCheckedDowncast};
 use cpython::_detail::ffi;
-use bytes::{Bytes, BytesMut};
+use bytes::{Bytes, BytesMut, BufMut};
 
 
 //
@@ -17,20 +18,40 @@ py_class!(pub class PyBytes |py| {
         Ok(self._bytes(py).len())
     }
 
-    def __getitem__(&self, key: i32) -> PyResult<cpython::PyBytes> {
-        if key < 0 {
-            Err(PyErr::new::<exc::IndexError, _>(
-                py, "Index out of range".to_py_object(py)))
-        } else {
-            let key = key as usize;
+    def __getitem__(&self, key: PyObject) -> PyResult<PyBytes> {
+        if let Ok(slice) = PySlice::downcast_from(py, key.clone_ref(py)) {
             let bytes = self._bytes(py);
+            let indices = slice.indices(py, bytes.len() as i64)?;
 
-            if key < bytes.len() {
-                Ok(cpython::PyBytes::new(py, &bytes[key..key+1]))
+            let s = if indices.step == 1 {
+                bytes.slice(indices.start as usize, indices.stop as usize)
             } else {
-                Err(PyErr::new::<exc::IndexError, _>(
-                    py, "Index out of range".to_py_object(py)))
+                let mut buf = BytesMut::with_capacity(indices.slicelength as usize);
+
+                let mut idx = indices.start;
+                while idx < indices.stop {
+                    buf.put_u8(bytes[idx as usize]);
+                    idx += indices.step;
+                }
+                buf.freeze()
+            };
+            Ok(PyBytes::new(py, s)?)
+        }
+        else if let Ok(idx) = key.extract::<isize>(py) {
+            if idx < 0 {
+                Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
+            } else {
+                let idx = idx as usize;
+                let bytes = self._bytes(py);
+
+                if idx < bytes.len() {
+                    Ok(PyBytes::new(py, bytes.slice(idx, idx+1))?)
+                } else {
+                    Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
+                }
             }
+        } else {
+            Err(PyErr::new::<exc::TypeError, _>(py, "Index is not supported"))
         }
     }
 

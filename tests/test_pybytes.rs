@@ -6,7 +6,7 @@ extern crate async_tokio;
 
 use cpython::*;
 use bytes::{Bytes, BytesMut};
-use async_tokio::PyBytes;
+use async_tokio::{PyBytes, PyLogger};
 
 
 macro_rules! py_run {
@@ -46,4 +46,9 @@ fn test_pybytes() {
     // Fix in https://github.com/python/cpython/pull/1334
     //py.run("import json; assert json.loads(pb) == {\"test\": \"value\"}",
     //  None, Some(&d)).unwrap();
+
+    py.run("assert str(pb[2:6], encoding=\"utf-8\") == 'test'", None, Some(&d))
+        .log_error(py, "assert error").unwrap();
+    py.run("assert str(pb[2:6:2], encoding=\"utf-8\") == 'ts'", None, Some(&d))
+        .log_error(py, "assert error").unwrap()
 }

@@ -449,7 +449,7 @@ py_class!(pub class RawHeaders |py| {
 
     def __contains__(&self, key: PyString) -> PyResult<bool> {
         let key = key.to_string(py)?;
-        if let Some(val) = self.headers(py).get(key.borrow()) {
+        if let Some(_) = self.headers(py).get(key.borrow()) {
             Ok(true)
         } else {
             Ok(false)
@@ -487,7 +487,7 @@ impl Stream for StreamReader {
                     self.poll()
                 },
                 Ok(Async::NotReady) => Ok(Async::NotReady),
-                Err(e) => Err(())
+                Err(_) => Err(())
             }
         }
     }
