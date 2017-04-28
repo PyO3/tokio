@@ -7,6 +7,7 @@ use cpython::{exc, Python, PyClone,
 use cpython::_detail::ffi;
 use bytes::{Bytes, BytesMut, BufMut};
 
+use pyunsafe::GIL;
 
 //
 // Buffer interface for Bytes
@@ -19,6 +20,7 @@ py_class!(pub class PyBytes |py| {
     }
 
     def __getitem__(&self, key: PyObject) -> PyResult<PyBytes> {
+        // access by slice
         if let Ok(slice) = PySlice::downcast_from(py, key.clone_ref(py)) {
             let bytes = self._bytes(py);
             let indices = slice.indices(py, bytes.len() as i64)?;
@@ -37,6 +39,7 @@ py_class!(pub class PyBytes |py| {
             };
             Ok(PyBytes::new(py, s)?)
         }
+        // access by index
         else if let Ok(idx) = key.extract::<isize>(py) {
             if idx < 0 {
                 Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
@@ -108,7 +111,6 @@ py_class!(pub class PyBytes |py| {
 
         true
     }
-
 });
 
 
@@ -124,7 +126,7 @@ impl PyBytes {
             Ok(bytes) => Ok(bytes),
             Err(_) =>
                 Err(io::Error::new(
-                    io::ErrorKind::Other, "Can not create TokioBytes instance")),
+                    io::ErrorKind::Other, "Can not create PyBytes instance")),
         }
     }
 
@@ -132,8 +134,8 @@ impl PyBytes {
         dst.extend(self._bytes(py).as_ref())
     }
 
-    pub fn len(&self, py: Python) -> usize {
-        self._bytes(py).len()
+    pub fn len(&self) -> usize {
+        self._bytes(GIL::python()).len()
     }
 
     pub fn slice_to(&self, py: Python, end: usize) -> PyResult<PyBytes> {
@@ -145,5 +147,4 @@ impl PyBytes {
         let bytes = self._bytes(py).slice_from(begin);
         PyBytes::create_instance(py, bytes)
     }
-
 }

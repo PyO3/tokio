@@ -226,7 +226,7 @@ py_class!(pub class StreamReader |py| {
                 let mut size = 0;
                 for chunk in chunks.iter() {
                     if let &Ok(ref chunk) = chunk {
-                        size += chunk.len(py);
+                        size += chunk.len();
                     }
                 }
 
@@ -349,7 +349,7 @@ impl StreamReader {
 
     pub fn feed_data(&self, py: Python, bytes: pybytes::PyBytes) {
         let total_bytes = self._total_bytes(py);
-        total_bytes.set(total_bytes.get() + bytes.len(py));
+        total_bytes.set(total_bytes.get() + bytes.len());
         self._buffer(py).borrow_mut().push_back(bytes);
 
         if let Some(fut) = self._waiter(py).borrow_mut().take() {
@@ -362,14 +362,14 @@ impl StreamReader {
         let mut buffer = self._buffer(py).borrow_mut();
 
         let first_chunk = buffer.pop_front().unwrap();
-        let result = if n != -1 && first_chunk.len(py) > size {
+        let result = if n != -1 && first_chunk.len() > size {
             buffer.push_front(first_chunk.slice_from(py, size)?);
             first_chunk.slice_to(py, size)?
         } else {
             first_chunk
         };
 
-        self._size(py).set(self._size(py).get() - result.len(py));
+        self._size(py).set(self._size(py).get() - result.len());
         Ok(result)
     }
 
@@ -381,15 +381,15 @@ impl StreamReader {
 
         loop {
             if let Some(chunk) = buffer.pop_front() {
-                let result = if n != -1 && chunk.len(py) > counter {
+                let result = if n != -1 && chunk.len() > counter {
                     buffer.push_front(chunk.slice_from(py, counter)?);
                     chunk.slice_to(py, counter)?
                 } else {
                     chunk
                 };
-                size += result.len(py);
+                size += result.len();
                 if counter > 0 {
-                    counter = counter - result.len(py)
+                    counter = counter - result.len()
                 } else {
                     break
                 }
