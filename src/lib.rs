@@ -53,7 +53,7 @@ py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
 pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<RemoteTokioEventLoop>(py)?;
-    //m.add_class::<pyfuture::PyFuture>(py)?;
+    m.add_class::<pyfuture::PyFuture>(py)?;
     m.add_class::<handle::TokioHandle>(py)?;
     m.add_class::<handle::TokioTimerHandle>(py)?;
     m.add_class::<server::TokioServer>(py)?;
