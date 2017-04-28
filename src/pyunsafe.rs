@@ -15,6 +15,8 @@ unsafe impl Send for GIL {}
 impl GIL {
 
     /// Retrieves the marker type that proves that the GIL was acquired.
+    /// This method does not acquire GIL, you have to be sure that your
+    /// interfere with real python gil
     #[inline]
     pub fn python<'p>() -> Python<'p> {
         unsafe { Python::assume_gil_acquired() }

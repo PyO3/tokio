@@ -140,8 +140,7 @@ impl _PyFuture {
                     None => match self.result {
                         Some(ref res) => Ok(res.clone_ref(py)),
                         None => Err(
-                            PyErr::new::<exc::RuntimeError, _>(
-                                py, "Future result is not set"))
+                            PyErr::new::<exc::RuntimeError, _>(py, "Future result is not set"))
                     }
                 }
             }

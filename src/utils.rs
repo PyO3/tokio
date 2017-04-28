@@ -233,11 +233,11 @@ impl ToPyErr for LookupError {
         match self {
             &LookupError::IOError(ref err) => err.to_pyerr(py),
             &LookupError::Other(ref err_str) =>
-                PyErr::new::<exc::RuntimeError, _>(py, err_str.to_py_object(py)),
+                PyErr::new::<exc::RuntimeError, _>(py, err_str),
             &LookupError::NulError(_) =>
-                PyErr::new::<exc::RuntimeError, _>(py, "nil pointer".to_py_object(py)),
+                PyErr::new::<exc::RuntimeError, _>(py, "nil pointer"),
             &LookupError::Generic =>
-                PyErr::new::<exc::RuntimeError, _>(py, "generic error".to_py_object(py)),
+                PyErr::new::<exc::RuntimeError, _>(py, "generic error"),
         }
     }
 }
@@ -249,7 +249,7 @@ impl ToPyErr for LookupError {
 pub fn check_min_length(py: Python, args: &PyTuple, len: usize) -> PyResult<()> {
     if args.len(py) < len {
         Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("function takes at least {} arguments", len).to_py_object(py)))
+            py, format!("function takes at least {} arguments", len)))
     } else {
         Ok(())
     }
@@ -271,7 +271,7 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Durati
         }
     } else {
         Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type", name).to_py_object(py)))
+            py, format!("'{}' must be int of float type", name)))
     }
 }
 
@@ -290,6 +290,6 @@ pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
         }
     } else {
         Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type", name).to_py_object(py)))
+            py, format!("'{}' must be int of float type", name)))
     }
 }

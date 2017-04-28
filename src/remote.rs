@@ -41,7 +41,7 @@ pub fn spawn_event_loop(py: Python, name: &PyString) -> PyResult<RemoteTokioEven
         Some((evloop, handle)) =>
             RemoteTokioEventLoop::create_instance(py, evloop, handle),
         None => Err(PyErr::new::<exc::RuntimeError, _>(
-            py, "Can not start tokio evernt loop".to_py_object(py)))
+            py, "Can not start tokio evernt loop"))
     }
 }
 

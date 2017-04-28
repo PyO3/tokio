@@ -35,7 +35,7 @@ pub fn no_loop_exc(py: Python) -> PyErr {
     PyErr::new::<exc::RuntimeError, _>(
         py,
         format!("There is no current event loop in thread {}.",
-                cur.name().unwrap_or("unknown")).to_py_object(py))
+                cur.name().unwrap_or("unknown")))
 }
 
 
@@ -474,7 +474,7 @@ py_class!(pub class TokioEventLoop |py| {
         match (&server_hostname, &ssl) {
             (&Some(_), &None) =>
                 return Err(PyErr::new::<exc::ValueError, _>(
-                    py, "server_hostname is only meaningful with ssl".to_py_object(py))),
+                    py, "server_hostname is only meaningful with ssl")),
             (&None, &Some(_)) => {
                 // Use host as default for server_hostname.  It is an error
                 // if host is empty or not set, e.g. when an
@@ -488,7 +488,7 @@ py_class!(pub class TokioEventLoop |py| {
                 // don't judge it here.)
                 if let None = host {
                     return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "You must set server_hostname when using ssl without a host".to_py_object(py)));
+                        py, "You must set server_hostname when using ssl without a host"));
                 }
             }
             // server_hostname = host
@@ -522,15 +522,13 @@ py_class!(pub class TokioEventLoop |py| {
                         py, PyString::new(py, "sock is not supported yet")))
                 } else {
                     Err(PyErr::new::<exc::ValueError, _>(
-                        py, "host and port was not specified and no sock specified"
-                            .to_py_object(py)))
+                        py, "host and port was not specified and no sock specified"))
                 }
             },
             _ => {
                 if let Some(_) = sock {
                     return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "host/port and sock can not be specified at the same time"
-                            .to_py_object(py)))
+                        py, "host/port and sock can not be specified at the same time"))
                 }
 
                 // exctract hostname
@@ -609,8 +607,7 @@ py_class!(pub class TokioEventLoop |py| {
     def set_exception_handler(&self, handler: PyObject) -> PyResult<PyObject> {
         if !handler.is_callable(py) {
             Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("A callable object or None is expected, got {:?}",
-                            handler).to_py_object(py)))
+                py, format!("A callable object or None is expected, got {:?}", handler)))
         } else {
             *self._exception_handler(py).borrow_mut() = handler;
             Ok(py.None())
