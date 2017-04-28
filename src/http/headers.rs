@@ -3,7 +3,6 @@
 
 use std;
 use std::ops::Range;
-use std::cell::RefCell;
 use std::hash::Hasher;
 use std::ascii::AsciiExt;
 use std::collections::HashMap;

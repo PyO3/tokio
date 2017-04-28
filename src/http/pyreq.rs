@@ -109,7 +109,7 @@ py_class!(pub class PyRequest |py| {
         }
     }
 
-    def _prepare_hook(&self, resp: &PyObject) -> PyResult<PyObject> {
+    def _prepare_hook(&self, _resp: &PyObject) -> PyResult<PyObject> {
         Ok(PyFuture::done_fut(py, self.handle(py).clone(), py.None())?.into_object())
     }
 
@@ -348,7 +348,7 @@ impl StreamReader {
     }
 
     pub fn feed_data(&self, py: Python, bytes: pybytes::PyBytes) {
-        let mut total_bytes = self._total_bytes(py);
+        let total_bytes = self._total_bytes(py);
         total_bytes.set(total_bytes.get() + bytes.len(py));
         self._buffer(py).borrow_mut().push_back(bytes);
 
@@ -361,7 +361,7 @@ impl StreamReader {
         let size = if n < 0 { 0 } else { n as usize };
         let mut buffer = self._buffer(py).borrow_mut();
 
-        let mut first_chunk = buffer.pop_front().unwrap();
+        let first_chunk = buffer.pop_front().unwrap();
         let result = if n != -1 && first_chunk.len(py) > size {
             buffer.push_front(first_chunk.slice_from(py, size)?);
             first_chunk.slice_to(py, size)?
@@ -564,7 +564,7 @@ py_class!(pub class PayloadWriter |py| {
         Ok(py.None())
     }
 
-    def write(&self, chunk: PyBytes, drain: bool = true) -> PyResult<PyObject> {
+    def write(&self, chunk: PyBytes, _drain: bool = true) -> PyResult<PyObject> {
         self.send_maybe(py, EncoderMessage::PyBytes(chunk));
         Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
     }
@@ -612,7 +612,7 @@ py_class!(pub class PayloadWriter |py| {
         Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
     }
 
-    def drain(&self, last: bool = false) -> PyResult<PyObject> {
+    def drain(&self, _last: bool = false) -> PyResult<PyObject> {
         Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
     }
 

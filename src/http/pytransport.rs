@@ -160,7 +160,7 @@ impl PyHttpTransport {
                 });
                 return Ok(Some(recv));
 
-                let py = GIL::python();
+                /*let py = GIL::python();
                 let count = self.req_count(py);
                 count.set(count.get() + 1);
 
@@ -182,7 +182,7 @@ impl PyHttpTransport {
                     //println!("wait");
                     self.reqs(py).borrow_mut().push_back((msg, Sender::new(sender)));
                 }
-                return Ok(Some(recv));
+                return Ok(Some(recv));*/
             },
             http::RequestMessage::Body(chunk) => {
                 with_py(|py| {
