@@ -21,7 +21,6 @@ pub struct WorkingClasses {
     pub Exception: PyType,
     pub BaseException: PyType,
     pub StopIteration: PyType,
-    pub OSError: PyType,
 
     pub SocketTimeout: PyType,
 
@@ -108,8 +107,6 @@ lazy_static! {
                 py, &builtins.get(py, "Exception").unwrap()).unwrap(),
             BaseException: PyType::extract(
                 py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
-            OSError: PyType::extract(
-                py, &builtins.get(py, "OSError").unwrap()).unwrap(),
 
             BrokenPipeError: PyType::extract(
                 py, &builtins.get(py, "BrokenPipeError").unwrap_or(
@@ -198,13 +195,17 @@ pub trait ToPyErr {
 impl ToPyErr for io::Error {
 
     fn to_pyerr(&self, py: Python) -> PyErr {
+        let tp;
         let exc_type = match self.kind() {
             io::ErrorKind::BrokenPipe => &Classes.BrokenPipeError,
             io::ErrorKind::ConnectionRefused => &Classes.ConnectionRefusedError,
             io::ErrorKind::ConnectionAborted => &Classes.ConnectionAbortedError,
             io::ErrorKind::ConnectionReset => &Classes.ConnectionResetError,
             io::ErrorKind::Interrupted => &Classes.InterruptedError,
-            _ => &Classes.OSError,
+            _ => {
+                tp = py.get_type::<exc::OSError>();
+                &tp
+            }
         };
 
         let errno = self.raw_os_error().unwrap_or(0);
@@ -236,19 +237,6 @@ impl ToPyErr for LookupError {
             &LookupError::Generic =>
                 PyErr::new::<exc::RuntimeError, _>(py, "generic error"),
         }
-    }
-}
-
-
-//
-// Check function arguments length
-//
-pub fn check_min_length(py: Python, args: &PyTuple, len: usize) -> PyResult<()> {
-    if args.len(py) < len {
-        Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("function takes at least {} arguments", len)))
-    } else {
-        Ok(())
     }
 }
 

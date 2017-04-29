@@ -67,7 +67,7 @@ py_class!(pub class PyTask |py| {
     }
 
     //
-    // some ugly api called incapsulaton
+    // asyncio.gather() uses attribute
     //
     property _result {
         get(&slf) -> PyResult<PyObject> {
@@ -88,7 +88,7 @@ py_class!(pub class PyTask |py| {
     }
 
     //
-    // some ugly api called incapsulaton
+    // asyncio.gather() uses attribute
     //
     property _exception {
         get(&slf) -> PyResult<PyObject> {
@@ -113,8 +113,8 @@ py_class!(pub class PyTask |py| {
     //
     // Returns the number of callbacks removed.
     //
-    def remove_done_callback(&self, _f: PyObject) -> PyResult<u32> {
-        Ok(0)
+    def remove_done_callback(&self, f: PyObject) -> PyResult<u32> {
+        self._fut(py).borrow_mut().remove_done_callback(py, f)
     }
 
     //
@@ -309,8 +309,8 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
-        None => coro.call_method(py, "send", PyTuple::new(py, &[py.None()]), None),
-        Some(exc) => coro.call_method(py, "throw", PyTuple::new(py, &[exc]), None),
+        None => coro.call_method(py, "send", (py.None(),), None),
+        Some(exc) => coro.call_method(py, "throw", (exc,), None),
     };
 
     // println!("result: {:?}", res);
@@ -384,7 +384,6 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                     task_step(py, task2, coro, None, retry+1);
                 } else {
                     task._handle(py).spawn_fn(move|| {
-                        // get python GIL
                         let gil = Python::acquire_gil();
                         let py = gil.python();
 

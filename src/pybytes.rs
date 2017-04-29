@@ -26,8 +26,10 @@ py_class!(pub class PyBytes |py| {
             let indices = slice.indices(py, bytes.len() as i64)?;
 
             let s = if indices.step == 1 {
+                // continuous chunk of memory
                 bytes.slice(indices.start as usize, indices.stop as usize)
             } else {
+                // copy every "step" byte
                 let mut buf = BytesMut::with_capacity(indices.slicelength as usize);
 
                 let mut idx = indices.start;

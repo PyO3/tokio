@@ -21,7 +21,7 @@ use http;
 use ::{PyFuture, PyTask};
 use server;
 use transport;
-use utils::{self, with_py, Classes, ToPyErr};
+use utils::{self, with_py, ToPyErr};
 use pyunsafe::Handle;
 
 
@@ -47,7 +47,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             py, core.id(),
             Handle::new(core.handle()),
             Instant::now(),
-            addrinfo::start_workers(5),
+            addrinfo::start_workers(3),
             RefCell::new(None),
             RefCell::new(py.None()),
             Cell::new(false),
@@ -70,9 +70,8 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
 
     if !check {
         Some(PyErr::new::<exc::RuntimeError, _>(
-            py, PyString::new(
-                py, "Non-thread-safe operation invoked on an event loop \
-                     other than the current one")))
+            py, "Non-thread-safe operation invoked on an event loop \
+                 other than the current one"))
     } else {
         None
     }
@@ -165,21 +164,24 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_soon(&self, *args, **kwargs) -> PyResult<handle::TokioHandle> {
+    def call_soon(&self, *args, **kwargs) -> PyResult<handle::PyHandle> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        let _ = utils::check_min_length(py, args, 1)?;
+        if args.len(py) < 1 {
+            Err(PyErr::new::<exc::TypeError, _>(
+                py, format!("function takes at least {} arguments", 1)))
+        } else {
+            // get params
+            let callback = args.get_item(py, 0);
 
-        // get params
-        let callback = args.get_item(py, 0);
-
-        handle::call_soon(
-            py, &self.handle(py),
-            callback, PyTuple::new(py, &args.as_slice(py)[1..]))
+            handle::call_soon(
+                py, &self.handle(py),
+                callback, PyTuple::new(py, &args.as_slice(py)[1..]))
+        }
     }
 
     //
@@ -200,23 +202,26 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_later(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+    def call_later(&self, *args, **kwargs) -> PyResult<handle::PyTimerHandle> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        let _ = utils::check_min_length(py, args, 2)?;
+        if args.len(py) < 1 {
+            Err(PyErr::new::<exc::TypeError, _>(
+                py, format!("function takes at least {} arguments", 1)))
+        } else {
+            // get params
+            let callback = args.get_item(py, 1);
+            let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
+            let when = Duration::from_millis(delay);
 
-        // get params
-        let callback = args.get_item(py, 1);
-        let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
-        let when = Duration::from_millis(delay);
-
-        handle::call_later(
-            py, &self.handle(py),
-            when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            handle::call_later(
+                py, &self.handle(py),
+                when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+        }
     }
 
     //
@@ -226,24 +231,27 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Absolute time corresponds to the event loop's time() method.
     //
-    def call_at(&self, *args, **kwargs) -> PyResult<handle::TokioTimerHandle> {
+    def call_at(&self, *args, **kwargs) -> PyResult<handle::PyTimerHandle> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
             }
         }
 
-        let _ = utils::check_min_length(py, args, 2)?;
+        if args.len(py) < 2 {
+            Err(PyErr::new::<exc::TypeError, _>(
+                py, format!("function takes at least {} arguments", 2)))
+        } else {
+            // get params
+            let callback = args.get_item(py, 1);
 
-        // get params
-        let callback = args.get_item(py, 1);
+            // calculate delay
+            let when = utils::parse_seconds(py, "when", args.get_item(py, 0))?;
+            let time = when - self.instant(py).elapsed();
 
-        // calculate delay
-        let when = utils::parse_seconds(py, "when", args.get_item(py, 0))?;
-        let time = when - self.instant(py).elapsed();
-
-        handle::call_later(
-            py, &self.handle(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            handle::call_later(
+                py, &self.handle(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+        }
     }
 
     //
@@ -289,6 +297,7 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
+        // drop CORE
         CORE.with(|cell| {
             cell.borrow_mut().take()
         });
@@ -300,34 +309,9 @@ py_class!(pub class TokioEventLoop |py| {
     // item = (family, type, proto, canonname, sockaddr)
     // sockaddr(IPV4) = (address, port)
     // sockaddr(IPV6) = (address, port, flow info, scope id)
-    def getaddrinfo(&self, *args, **kwargs) -> PyResult<PyFuture> {
-        let _ = utils::check_min_length(py, args, 2)?;
-
-        // get params
-        let host = PyString::downcast_from(py, args.get_item(py, 0))?;
-        let port: u16 = args.get_item(py, 1).extract(py)?;
-
-        let family: i32;
-        let socktype: i32;
-        // let proto: i32;
-        let flags: i32;
-
-        if let Some(kwargs) = kwargs {
-            family = kwargs.get_item(py, "family")
-                .map(|inst| inst.extract(py)).unwrap_or(Ok(0))?;
-            socktype = kwargs.get_item(py, "family")
-                .map(|inst| inst.extract(py)).unwrap_or(Ok(0))?;
-            // proto = kwargs.get_item(py, "proto")
-            //    .map(|inst| inst.extract(py)).unwrap_or(Ok(0))?;
-            flags = kwargs.get_item(py, "flags")
-                .map(|inst| inst.extract(py)).unwrap_or(Ok(0))?;
-        } else {
-            family = 0;
-            socktype = 0;
-            // proto = 0;
-            flags = 0;
-        }
-
+    def getaddrinfo(&self, host: PyString, port: u16,
+                    family: i32=0, socktype: i32 = 0,
+                    proto: i32 = 0, flags: i32 = 0) -> PyResult<PyFuture> {
         // result future
         let res = PyFuture::new(py, self.handle(py).clone())?;
 
@@ -335,12 +319,13 @@ py_class!(pub class TokioEventLoop |py| {
         let fut = res.clone_ref(py);
         let fut_err = res.clone_ref(py);
 
-        // lookup process
+        // lookup process future
         let lookup = addrinfo::lookup(
             &self._lookup(py),
             String::from(host.to_string(py)?.as_ref()),
             port, family, flags, addrinfo::SocketType::from_int(socktype));
 
+        // convert addr info to python comaptible  values
         let process = lookup.and_then(move |result| {
             with_py(|py| match result {
                 Err(ref err) => {
@@ -352,16 +337,11 @@ py_class!(pub class TokioEventLoop |py| {
                     for info in addrs {
                         let addr = match info.sockaddr {
                             net::SocketAddr::V4(addr) => {
-                                (format!("{}", addr.ip()).to_py_object(py),
-                                 addr.port().to_py_object(py))
-                                    .to_py_object(py)
+                                (format!("{}", addr.ip()), addr.port()).to_py_tuple(py)
                             }
                             net::SocketAddr::V6(addr) => {
-                                (format!("{}", addr.ip()).to_py_object(py),
-                                 addr.port().to_py_object(py),
-                                 addr.flowinfo().to_py_object(py),
-                                 addr.scope_id().to_py_object(py),)
-                                    .to_py_object(py)
+                                (format!("{}", addr.ip()),
+                                 addr.port(), addr.flowinfo(), addr.scope_id(),).to_py_tuple(py)
                             },
                         };
 
@@ -370,11 +350,10 @@ py_class!(pub class TokioEventLoop |py| {
                             None => PyString::new(py, ""),
                         };
 
-                        let item = (info.family.to_int().to_py_object(py),
-                                    info.socktype.to_int().to_py_object(py),
-                                    info.protocol.to_int().to_py_object(py),
-                                    cname,
-                                    addr).to_py_object(py).into_object();
+                        let item = (info.family.to_int(),
+                                    info.socktype.to_int(),
+                                    info.protocol.to_int(),
+                                    cname, addr).to_py_tuple(py).into_object();
                         list.insert_item(py, list.len(py), item);
                     }
                     println!("addrinfo: {}", list.clone_ref(py).into_object());
@@ -499,13 +478,10 @@ py_class!(pub class TokioEventLoop |py| {
         let ctx =
             if let Some(ssl) = ssl {
                 match TlsConnector::builder() {
-                    Err(err) =>
-                        return Err(PyErr::from_instance(
-                            py, Classes.OSError.call(py, err.description(), None)?)),
+                    Err(err) => return Err(PyErr::new::<exc::OSError, _>(py, err.description())),
                     Ok(builder) => match builder.build() {
-                        Err(err) =>
-                            return Err(PyErr::from_instance(
-                                py, Classes.OSError.call(py, err.description(), None)?)),
+                        Err(err) => return Err(
+                            PyErr::new::<exc::OSError, _>(py, err.description())),
                         Ok(ctx) => Some(ctx)
                     },
                 }
@@ -564,13 +540,9 @@ py_class!(pub class TokioEventLoop |py| {
                             },
                             Ok(addrs) => {
                                 if addrs.is_empty() {
-                                    let err = Classes.OSError.call(
-                                        py, "getaddrinfo() returned empty list", None);
-
-                                    let err = match err {
-                                        Ok(err) => Err(PyErr::from_instance(py, err)),
-                                        Err(err) => Err(err)
-                                    };
+                                    let err = Err(
+                                        PyErr::new::<exc::OSError, _>(
+                                            py, "getaddrinfo() returned empty list"));
                                     let _ = fut_conn.set(py, err);
                                     future::ok(())
                                 } else {

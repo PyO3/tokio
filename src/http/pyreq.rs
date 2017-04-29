@@ -183,7 +183,7 @@ py_class!(pub class StreamReader |py| {
         if self._eof(py).get() && self._buffer(py).borrow().len() == 0 {
             Ok(py.True().into_object())
         } else {
-            Ok(py.True().into_object())
+            Ok(py.False().into_object())
         }
     }
 
@@ -573,7 +573,7 @@ py_class!(pub class PayloadWriter |py| {
     // status_line - string with \r\n
     // headers = dict like object
     def write_headers(&self, status_line: &PyString, headers: &PyObject) -> PyResult<PyObject> {
-        let mut buf = BytesMut::with_capacity(2048);
+        let mut buf = BytesMut::with_capacity(512);
 
         buf.extend(status_line.to_string(py)?.as_bytes());
 
@@ -586,12 +586,20 @@ py_class!(pub class PayloadWriter |py| {
                 if item.len(py) < 2 {
                     return Err(PyErr::new::<exc::ValueError, _>(py, py.None()));
                 }
+
+                // encode name
                 let key = PyString::downcast_from(py, item.get_item(py, 0))?;
                 buf.extend(key.to_string(py)?.as_bytes());
                 buf.extend(SEP);
 
-                let value = PyString::downcast_from(py, item.get_item(py, 1))?;
-                buf.extend(value.to_string(py)?.as_bytes());
+                // encode value, get string or convert to string
+                let value = item.get_item(py, 1);
+                if let Ok(value) = PyString::downcast_from(py, value.clone_ref(py)) {
+                    buf.extend(value.to_string(py)?.as_bytes());
+                } else {
+                    buf.extend(format!("{}", value).as_bytes());
+                }
+
                 buf.extend(END);
             } else {
                 break

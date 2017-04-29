@@ -82,10 +82,10 @@ pub fn create_server(py: Python, factory: PyObject, handle: pyunsafe::Handle,
 
 py_class!(pub class TokioServer |py| {
     data handle: pyunsafe::Handle;
-    data stop_handles: RefCell<Option<Vec<pyunsafe::OneshotSender<()>>>>;
+    data stop_handle: RefCell<Option<Vec<pyunsafe::OneshotSender<()>>>>;
 
     def close(&self) -> PyResult<PyObject> {
-        let handles = self.stop_handles(py).borrow_mut().take();
+        let handles = self.stop_handle(py).borrow_mut().take();
         if let Some(handles) = handles {
             for h in handles {
                 let _ = h.send(());
@@ -111,8 +111,7 @@ struct Server {
     handle: pyunsafe::Handle,
 }
 
-impl Server
-{
+impl Server {
 
     //
     // Start accepting incoming connections

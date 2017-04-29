@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
-use cpython::*;
 
+use cpython::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
@@ -10,7 +10,7 @@ use pyunsafe::Handle;
 use utils::{with_py, PyLogger};
 
 
-py_class!(pub class TokioHandle |py| {
+py_class!(pub class PyHandle |py| {
     data cancelled: Cell<bool>;
 
     def cancel(&self) -> PyResult<PyObject> {
@@ -19,8 +19,7 @@ py_class!(pub class TokioHandle |py| {
     }
 });
 
-
-py_class!(pub class TokioTimerHandle |py| {
+py_class!(pub class PyTimerHandle |py| {
     data cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
 
     def cancel(&self) -> PyResult<PyObject> {
@@ -33,8 +32,8 @@ py_class!(pub class TokioTimerHandle |py| {
 
 
 pub fn call_soon(py: Python, h: &Handle,
-                 callback: PyObject, args: PyTuple) -> PyResult<TokioHandle> {
-    let handle = TokioHandle::create_instance(py, Cell::new(false))?;
+                 callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+    let handle = PyHandle::create_instance(py, Cell::new(false))?;
     let handle_ref = handle.clone_ref(py);
 
     // schedule work
@@ -45,9 +44,6 @@ pub fn call_soon(py: Python, h: &Handle,
                 callback.call(py, args, None)
                     .into_log(py, "call_soon callback error");
             }
-
-            // drop ref to handle
-            handle_ref.release_ref(py);
         });
 
         future::ok(())
@@ -58,12 +54,12 @@ pub fn call_soon(py: Python, h: &Handle,
 
 
 pub fn call_later(py: Python, h: &Handle, dur: Duration,
-                  callback: PyObject, args: PyTuple) -> PyResult<TokioTimerHandle> {
+                  callback: PyObject, args: PyTuple) -> PyResult<PyTimerHandle> {
 
     // python TimerHandle
     let (cancel, rx) = oneshot::channel::<()>();
 
-    let handle = TokioTimerHandle::create_instance(py, RefCell::new(Some(cancel)))?;
+    let handle = PyTimerHandle::create_instance(py, RefCell::new(Some(cancel)))?;
 
     // we need to hold reference, otherwise python will release handle object
     let handle_ref = handle.clone_ref(py);

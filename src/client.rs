@@ -9,7 +9,7 @@ use tokio_tls::TlsConnectorExt;
 
 use ::PyFuture;
 use addrinfo;
-use utils::{Classes, ToPyErr, with_py};
+use utils::{ToPyErr, with_py};
 use pyunsafe;
 use transport::tcp_transport_factory;
 
@@ -90,8 +90,7 @@ impl Future for Connector {
                     if self.addr_no >= self.addrs.len() {
                         // no more addresses
                         return with_py(|py| {
-                            Err(PyErr::from_instance(
-                                py, Classes.OSError.call(py, "Multiple exceptions", None)?))
+                            Err(PyErr::new::<exc::OSError, _>(py, "Multiple exceptions"))
                         })
                     } else {
                         let info = &self.addrs[self.addr_no];

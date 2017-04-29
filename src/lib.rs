@@ -33,7 +33,7 @@ pub use utils::{Classes, PyLogger, ToPyErr, with_py};
 pub use pybytes::PyBytes;
 pub use pyfuture::PyFuture;
 pub use pytask::PyTask;
-pub use handle::{TokioHandle, TokioTimerHandle};
+pub use handle::{PyHandle, PyTimerHandle};
 pub use event_loop::{TokioEventLoop, new_event_loop};
 pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
 pub use server::create_server;
@@ -54,12 +54,12 @@ pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::
     m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<RemoteTokioEventLoop>(py)?;
     m.add_class::<pyfuture::PyFuture>(py)?;
-    m.add_class::<handle::TokioHandle>(py)?;
-    m.add_class::<handle::TokioTimerHandle>(py)?;
+    m.add_class::<handle::PyHandle>(py)?;
+    m.add_class::<handle::PyTimerHandle>(py)?;
     m.add_class::<server::TokioServer>(py)?;
 
     // touch classes
-    let _ = Classes.OSError;
+    let _ = Classes.Exception;
 
     Ok(())
 }

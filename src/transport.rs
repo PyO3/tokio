@@ -1,6 +1,3 @@
-#![allow(unused_variables)]
-#![allow(dead_code)]
-
 use std::io;
 use std::cell::RefCell;
 use std::net::SocketAddr;
@@ -80,7 +77,6 @@ py_class!(pub class PyTcpTransport |py| {
     // write bytes to transport
     //
     def write(&self, data: PyBytes) -> PyResult<PyObject> {
-        //let bytes = Bytes::from(data.data(py));
         let _ = self._transport(py).send(TcpTransportMessage::Bytes(data));
         Ok(py.None())
     }
@@ -143,21 +139,16 @@ impl PyTcpTransport {
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
-                    with_py(|py| {
-                        let e = Classes.SocketTimeout.call(
-                            py, NoArgs, None).unwrap();
+                    let e = Classes.SocketTimeout.call(py, NoArgs, None).unwrap();
 
-                        self._connection_lost(py).call(py, (e,), None)
-                            .into_log(py, "connection_lost error");
-                    });
+                    self._connection_lost(py).call(py, (e,), None)
+                        .into_log(py, "connection_lost error");
                 },
                 _ => {
                     trace!("Protocol.connection_lost(err): {:?}", err);
-                    with_py(|py| {
-                        let mut e = err.to_pyerr(py);
-                        self._connection_lost(py).call(py, (e.instance(py),), None)
-                            .into_log(py, "connection_lost error");
-                    });
+                    let mut e = err.to_pyerr(py);
+                    self._connection_lost(py).call(py, (e.instance(py),), None)
+                        .into_log(py, "connection_lost error");
                 }
             }
         });
@@ -167,8 +158,7 @@ impl PyTcpTransport {
         with_py(|py| {
             let _ = pybytes::PyBytes::new(py, bytes)
                 .map_err(|e| e.into_log(py, "can not create PyBytes"))
-                .map(|bytes|
-                     self._data_received(py).call(py, (bytes,), None)
+                .map(|bytes| self._data_received(py).call(py, (bytes,), None)
                      .into_log(py, "data_received error"));
         });
     }
@@ -181,7 +171,6 @@ impl PyTcpTransport {
             None => (),
         });
     }
-    
 }
 
 

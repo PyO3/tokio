@@ -212,6 +212,15 @@ impl _PyFuture {
     }
 
     //
+    // Remove all instances of a callback from the "call when done" list.
+    //
+    // Returns the number of callbacks removed.
+    //
+    pub fn remove_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<u32> {
+        unimplemented!()
+    }
+
+    //
     // Mark the future done and set its result.
     //
     pub fn set(&mut self, py: Python, result: PyResult<PyObject>, sender: PyObject) -> bool {
@@ -374,7 +383,6 @@ impl future::Future for _PyFuture {
     }
 }
 
-
 py_class!(pub class PyFuture |py| {
     data _fut: cell::RefCell<_PyFuture>;
 
@@ -417,7 +425,7 @@ py_class!(pub class PyFuture |py| {
     }
 
     //
-    // some ugly api called incapsulaton
+    // asyncio.gather() uses protected attribute
     //
     property _result {
         get(&slf) -> PyResult<PyObject> {
@@ -438,7 +446,7 @@ py_class!(pub class PyFuture |py| {
     }
 
     //
-    // some ugly api called incapsulaton
+    // asyncio.gather() uses protected attribute
     //
     property _exception {
         get(&slf) -> PyResult<PyObject> {
@@ -463,8 +471,8 @@ py_class!(pub class PyFuture |py| {
     //
     // Returns the number of callbacks removed.
     //
-    def remove_done_callback(&self, _f: PyObject) -> PyResult<u32> {
-        Ok(0)
+    def remove_done_callback(&self, f: PyObject) -> PyResult<u32> {
+        self._fut(py).borrow_mut().remove_done_callback(py, f)
     }
 
     //
