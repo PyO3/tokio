@@ -90,9 +90,8 @@ impl Future for Connector {
                     if self.addr_no >= self.addrs.len() {
                         // no more addresses
                         return with_py(|py| {
-                            Err(PyErr::new_lazy_init(
-                                Classes.OSError.clone_ref(py),
-                                Some("Multiple exceptions".to_py_object(py).into_object())))
+                            Err(PyErr::from_instance(
+                                py, Classes.OSError.call(py, "Multiple exceptions", None)?))
                         })
                     } else {
                         let info = &self.addrs[self.addr_no];

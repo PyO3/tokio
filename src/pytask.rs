@@ -247,9 +247,7 @@ py_class!(pub class PyTaskIter |py| {
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
-            Err(PyErr::new_lazy_init(
-                Classes.StopIteration.clone_ref(py),
-                Some(PyTuple::new(py, &[res]).into_object())))
+            Err(PyErr::new::<exc::StopIteration, _>(py, res))
         }
     }
 
@@ -268,7 +266,7 @@ py_class!(pub class PyTaskIter |py| {
             if let Ok(tp) = PyType::downcast_from(py, tp) {
                 PyErr::new_lazy_init(tp, val).restore(py);
             } else {
-                PyErr::new_lazy_init(Classes.TypeError.clone_ref(py), None).restore(py);
+                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
             }
         }
 

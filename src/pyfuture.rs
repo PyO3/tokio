@@ -129,11 +129,11 @@ impl _PyFuture {
     pub fn result(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::new_lazy_init(
-                    Classes.InvalidStateError.clone_ref(py),
-                    Some(PyString::new(py, "Result is not ready.").into_object()))),
+                Err(PyErr::from_instance(
+                    py, Classes.InvalidStateError.call(py, "Result is not ready.", None)?)),
             State::Cancelled =>
-                Err(PyErr::new_lazy_init(Classes.CancelledError.clone_ref(py), None)),
+                Err(PyErr::from_instance(
+                    py, Classes.CancelledError.call(py, NoArgs, None)?)),
             State::Finished => {
                 match self.exception {
                     Some(ref err) => Err(PyErr::from_instance(py, err.clone_ref(py))),
@@ -165,12 +165,11 @@ impl _PyFuture {
     pub fn exception(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::new_lazy_init(
-                    Classes.InvalidStateError.clone_ref(py),
-                    Some(PyString::new(py, "Exception is not set.").into_object()))),
+                Err(PyErr::from_instance(
+                    py, Classes.InvalidStateError.call(py, "Exception is not set.", None)?)),
             State::Cancelled =>
-                Err(PyErr::new_lazy_init(
-                    Classes.CancelledError.clone_ref(py), None)),
+                Err(PyErr::from_instance(
+                    py, Classes.CancelledError.call(py, NoArgs, None)?)),
             State::Finished =>
                 match self.exception {
                     Some(ref err) => Ok(err.clone_ref(py)),
@@ -205,8 +204,7 @@ impl _PyFuture {
                 }
             },
             _ => {
-                f.call(py, (owner,).to_py_object(py), None)
-                    .into_log(py, "future callback error");
+                f.call(py, (owner,), None).into_log(py, "future callback error");
             },
         }
 
@@ -226,7 +224,6 @@ impl _PyFuture {
                         self.exception = Some(err.instance(py))
                 }
                 self.schedule_callbacks(py, State::Finished, sender);
-
                 true
             },
             _ => false
@@ -249,7 +246,8 @@ impl _PyFuture {
                 self.schedule_callbacks(py, State::Finished, sender);
                 Ok(py.None())
             },
-            _ => Err(PyErr::new_lazy_init(Classes.InvalidStateError.clone_ref(py), None)),
+            _ => Err(PyErr::from_instance(
+                py, Classes.InvalidStateError.call(py, NoArgs, None)?)),
         }
     }
 
@@ -280,7 +278,8 @@ impl _PyFuture {
                 self.schedule_callbacks(py, State::Finished, sender);
                 Ok(py.None())
             }
-            _ => Err(PyErr::new_lazy_init(Classes.InvalidStateError.clone_ref(py), None)),
+            _ => Err(PyErr::from_instance(
+                py, Classes.InvalidStateError.call(py, NoArgs, None)?)),
         }
     }
 
@@ -350,10 +349,9 @@ impl _PyFuture {
                     with_py(move |py| {
                         // call python callback
                         for cb in callbacks.iter() {
-                            cb.call(py, (owner.clone_ref(py),).to_py_object(py), None)
+                            cb.call(py, (owner.clone_ref(py),), None)
                                 .into_log(py, "future done callback error");
                         }
-
                     });
                     future::ok(())
                 });
@@ -584,9 +582,7 @@ py_class!(pub class PyFutureIter |py| {
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
-            Err(PyErr::new_lazy_init(
-                Classes.StopIteration.clone_ref(py),
-                Some(PyTuple::new(py, &[res]).into_object())))
+            Err(PyErr::new::<exc::StopIteration, _>(py, res))
         }
     }
 
@@ -598,14 +594,12 @@ py_class!(pub class PyFutureIter |py| {
               _tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
 
         if Classes.Exception.is_instance(py, &tp) {
-            let val = tp;
-            let tp = val.get_type(py);
-            PyErr::new_lazy_init(tp, Some(val)).restore(py);
+            PyErr::from_instance(py, tp).restore(py);
         } else {
             if let Ok(tp) = PyType::downcast_from(py, tp) {
                 PyErr::new_lazy_init(tp, val).restore(py);
             } else {
-                PyErr::new_lazy_init(Classes.TypeError.clone_ref(py), None).restore(py);
+                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
             }
         }
 

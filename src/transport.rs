@@ -123,9 +123,7 @@ impl PyTcpTransport {
             py, h, connection_lost, data_received, sender, RefCell::new(None))?;
 
         // connection made
-        connection_made.call(
-            py, PyTuple::new(
-                py, &[transport.clone_ref(py).into_object()]), None)
+        connection_made.call(py, (transport.clone_ref(py),), None)
             .log_error(py, "Protocol.connection_made error")?;
 
         Ok(transport)
@@ -134,7 +132,7 @@ impl PyTcpTransport {
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
         with_py(|py| {
-            self._connection_lost(py).call(py, PyTuple::new(py, &[py.None()]), None)
+            self._connection_lost(py).call(py, (py.None(),), None)
                 .into_log(py, "connection_lost error");
         });
     }
@@ -149,7 +147,7 @@ impl PyTcpTransport {
                         let e = Classes.SocketTimeout.call(
                             py, NoArgs, None).unwrap();
 
-                        self._connection_lost(py).call(py, PyTuple::new(py, &[e]), None)
+                        self._connection_lost(py).call(py, (e,), None)
                             .into_log(py, "connection_lost error");
                     });
                 },
@@ -157,8 +155,7 @@ impl PyTcpTransport {
                     trace!("Protocol.connection_lost(err): {:?}", err);
                     with_py(|py| {
                         let mut e = err.to_pyerr(py);
-                        self._connection_lost(py).call(py,
-                                                       PyTuple::new(py, &[e.instance(py)]), None)
+                        self._connection_lost(py).call(py, (e.instance(py),), None)
                             .into_log(py, "connection_lost error");
                     });
                 }
@@ -171,7 +168,7 @@ impl PyTcpTransport {
             let _ = pybytes::PyBytes::new(py, bytes)
                 .map_err(|e| e.into_log(py, "can not create PyBytes"))
                 .map(|bytes|
-                     self._data_received(py).call(py, (bytes,).to_py_object(py), None)
+                     self._data_received(py).call(py, (bytes,), None)
                      .into_log(py, "data_received error"));
         });
     }

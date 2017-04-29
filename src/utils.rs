@@ -21,7 +21,6 @@ pub struct WorkingClasses {
     pub Exception: PyType,
     pub BaseException: PyType,
     pub StopIteration: PyType,
-    pub TypeError: PyType,
     pub OSError: PyType,
 
     pub SocketTimeout: PyType,
@@ -111,8 +110,6 @@ lazy_static! {
                 py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
             OSError: PyType::extract(
                 py, &builtins.get(py, "OSError").unwrap()).unwrap(),
-            TypeError: PyType::extract(
-                py, &builtins.get(py, "TypeError").unwrap()).unwrap(),
 
             BrokenPipeError: PyType::extract(
                 py, &builtins.get(py, "BrokenPipeError").unwrap_or(

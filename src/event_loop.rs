@@ -500,14 +500,12 @@ py_class!(pub class TokioEventLoop |py| {
             if let Some(ssl) = ssl {
                 match TlsConnector::builder() {
                     Err(err) =>
-                        return Err(PyErr::new_lazy_init(
-                            Classes.OSError.clone_ref(py),
-                            Some(err.description().to_py_object(py).into_object()))),
+                        return Err(PyErr::from_instance(
+                            py, Classes.OSError.call(py, err.description(), None)?)),
                     Ok(builder) => match builder.build() {
                         Err(err) =>
-                            return Err(PyErr::new_lazy_init(
-                                Classes.OSError.clone_ref(py),
-                                Some(err.description().to_py_object(py).into_object()))),
+                            return Err(PyErr::from_instance(
+                                py, Classes.OSError.call(py, err.description(), None)?)),
                         Ok(ctx) => Some(ctx)
                     },
                 }
@@ -519,7 +517,7 @@ py_class!(pub class TokioEventLoop |py| {
             (&None, &None) => {
                 if let Some(_) = sock {
                     Err(PyErr::new::<exc::ValueError, _>(
-                        py, PyString::new(py, "sock is not supported yet")))
+                        py, "sock is not supported yet"))
                 } else {
                     Err(PyErr::new::<exc::ValueError, _>(
                         py, "host and port was not specified and no sock specified"))
@@ -566,13 +564,14 @@ py_class!(pub class TokioEventLoop |py| {
                             },
                             Ok(addrs) => {
                                 if addrs.is_empty() {
-                                    let _ = fut_conn.set(
-                                        py,
-                                        Err(PyErr::new_lazy_init(
-                                            Classes.OSError.clone_ref(py),
-                                            Some("getaddrinfo() returned empty list"
-                                                 .to_py_object(py).into_object())))
-                                    );
+                                    let err = Classes.OSError.call(
+                                        py, "getaddrinfo() returned empty list", None);
+
+                                    let err = match err {
+                                        Ok(err) => Err(PyErr::from_instance(py, err)),
+                                        Err(err) => Err(err)
+                                    };
+                                    let _ = fut_conn.set(py, err);
                                     future::ok(())
                                 } else {
                                     client::create_connection(
