@@ -186,12 +186,10 @@ impl PyTcpTransport {
     }
 
     pub fn drained(&self) {
-        with_py(|py| match self._drain(py).borrow_mut().take() {
-            Some(fut) => {
-                let _ = fut.set(py, Ok(py.None()));
-            },
+        match self._drain(GIL::python()).borrow_mut().take() {
+            Some(fut) => with_py(|py| {let _ = fut.set(py, Ok(py.None()));}),
             None => (),
-        });
+        }
     }
 }
 
@@ -222,7 +220,7 @@ impl<T> TcpTransport<T>
 
             buf: None,
             incoming_eof: false,
-            flushed: false,
+            flushed: true,
             closing: false,
         }
     }
@@ -245,7 +243,6 @@ impl<T> Future for TcpTransport<T>
                         continue
                     },
                     Ok(Async::Ready(None)) => {
-                        debug!("connectino_lost");
                         self.incoming_eof = true;
                     },
                     Ok(Async::NotReady) => (),

@@ -167,6 +167,33 @@ py_class!(pub class PyTask |py| {
     }
 
     // compatibility
+    property _loop {
+        get(&slf) -> PyResult<PyObject> {
+            match *slf._loop(py) {
+                Some(ref evloop) => Ok(evloop.clone_ref(py).into_object()),
+                None => Ok(py.None())
+            }
+        }
+    }
+
+    property _fut_waiter {
+        get(&slf) -> PyResult<PyObject> {
+            match *slf._waiter(py).borrow_mut() {
+                Some(ref fut) => Ok(fut.clone_ref(py)),
+                None => Ok(py.None())
+            }
+        }
+    }
+
+
+
+
+    property _must_cancel {
+        get(&slf) -> PyResult<bool> {
+            Ok(slf._must_cancel(py).get())
+        }
+    }
+
     property _source_traceback {
         get(&slf) -> PyResult<PyObject> {
             Ok(py.None())
@@ -295,10 +322,20 @@ fn wakeup_task(fut: PyTask, coro: PyObject, result: PyResult<PyObject>) {
 // execute task step
 //
 fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, retry: usize) {
+    // println!("task step: {:?} {:?}", task.clone_ref(py).into_object(), coro);
+
     // cancel if needed
     let mut exc = exc;
     if task._must_cancel(py).get() {
-        exc = Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+        exc = if let Some(exc) = exc {
+            if Classes.CancelledError.is_instance(py, &exc) {
+                Some(exc)
+            } else {
+                Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+            }
+        } else {
+            Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+        };
     }
     *task._waiter(py).borrow_mut() = None;
 
@@ -313,7 +350,6 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
         Some(exc) => coro.call_method(py, "throw", (exc,), None),
     };
 
-    // println!("result: {:?}", res);
     // handle coroutine result
     match res {
         Err(mut err) => {
@@ -322,7 +358,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                     .into_log(py, "can not get StopIteration.value");
             }
             else if err.matches(py, &Classes.CancelledError) {
-                task.cancel(py).into_log(py, "can not cancel task");
+                let _ = task._fut(py).borrow_mut().cancel(py, task.clone_ref(py).into_object());
             }
             else if err.matches(py, &Classes.BaseException) {
                 task.set_exception(py, err.instance(py))
@@ -393,6 +429,22 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                         future::ok(())
                     });
                 }
+            }
+            else {
+                // Yielding something else is an error.
+                let task2 = task.clone_ref(py);
+                task._handle(py).spawn_fn(move|| {
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
+
+                    let mut exc = PyErr::new::<exc::RuntimeError, _>(
+                        py, format!("Task got bad yield: {:?}", result));
+
+                    // wakeup task
+                    task_step(py, task2, coro, Some(exc.instance(py)), 0);
+
+                    future::ok(())
+                });
             }
         },
     }

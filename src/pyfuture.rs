@@ -276,9 +276,13 @@ impl _PyFuture {
                     };
                 let exc = if let Some(exc) = exc { exc } else { exception };
 
-                // if type(exception) is StopIteration:
-                //    raise TypeError("StopIteration interacts badly with generators "
-                //                    "and cannot be raised into a Future")
+                // StopIteration cannot be raised into a Future - CPython issue26221
+                if Classes.StopIteration.is_instance(py, &exc) {
+                    return Err(PyErr::new::<exc::TypeError, _>(
+                        py, "StopIteration interacts badly with generators \
+                             and cannot be raised into a Future"));
+                }
+
                 self.exception = Some(exc);
 
                 self.schedule_callbacks(py, State::Finished, sender);

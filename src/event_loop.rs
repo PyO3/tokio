@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use cpython::*;
-use futures::{future, Future, Stream};
+use futures::{future, unsync, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
 use native_tls::TlsConnector;
@@ -679,53 +679,31 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return the Future's result, or raise its exception.
     //
-    def run_until_complete(&self, future: PyObject) -> PyResult<PyObject> {
-        let fut = match PyTask::downcast_from(py, future.clone_ref(py)) {
-            Ok(fut) => fut,
-            Err(_) => PyTask::new(
-                py, future, Some(self.clone_ref(py)), self.handle(py).clone())?,
-        };
-        let fut2 = fut.clone_ref(py);
+    def run_until_complete(&self, fut: PyObject) -> PyResult<PyObject> {
+        let (completed, result) =
+            if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
+                let fut2 = fut.clone_ref(py);
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
 
-        let res = py.allow_threads(|| {
-            CORE.with(|cell| {
-                match *cell.borrow_mut() {
-                    Some(ref mut core) => {
-                        let rx = {
-                            let gil = Python::acquire_gil();
-                            let py = gil.python();
+            } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
+                let fut2 = fut.clone_ref(py);
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+            } else {
+                let fut = PyTask::new(
+                    py, fut.clone_ref(py), Some(self.clone_ref(py)), self.handle(py).clone())?;
+                let fut2 = fut.clone_ref(py);
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+            };
 
-                            // stop fut
-                            let (tx, rx) = oneshot::channel::<bool>();
-                            *(self._runner(py)).borrow_mut() = Some(tx);
-
-                            rx
-                        };
-
-                        // SIGINT
-                        let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
-                        let ctrlc = core.run(ctrlc_f).unwrap().into_future();
-
-                        // wait for completion
-                        let _ = core.run(rx.select2(fut2).select2(ctrlc));
-
-                        true
-                    }
-                    None => false,
-                }
-            })
-        });
-
-        if res {
+        if completed {
             // cleanup running state
             let _ = self.stop(py);
 
-            fut.result(py)
+            result
         } else {
             Err(no_loop_exc(py))
         }
     }
-
 
     //
     // Event loop debug flag
@@ -754,4 +732,35 @@ impl TokioEventLoop {
     pub fn set_current_task(&self, py: Python, task: PyObject) {
         *self._current_task(py).borrow_mut() = Some(task)
     }
+
+    pub fn run_future(&self,fut: Box<Future<Item=PyResult<PyObject>,
+                                            Error=unsync::oneshot::Canceled>>) -> bool {
+        CORE.with(|cell| {
+            match *cell.borrow_mut() {
+                Some(ref mut core) => {
+                    let rx = {
+                        let gil = Python::acquire_gil();
+                        let py = gil.python();
+
+                        // stop fut
+                        let (tx, rx) = oneshot::channel::<bool>();
+                        *(self._runner(py)).borrow_mut() = Some(tx);
+
+                        rx
+                    };
+
+                    // SIGINT
+                    let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
+                    let ctrlc = core.run(ctrlc_f).unwrap().into_future();
+
+                    // wait for completion
+                    let _ = core.run(rx.select2(fut).select2(ctrlc));
+
+                    true
+                }
+                None => false,
+            }
+        })
+    }
+
 }
