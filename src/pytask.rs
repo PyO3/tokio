@@ -185,9 +185,6 @@ py_class!(pub class PyTask |py| {
         }
     }
 
-
-
-
     property _must_cancel {
         get(&slf) -> PyResult<bool> {
             Ok(slf._must_cancel(py).get())
@@ -410,6 +407,26 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 // cancel if needed
                 if task._must_cancel(py).get() {
                     let _ = res.cancel(py);
+                    task._must_cancel(py).set(false)
+                }
+            }
+            else if result.hasattr(py, "_asyncio_future_blocking").unwrap() {
+                // wrap into PyFuture, use unwrap because if it failes then whole
+                // processes is hosed
+                let fut = PyFuture::from_fut(py, task._handle(py).clone(), result).unwrap();
+
+                // store ref to future
+                *task._waiter(py).borrow_mut() = Some(fut.clone_ref(py).into_object());
+
+                // schedule wakeup on done
+                let waiter_task = task.clone_ref(py);
+                let _ = fut.add_callback(py, SendBoxFnOnce::from(move |result| {
+                    wakeup_task(waiter_task, coro, result);
+                }));
+
+                // cancel if needed
+                if task._must_cancel(py).get() {
+                    let _ = fut.cancel(py);
                     task._must_cancel(py).set(false)
                 }
             }

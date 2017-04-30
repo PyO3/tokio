@@ -600,7 +600,7 @@ py_class!(pub class TokioEventLoop |py| {
         if *handler == py.None() {
             error!("Unhandled error in ecent loop, context: {}", context.into_object());
         } else {
-            let res = handler.call(py, (context.clone_ref(py),).to_py_object(py), None);
+            let res = handler.call(py, (self.clone_ref(py), context.clone_ref(py),), None);
             if let Err(err) = res {
                 // Exception in the user set custom exception handler.
                 error!(
@@ -681,14 +681,21 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def run_until_complete(&self, fut: PyObject) -> PyResult<PyObject> {
         let (completed, result) =
+            // PyTask
             if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
-
+            // PyFuture
             } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+            // support asyncio.Future object
+            } else if fut.hasattr(py, "_asyncio_future_blocking")? {
+                let fut = PyFuture::from_fut(py, self.handle(py).clone(), fut)?;
+                let fut2 = fut.clone_ref(py);
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
             } else {
+                // TODO: add check for Generator object
                 let fut = PyTask::new(
                     py, fut.clone_ref(py), Some(self.clone_ref(py)), self.handle(py).clone())?;
                 let fut2 = fut.clone_ref(py);
