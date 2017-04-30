@@ -4,7 +4,7 @@ use std::time::Duration;
 use cpython::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
-use tokio_core::reactor::Timeout;
+use tokio_core::reactor::{Timeout, Remote};
 
 use pyunsafe::Handle;
 use utils::{with_py, PyLogger};
@@ -43,6 +43,27 @@ pub fn call_soon(py: Python, h: &Handle,
             if ! handle_ref.cancelled(py).get() {
                 callback.call(py, args, None)
                     .into_log(py, "call_soon callback error");
+            }
+        });
+
+        future::ok(())
+    });
+
+    Ok(handle)
+}
+
+
+pub fn call_soon_threadsafe(py: Python, h: &Remote,
+                            callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+    let handle = PyHandle::create_instance(py, Cell::new(false))?;
+    let handle_ref = handle.clone_ref(py);
+
+    // schedule work
+    h.spawn(move |_| {
+        with_py(|py| {
+            // check if cancelled
+            if ! handle_ref.cancelled(py).get() {
+                callback.call(py, args, None).into_log(py, "call_soon callback error");
             }
         });
 
