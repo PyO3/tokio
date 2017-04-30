@@ -51,8 +51,9 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     data handle: reactor::Remote;
 
     def create_future(&self) -> PyResult<PyFuture> {
+        let evloop = self.evloop(py).clone_ref(py);
         let res = self.execute_in_loop(py, move|py, h| {
-            PyFuture::new(py, h)
+            PyFuture::new(py, &evloop)
         });
         match res {
             Some(Ok(srv)) => Ok(srv),
@@ -62,8 +63,9 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     }
 
     def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
+        let evloop = self.evloop(py).clone_ref(py);
         let res = self.execute_in_loop(py, move|py, h| {
-            PyTask::new(py, coro, None, h)
+            PyTask::new(py, coro, &evloop)
         });
         match res {
             Some(Ok(srv)) => Ok(srv),
@@ -198,9 +200,10 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                     py, "ssl argument is not supported yet"));
         }
 
+        let evloop = self.evloop(py).clone_ref(py);
         let res = self.execute_in_loop(py, move|py, h| {
             server::create_server(
-                py, protocol_factory, h,
+                py, protocol_factory, &evloop,
                 Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
                 family, flags, sock, backlog, ssl, reuse_address, reuse_port,
                 transport::tcp_transport_factory)
@@ -243,9 +246,10 @@ py_class!(pub class RemoteTokioEventLoop |py| {
                     py, "ssl argument is not supported yet"));
         }
 
+        let evloop = self.evloop(py).clone_ref(py);
         let res = self.execute_in_loop(py, move|py, h| {
             server::create_server(
-                py, protocol_factory, h,
+                py, protocol_factory, &evloop,
                 Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
                 family, flags, sock, backlog, ssl, reuse_address, reuse_port,
                 http::http_transport_factory)

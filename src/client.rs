@@ -7,16 +7,19 @@ use native_tls::TlsConnector;
 use tokio_core::net::TcpStream;
 use tokio_tls::TlsConnectorExt;
 
+use ::TokioEventLoop;
 use addrinfo;
 use pyunsafe::Handle;
 use transport::{InitializedTransport, tcp_transport_factory};
 use fut::{for_each, Until, UntilError};
 
 
-pub fn create_connection(factory: PyObject, handle: Handle, addrs: Vec<addrinfo::AddrInfo>,
-                         ssl: Option<TlsConnector>, hostname: String)
+pub fn create_connection(factory: PyObject, evloop: TokioEventLoop,
+                         addrs: Vec<addrinfo::AddrInfo>, ssl: Option<TlsConnector>,
+                         hostname: String)
                          -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
+    let handle = evloop.get_handle();
     let conn = connect(addrs, handle.clone());
 
     match ssl {
@@ -25,13 +28,13 @@ pub fn create_connection(factory: PyObject, handle: Handle, addrs: Vec<addrinfo:
             let transport = conn.and_then(move |socket| {
                 ssl.connect_async(hostname.as_str(), socket)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-            }).and_then(move |socket| tcp_transport_factory(handle, &factory, socket, None));
+            }).and_then(move |socket| tcp_transport_factory(&evloop, &factory, socket, None));
 
             Box::new(transport)
         },
         None => {
             let transport = conn.and_then(
-                move |socket| tcp_transport_factory(handle, &factory, socket, None));
+                move |socket| tcp_transport_factory(&evloop, &factory, socket, None));
             Box::new(transport)
         }
     }

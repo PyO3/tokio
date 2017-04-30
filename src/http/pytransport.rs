@@ -9,11 +9,11 @@ use cpython::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
-use ::{PyFuture, PyTask, pybytes};
+use ::{TokioEventLoop, PyFuture, PyTask, pybytes};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
-use pyunsafe::{GIL, Handle, Sender};
+use pyunsafe::{GIL, Sender};
 
 
 pub enum PyHttpTransportMessage {
@@ -24,7 +24,7 @@ const CONCURENCY_LEVEL: usize = 1;
 
 
 py_class!(pub class PyHttpTransport |py| {
-    data _loop: Handle;
+    data _loop: TokioEventLoop;
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _request_handler: PyObject;
@@ -59,7 +59,7 @@ py_class!(pub class PyHttpTransport |py| {
     // send buffered data to socket
     //
     def drain(&self) -> PyResult<PyFuture> {
-        Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?)
+        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?)
     }
 
     //
@@ -75,7 +75,7 @@ py_class!(pub class PyHttpTransport |py| {
 
 impl PyHttpTransport {
 
-    pub fn new(py: Python, h: Handle,
+    pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<PyHttpTransportMessage>,
                proto: &PyObject) -> PyResult<PyHttpTransport> {
         // get protocol callbacks
@@ -86,7 +86,8 @@ impl PyHttpTransport {
         //let request_handler = proto.getattr(py, "_request_handler")?;
 
         let transport = PyHttpTransport::create_instance(
-            py, h, connection_lost, data_received, request_handler, sender,
+            py, evloop.clone_ref(py),
+            connection_lost, data_received, request_handler, sender,
             RefCell::new(None), Cell::new(0), Cell::new(0),
             RefCell::new(VecDeque::with_capacity(12)),
             RefCell::new(VecDeque::with_capacity(CONCURENCY_LEVEL)))?;
@@ -212,7 +213,7 @@ impl PyHttpTransport {
 
 
 struct RequestHandler {
-    h: Handle,
+    evloop: TokioEventLoop,
     tr: PyHttpTransport,
     handler: PyObject,
     task: PyTask,
@@ -221,13 +222,13 @@ struct RequestHandler {
 
 impl RequestHandler {
 
-    fn new(h: Handle, msg: http::Request, tx: Sender<codec::EncoderMessage>,
+    fn new(evloop: TokioEventLoop, msg: http::Request, tx: Sender<codec::EncoderMessage>,
            tr: PyHttpTransport, handler: PyObject) -> PyResult<RequestHandler> {
 
-        let (task, req) = RequestHandler::start_task(h.clone(), msg, tx, &handler)?;
+        let (task, req) = RequestHandler::start_task(&evloop, msg, tx, &handler)?;
 
         Ok(RequestHandler {
-            h: h,
+            evloop: evloop,
             tr: tr,
             handler: handler,
             task: task,
@@ -235,18 +236,18 @@ impl RequestHandler {
         })
     }
 
-    pub fn start_task(h: Handle, msg: http::Request,
+    pub fn start_task(evloop: &TokioEventLoop, msg: http::Request,
                       sender: Sender<codec::EncoderMessage>,
                       handler: &PyObject) -> PyResult<(PyTask, PyRequest)> {
         // start python task
         with_py(|py| {
-            let req = pyreq::PyRequest::new(py, msg, h.clone(), sender)?;
+            let req = pyreq::PyRequest::new(py, msg, &evloop, sender)?;
             req.content().feed_eof(py);
 
             let coro = handler.call(
                 py, PyTuple::new(py, &[req.clone_ref(py).into_object()]), None)?;
 
-            let task = PyTask::new(py, coro, None, h)?;
+            let task = PyTask::new(py, coro, evloop)?;
             Ok((task, req))
         })
     }
@@ -279,7 +280,7 @@ impl Future for RequestHandler {
                     }
                 };
                 let (task, req) = RequestHandler::start_task(
-                    self.h.clone(), msg, sender, &self.handler)?;
+                    &self.evloop, msg, sender, &self.handler)?;
                 self.inflight = req;
                 self.task = task;
                 self.poll()

@@ -7,14 +7,14 @@ use cpython::*;
 use bytes::{Bytes, BytesMut};
 use futures::{Async, Future, Poll, Stream, future};
 
-use ::{PyFuture, pybytes, with_py};
-use pyunsafe::{GIL, Handle, Sender};
+use ::{PyFuture, TokioEventLoop, pybytes, with_py};
+use pyunsafe::{GIL, Sender};
 use http::codec::EncoderMessage;
 use http::{Request, Version, Headers, ConnectionType, ContentCompression};
 
 
 py_class!(pub class PyRequest |py| {
-    data handle: Handle;
+    data _loop: TokioEventLoop;
     data connection: ConnectionType;
     data method: PyString;
     data url: Url;
@@ -110,7 +110,7 @@ py_class!(pub class PyRequest |py| {
     }
 
     def _prepare_hook(&self, _resp: &PyObject) -> PyResult<PyObject> {
-        Ok(PyFuture::done_fut(py, self.handle(py).clone(), py.None())?.into_object())
+        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?.into_object())
     }
 
 });
@@ -118,7 +118,7 @@ py_class!(pub class PyRequest |py| {
 
 impl PyRequest {
     pub fn new(py: Python, req: Request,
-               h: Handle, sender: Sender<EncoderMessage>) -> PyResult<PyRequest> {
+               evloop: &TokioEventLoop, sender: Sender<EncoderMessage>) -> PyResult<PyRequest> {
         let conn = req.connection;
         let meth = PyString::new(py, req.method());
         let path = PyString::new(py, req.path());
@@ -131,12 +131,12 @@ impl PyRequest {
                 py, &[(1 as i32).to_py_object(py).into_object(),
                       (1 as i32).to_py_object(py).into_object()]),
         };
-        let content = StreamReader::new(py, h.clone())?;
+        let content = StreamReader::new(py, evloop)?;
         let headers = RawHeaders::create_instance(py, req.headers)?;
-        let writer = PayloadWriter::new(py, h.clone(), sender)?;
+        let writer = PayloadWriter::new(py, evloop, sender)?;
 
         PyRequest::create_instance(
-            py, h, conn, meth, url, path,
+            py, evloop.clone_ref(py), conn, meth, url, path,
             version, headers, content,
             RefCell::new(py.None()), writer, RefCell::new(py.None()))
     }
@@ -148,7 +148,7 @@ impl PyRequest {
 
 
 py_class!(pub class StreamReader |py| {
-    data _handle: Handle;
+    data _loop: TokioEventLoop;
     data _size: Cell<usize>;
     data _total_bytes: Cell<usize>;
     data _eof: Cell<bool>;
@@ -197,7 +197,7 @@ py_class!(pub class StreamReader |py| {
         if let Some(fut) = fut {
             Ok(fut.into_object())
         } else {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             *self._eof_waiter(py).borrow_mut() = Some(fut.clone_ref(py));
             Ok(fut.into_object())
         }
@@ -214,9 +214,9 @@ py_class!(pub class StreamReader |py| {
     def read(&self, n: isize = -1) -> PyResult<PyObject> {
         if n == 0 {
             let chunk = pybytes::PyBytes::new(py, Bytes::new())?.into_object();
-            Ok(PyFuture::done_fut(py, self._handle(py).clone(), chunk)?.into_object())
+            Ok(PyFuture::done_fut(py, self._loop(py), chunk)?.into_object())
         } else if n < 0 {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             let fut_read = fut.clone_ref(py);
 
             let stream = self.clone_ref(py).collect().and_then(move |chunks| {
@@ -238,12 +238,12 @@ py_class!(pub class StreamReader |py| {
                     py, buf.freeze()).map(|b| b.into_object()));
                 future::ok(())
             });
-            self._handle(py).spawn(stream.map_err(|_| {}));
+            self._loop(py).href().spawn(stream.map_err(|_| {}));
 
             Ok(fut.into_object())
 
         } else {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             let fut_read = fut.clone_ref(py);
             *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
 
@@ -254,7 +254,7 @@ py_class!(pub class StreamReader |py| {
                     py, stream._read_nowait(py, n).map(|b| b.into_object())));
                 future::ok(())
             });
-            self._handle(py).spawn(waiter.map_err(|_| {}));
+            self._loop(py).href().spawn(waiter.map_err(|_| {}));
 
             Ok(fut.into_object())
         }
@@ -264,7 +264,7 @@ py_class!(pub class StreamReader |py| {
         if let Some(ref exc) = *self._exception(py).borrow() {
             Err(PyErr::from_instance(py, exc.clone_ref(py)))
         } else if self._buffer(py).borrow().is_empty() && !self._eof(py).get() {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             let fut_read = fut.clone_ref(py);
             *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
 
@@ -275,13 +275,12 @@ py_class!(pub class StreamReader |py| {
                                           .map(|b| b.into_object())));
                 future::ok(())
             }).map_err(|_| {});
-            self._handle(py).spawn(waiter);
+            self._loop(py).href().spawn(waiter);
 
             Ok(fut.into_object())
         } else {
             let chunk = self._read_nowait(py, -1)?;
-            Ok(PyFuture::done_fut(py, self._handle(py).clone(),
-                                  chunk.into_object())?.into_object())
+            Ok(PyFuture::done_fut(py, self._loop(py), chunk.into_object())?.into_object())
         }
     }
 
@@ -289,7 +288,7 @@ py_class!(pub class StreamReader |py| {
         if let Some(ref exc) = *self._exception(py).borrow() {
             Err(PyErr::from_instance(py, exc.clone_ref(py)))
         } else if self._buffer(py).borrow().is_empty() && !self._eof(py).get() {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             let fut_read = fut.clone_ref(py);
             *self._waiter(py).borrow_mut() = Some(fut.clone_ref(py));
 
@@ -301,13 +300,12 @@ py_class!(pub class StreamReader |py| {
                             py, stream._read_nowait_chunk(py, -1).map(|b| b.into_object())));
                 future::ok(())
             }).map_err(|_| {});
-            self._handle(py).spawn(waiter);
+            self._loop(py).href().spawn(waiter);
 
             Ok(fut.into_object())
         } else {
             let chunk = self._read_nowait_chunk(py, -1)?;
-            Ok(PyFuture::done_fut(py, self._handle(py).clone(),
-                                  chunk.into_object())?.into_object())
+            Ok(PyFuture::done_fut(py, self._loop(py), chunk.into_object())?.into_object())
         }
     }
 
@@ -331,9 +329,9 @@ py_class!(pub class StreamReader |py| {
 
 impl StreamReader {
 
-    fn new(py: Python, h: Handle) -> PyResult<StreamReader> {
+    fn new(py: Python, evloop: &TokioEventLoop) -> PyResult<StreamReader> {
         StreamReader::create_instance(
-            py, h, Cell::new(0), Cell::new(0), Cell::new(false),
+            py, evloop.clone_ref(py), Cell::new(0), Cell::new(0), Cell::new(false),
             RefCell::new(None),
             RefCell::new(None),
             RefCell::new(VecDeque::new()),
@@ -479,7 +477,7 @@ impl Stream for StreamReader {
             let mut fut = if let Some(fut) = self._waiter(py).borrow_mut().take() {
                 fut
             } else {
-                PyFuture::new(py, self._handle(py).clone()).unwrap()
+                PyFuture::new(py, self._loop(py)).unwrap()
             };
 
             match fut.poll() {
@@ -520,7 +518,7 @@ const END: &'static [u8] = b"\r\n";
 
 
 py_class!(pub class PayloadWriter |py| {
-    data _loop: Handle;
+    data _loop: TokioEventLoop;
     data _sender: RefCell<Option<Sender<EncoderMessage>>>;
     data _length: Cell<u64>;
     data _chunked: Cell<bool>;
@@ -566,7 +564,7 @@ py_class!(pub class PayloadWriter |py| {
 
     def write(&self, chunk: PyBytes, _drain: bool = true) -> PyResult<PyObject> {
         self.send_maybe(py, EncoderMessage::PyBytes(chunk));
-        Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?.into_object())
     }
 
     // Build Request message from status line and headers object
@@ -617,11 +615,11 @@ py_class!(pub class PayloadWriter |py| {
         }
         self._sender(py).borrow_mut().take();
 
-        Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?.into_object())
     }
 
     def drain(&self, _last: bool = false) -> PyResult<PyObject> {
-        Ok(PyFuture::done_fut(py, self._loop(py).clone(), py.None())?.into_object())
+        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?.into_object())
     }
 
 });
@@ -629,9 +627,10 @@ py_class!(pub class PayloadWriter |py| {
 
 impl PayloadWriter {
 
-    pub fn new(py: Python, h: Handle, sender: Sender<EncoderMessage>) -> PyResult<PayloadWriter> {
+    pub fn new(py: Python, evloop: &TokioEventLoop,
+               sender: Sender<EncoderMessage>) -> PyResult<PayloadWriter> {
         PayloadWriter::create_instance(
-            py, h, RefCell::new(Some(sender)),
+            py, evloop.clone_ref(py), RefCell::new(Some(sender)),
             Cell::new(0),
             Cell::new(false),
             Cell::new(ContentCompression::Default))

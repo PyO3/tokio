@@ -9,10 +9,11 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
+use ::TokioEventLoop;
 use utils::{Classes, PyLogger, ToPyErr, with_py};
 use pybytes;
 use pyfuture::PyFuture;
-use pyunsafe::{GIL, Handle, Sender};
+use pyunsafe::{GIL, Sender};
 
 #[derive(Debug)]
 pub struct InitializedTransport {
@@ -37,7 +38,7 @@ impl ToPyTuple for InitializedTransport {
 
 
 // Transport factory
-pub type TransportFactory = fn(Handle, &PyObject, TcpStream, Option<SocketAddr>)
+pub type TransportFactory = fn(&TokioEventLoop, &PyObject, TcpStream, Option<SocketAddr>)
                                -> io::Result<InitializedTransport>;
 
 pub enum TcpTransportMessage {
@@ -47,7 +48,7 @@ pub enum TcpTransportMessage {
 
 
 pub fn tcp_transport_factory<T>(
-    handle: Handle, factory: &PyObject,
+    evloop: &TokioEventLoop, factory: &PyObject,
     socket: T, _peer: Option<SocketAddr>) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + 'static
@@ -59,14 +60,14 @@ pub fn tcp_transport_factory<T>(
     let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyTcpTransport::new(py, handle.clone(), Sender::new(tx), &proto)?;
+    let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto)?;
     let conn_lost = tr.clone_ref(py);
     let conn_err = tr.clone_ref(py);
 
     // create transport and then call connection_made on protocol
     let transport = TcpTransport::new(socket, rx, tr.clone_ref(py));
 
-    handle.spawn(
+    evloop.href().spawn(
         transport.map(move |_| {
             conn_lost.connection_lost()
         }).map_err(move |err| {
@@ -78,7 +79,7 @@ pub fn tcp_transport_factory<T>(
 
 
 py_class!(pub class PyTcpTransport |py| {
-    data _handle: Handle;
+    data _loop: TokioEventLoop;
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _transport: Sender<TcpTransportMessage>;
@@ -110,7 +111,7 @@ py_class!(pub class PyTcpTransport |py| {
         if let Some(ref fut) = *self._drain(py).borrow() {
             Ok(fut.clone_ref(py))
         } else {
-            let fut = PyFuture::new(py, self._handle(py).clone())?;
+            let fut = PyFuture::new(py, self._loop(py))?;
             *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
             Ok(fut)
         }
@@ -128,7 +129,7 @@ py_class!(pub class PyTcpTransport |py| {
 
 impl PyTcpTransport {
 
-    pub fn new(py: Python, h: Handle,
+    pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
                protocol: &PyObject) -> PyResult<PyTcpTransport> {
 
@@ -138,7 +139,8 @@ impl PyTcpTransport {
         let data_received = protocol.getattr(py, "data_received")?;
 
         let transport = PyTcpTransport::create_instance(
-            py, h, connection_lost, data_received, sender, RefCell::new(None))?;
+            py, evloop.clone_ref(py),
+            connection_lost, data_received, sender, RefCell::new(None))?;
 
         // connection made
         connection_made.call(py, (transport.clone_ref(py),), None)

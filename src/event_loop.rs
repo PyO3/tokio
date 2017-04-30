@@ -22,7 +22,7 @@ use ::{PyFuture, PyTask};
 use server;
 use transport;
 use utils::{self, with_py, ToPyErr};
-use pyunsafe::Handle;
+use pyunsafe::{GIL, Handle};
 
 
 thread_local!(
@@ -112,7 +112,7 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
-        PyFuture::new(py, self.handle(py).clone())
+        PyFuture::new(py, &self)
     }
 
     //
@@ -127,7 +127,7 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
-        PyTask::new(py, coro, Some(self.clone_ref(py)), self.handle(py).clone())
+        PyTask::new(py, coro, &self)
     }
 
     //
@@ -309,7 +309,7 @@ py_class!(pub class TokioEventLoop |py| {
                     family: i32=0, socktype: i32 = 0,
                     proto: i32 = 0, flags: i32 = 0) -> PyResult<PyFuture> {
         // result future
-        let res = PyFuture::new(py, self.handle(py).clone())?;
+        let res = PyFuture::new(py, &self)?;
 
         // create processing future
         let fut = res.clone_ref(py);
@@ -400,7 +400,7 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         server::create_server(
-            py, protocol_factory, self.handle(py).clone(),
+            py, protocol_factory, &self,
             Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
             family, flags, sock, backlog, ssl, reuse_address, reuse_port,
             transport::tcp_transport_factory)
@@ -421,7 +421,7 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         server::create_server(
-            py, protocol_factory, self.handle(py).clone(),
+            py, protocol_factory, &self,
             Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
             family, flags, sock, backlog, ssl, reuse_address, reuse_port,
             http::http_transport_factory)
@@ -511,8 +511,9 @@ py_class!(pub class TokioEventLoop |py| {
                     None => host.clone(),
                 };
 
-                let fut = PyFuture::new(py, self.handle(py).clone())?;
+                let fut = PyFuture::new(py, &self)?;
 
+                let evloop = self.clone_ref(py);
                 let handle = self.handle(py).clone();
                 let fut_err = fut.clone_ref(py);
                 let fut_conn = fut.clone_ref(py);
@@ -534,7 +535,7 @@ py_class!(pub class TokioEventLoop |py| {
                             } else {
                                 future::Either::B(
                                     client::create_connection(
-                                        protocol_factory, handle, addrs, ctx, server_hostname))
+                                        protocol_factory, evloop, addrs, ctx, server_hostname))
                             }
                         }
                     })
@@ -691,13 +692,12 @@ py_class!(pub class TokioEventLoop |py| {
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
             // support asyncio.Future object
             } else if fut.hasattr(py, "_asyncio_future_blocking")? {
-                let fut = PyFuture::from_fut(py, self.handle(py).clone(), fut)?;
+                let fut = PyFuture::from_fut(py, &self, fut)?;
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
             } else {
                 // TODO: add check for Generator object
-                let fut = PyTask::new(
-                    py, fut.clone_ref(py), Some(self.clone_ref(py)), self.handle(py).clone())?;
+                let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
             };
@@ -734,6 +734,14 @@ impl TokioEventLoop {
 
     pub fn remote(&self, py: Python) -> Remote {
         self.handle(py).remote().clone()
+    }
+
+    pub fn href(&self) -> &Handle {
+        self.handle(GIL::python())
+    }
+
+    pub fn get_handle(&self) -> Handle {
+        self.handle(GIL::python()).clone()
     }
 
     pub fn set_current_task(&self, py: Python, task: PyObject) {

@@ -7,6 +7,7 @@ use futures::unsync::oneshot;
 // use futures::task::{Task, park};
 use boxfnonce::SendBoxFnOnce;
 
+use ::TokioEventLoop;
 use utils::{Classes, PyLogger, with_py};
 use pyunsafe::{GIL, Handle};
 
@@ -384,6 +385,7 @@ impl future::Future for _PyFuture {
 }
 
 py_class!(pub class PyFuture |py| {
+    data _loop: TokioEventLoop;
     data _fut: cell::RefCell<_PyFuture>;
 
     // reference to asyncio.Future if any
@@ -589,6 +591,12 @@ py_class!(pub class PyFuture |py| {
     }
 
     // compatibility
+    property _loop {
+        get(&slf) -> PyResult<TokioEventLoop> {
+            Ok(slf._loop(py).clone_ref(py))
+        }
+    }
+
     property _source_traceback {
         get(&slf) -> PyResult<PyObject> {
             Ok(py.None())
@@ -599,26 +607,33 @@ py_class!(pub class PyFuture |py| {
 
 impl PyFuture {
 
-    pub fn new(py: Python, h: Handle) -> PyResult<PyFuture> {
+    pub fn new(py: Python, evloop: &TokioEventLoop) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, cell::RefCell::new(_PyFuture::new(h)), cell::RefCell::new(None))
+            py, evloop.clone_ref(py),
+            cell::RefCell::new(_PyFuture::new(evloop.get_handle())),
+            cell::RefCell::new(None))
     }
 
-    pub fn done_fut(py: Python, h: Handle, result: PyObject) -> PyResult<PyFuture> {
+    pub fn done_fut(py: Python, evloop: &TokioEventLoop, result: PyObject) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, cell::RefCell::new(_PyFuture::done_fut(h, result)), cell::RefCell::new(None))
+            py, evloop.clone_ref(py),
+            cell::RefCell::new(_PyFuture::done_fut(evloop.get_handle(), result)),
+            cell::RefCell::new(None))
     }
 
-    pub fn done_res(py: Python, h: Handle, result: PyResult<PyObject>) -> PyResult<PyFuture> {
+    pub fn done_res(py: Python, evloop: &TokioEventLoop, result: PyResult<PyObject>) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, cell::RefCell::new(_PyFuture::done_res(py, h, result)), cell::RefCell::new(None))
+            py, evloop.clone_ref(py),
+            cell::RefCell::new(_PyFuture::done_res(py, evloop.get_handle(), result)),
+            cell::RefCell::new(None))
     }
 
     /// wrap asyncio.Future into PyFuture
     /// this method does not check if fut object is actually async.Future object
-    pub fn from_fut(py: Python, h: Handle, fut: PyObject) -> PyResult<PyFuture> {
+    pub fn from_fut(py: Python, evloop: &TokioEventLoop, fut: PyObject) -> PyResult<PyFuture> {
         let f = PyFuture::create_instance(
-            py, cell::RefCell::new(_PyFuture::new(h)),
+            py, evloop.clone_ref(py),
+            cell::RefCell::new(_PyFuture::new(evloop.get_handle())),
             cell::RefCell::new(Some(fut.clone_ref(py))))?;
 
         // add done callback to fut

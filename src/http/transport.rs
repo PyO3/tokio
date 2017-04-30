@@ -9,14 +9,15 @@ use tokio_io::AsyncRead;
 use tokio_io::codec::Framed;
 use tokio_core::net::TcpStream;
 
+use ::TokioEventLoop;
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
 use utils::PyLogger;
-use pyunsafe::{Handle, Sender};
+use pyunsafe::Sender;
 use transport::InitializedTransport;
 
 
-pub fn http_transport_factory(handle: Handle, factory: &PyObject,
+pub fn http_transport_factory(evloop: &TokioEventLoop, factory: &PyObject,
                               socket: TcpStream, _peer: Option<SocketAddr>)
                               -> io::Result<InitializedTransport> {
     let gil = Python::acquire_gil();
@@ -26,7 +27,7 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
     let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyHttpTransport::new(py, handle.clone(), Sender::new(tx), &proto)?;
+    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto)?;
     let tr2 = tr.clone_ref(py);
     let tr3 = tr.clone_ref(py);
 
@@ -34,7 +35,7 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
     let transport = HttpTransport::new(socket, rx, tr.clone_ref(py));
 
     // start connection processing
-    handle.spawn(
+    evloop.href().spawn(
         transport.map(move |_| {
             tr2.connection_lost()
         }).map_err(move |err| {

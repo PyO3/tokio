@@ -46,7 +46,7 @@ py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
     m.add(py, "spawn_event_loop", py_fn!(py, spawn_event_loop(name: &PyString)))?;
     m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
 
-    register_classes(py, m)?;
+    // register_classes(py, m)?;
     Ok(())
 });
 
