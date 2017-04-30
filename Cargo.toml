@@ -23,8 +23,8 @@ tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 #tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 
 [dependencies.cpython]
-path = "../tokio/rust-cpython"
-#git = "https://github.com/PyO3/rust-cpython.git"
+#path = "../tokio/rust-cpython"
+git = "https://github.com/PyO3/rust-cpython.git"
 default-features = false
 
 [dev-dependencies]

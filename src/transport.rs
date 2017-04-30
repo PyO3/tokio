@@ -14,9 +14,31 @@ use pybytes;
 use pyfuture::PyFuture;
 use pyunsafe::{GIL, Handle, Sender};
 
+#[derive(Debug)]
+pub struct InitializedTransport {
+    pub transport: PyObject,
+    pub protocol: PyObject,
+}
+
+impl InitializedTransport {
+    pub fn new(transport: PyObject, protocol: PyObject) -> InitializedTransport {
+        InitializedTransport {
+            transport: transport,
+            protocol: protocol,
+        }
+    }
+}
+
+impl ToPyTuple for InitializedTransport {
+    fn to_py_tuple(&self, py: Python) -> PyTuple {
+        (self.transport.clone_ref(py), self.protocol.clone_ref(py)).to_py_tuple(py)
+    }
+}
+
+
 // Transport factory
 pub type TransportFactory = fn(Handle, &PyObject, TcpStream, Option<SocketAddr>)
-                               -> io::Result<(PyObject, PyObject)>;
+                               -> io::Result<InitializedTransport>;
 
 pub enum TcpTransportMessage {
     Bytes(PyBytes),
@@ -26,7 +48,7 @@ pub enum TcpTransportMessage {
 
 pub fn tcp_transport_factory<T>(
     handle: Handle, factory: &PyObject,
-    socket: T, _peer: Option<SocketAddr>) -> Result<(PyObject, PyObject), io::Error>
+    socket: T, _peer: Option<SocketAddr>) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + 'static
 {
@@ -51,7 +73,7 @@ pub fn tcp_transport_factory<T>(
             conn_err.connection_error(err)
         })
     );
-    Ok((tr.into_object(), proto))
+    Ok(InitializedTransport::new(tr.into_object(), proto))
 }
 
 

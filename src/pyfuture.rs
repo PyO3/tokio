@@ -129,11 +129,9 @@ impl _PyFuture {
     pub fn result(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::from_instance(
-                    py, Classes.InvalidStateError.call(py, "Result is not ready.", None)?)),
+                Err(PyErr::new_err(py, &Classes.InvalidStateError, ("Result is not ready.",))),
             State::Cancelled =>
-                Err(PyErr::from_instance(
-                    py, Classes.CancelledError.call(py, NoArgs, None)?)),
+                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             State::Finished => {
                 match self.exception {
                     Some(ref err) => Err(PyErr::from_instance(py, err.clone_ref(py))),
@@ -165,8 +163,8 @@ impl _PyFuture {
     pub fn exception(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::from_instance(
-                    py, Classes.InvalidStateError.call(py, "Exception is not set.", None)?)),
+                Err(PyErr::new_err(
+                    py, &Classes.InvalidStateError, "Exception is not set.")),
             State::Cancelled =>
                 Err(PyErr::from_instance(
                     py, Classes.CancelledError.call(py, NoArgs, None)?)),
@@ -255,8 +253,7 @@ impl _PyFuture {
                 self.schedule_callbacks(py, State::Finished, sender);
                 Ok(py.None())
             },
-            _ => Err(PyErr::from_instance(
-                py, Classes.InvalidStateError.call(py, NoArgs, None)?)),
+            _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
         }
     }
 
@@ -287,8 +284,7 @@ impl _PyFuture {
                 self.schedule_callbacks(py, State::Finished, sender);
                 Ok(py.None())
             }
-            _ => Err(PyErr::from_instance(
-                py, Classes.InvalidStateError.call(py, NoArgs, None)?)),
+            _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
         }
     }
 
@@ -590,7 +586,7 @@ py_class!(pub class PyFutureIter |py| {
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, res))
+            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
         }
     }
 

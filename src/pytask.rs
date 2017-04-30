@@ -247,7 +247,7 @@ py_class!(pub class PyTaskIter |py| {
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, res))
+            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
         }
     }
 

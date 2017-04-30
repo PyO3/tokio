@@ -13,11 +13,12 @@ use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
 use utils::PyLogger;
 use pyunsafe::{Handle, Sender};
+use transport::InitializedTransport;
 
 
 pub fn http_transport_factory(handle: Handle, factory: &PyObject,
                               socket: TcpStream, _peer: Option<SocketAddr>)
-                              -> Result<(PyObject, PyObject), io::Error> {
+                              -> io::Result<InitializedTransport> {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
@@ -40,7 +41,7 @@ pub fn http_transport_factory(handle: Handle, factory: &PyObject,
             tr3.connection_error(err)
         })
     );
-    Ok((tr.into_object(), py.None()))
+    Ok(InitializedTransport::new(tr.into_object(), py.None()))
 }
 
 

@@ -1,5 +1,6 @@
 #![allow(unused_variables)]
 
+use std::io;
 use std::thread;
 use std::net;
 use std::error::Error;
@@ -517,46 +518,42 @@ py_class!(pub class TokioEventLoop |py| {
 
                 let fut = PyFuture::new(py, self.handle(py).clone())?;
 
-                // resolve addresses
-                let lookup = addrinfo::lookup(
-                    &self._lookup(py),
-                    host, port.unwrap_or(0), family, flags, addrinfo::SocketType::Stream);
-
                 let handle = self.handle(py).clone();
                 let fut_err = fut.clone_ref(py);
                 let fut_conn = fut.clone_ref(py);
 
-                // connect
-                let conn = lookup
-                    .map_err(move |_| {
-                        let _ = with_py(|py| fut_err.cancel(py));
-                    })
-                    .and_then(move |result| with_py(|py| {
-                        let res = result;
-                        match res {
-                            Err(err) => {
-                                let _ = fut_conn.set(py, Err(err.to_pyerr(py)));
-                                future::ok(())
-                            },
-                            Ok(addrs) => {
-                                if addrs.is_empty() {
-                                    let err = Err(
-                                        PyErr::new::<exc::OSError, _>(
-                                            py, "getaddrinfo() returned empty list"));
-                                    let _ = fut_conn.set(py, err);
-                                    future::ok(())
-                                } else {
+                // resolve addresses and connect
+                let conn = addrinfo::lookup(&self._lookup(py),
+                                            host, port.unwrap_or(0),
+                                            family, flags, addrinfo::SocketType::Stream)
+                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
+                    .and_then(move |addrs| match addrs {
+                        Err(err) => future::Either::A(
+                            future::err(
+                                io::Error::new(io::ErrorKind::Other, err.description()))),
+                        Ok(addrs) => {
+                            if addrs.is_empty() {
+                                future::Either::A(future::err(
+                                    io::Error::new(
+                                        io::ErrorKind::Other, "getaddrinfo() returned empty list")))
+                            } else {
+                                future::Either::B(
                                     client::create_connection(
-                                        py, protocol_factory,
-                                        handle, fut_conn, addrs, ctx, server_hostname);
-                                    future::ok(())
-                                }
+                                        protocol_factory, handle, addrs, ctx, server_hostname))
                             }
-                        }}));
+                        }
+                    })
+                    // set exception to future
+                    .map_err(move |e| with_py(|py| {
+                        fut_err.set(py, Err(e.to_pyerr(py)));}))
+                    // set transport and protocol
+                    .map(move |res| with_py(|py| {
+                        fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}));
+
                 self.handle(py).spawn(conn);
 
                 Ok(fut)
-            },
+            }
         }
     }
 

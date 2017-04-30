@@ -211,17 +211,8 @@ impl ToPyErr for io::Error {
         let errno = self.raw_os_error().unwrap_or(0);
         let errdesc = self.description();
 
-        let err = exc_type.call(
-            py,
-            PyTuple::new(py, &[errno.to_py_object(py).into_object(),
-                               errdesc.to_py_object(py).into_object()]), None);
-
-        match err {
-            Ok(err) => PyErr::from_instance(py, err),
-            Err(err) => err
-        }
+        PyErr::new_err(py, exc_type, (errno, errdesc))
     }
-
 }
 
 

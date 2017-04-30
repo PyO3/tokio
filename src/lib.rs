@@ -15,6 +15,7 @@ extern crate boxfnonce;
 
 use cpython::*;
 
+pub mod fut;
 pub mod http;
 pub mod addrinfo;
 pub mod utils;
