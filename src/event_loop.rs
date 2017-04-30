@@ -8,7 +8,6 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use cpython::*;
-use boxfnonce::SendBoxFnOnce;
 use futures::{future, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
@@ -30,15 +29,12 @@ thread_local!(
     pub static CORE: RefCell<Option<Core>> = RefCell::new(None);
 );
 
-
 pub fn no_loop_exc(py: Python) -> PyErr {
     let cur = thread::current();
     PyErr::new::<exc::RuntimeError, _>(
-        py,
-        format!("There is no current event loop in thread {}.",
-                cur.name().unwrap_or("unknown")))
+        py, format!("There is no current event loop in thread {}.",
+                    cur.name().unwrap_or("unknown")))
 }
-
 
 pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
     CORE.with(|cell| {
@@ -59,7 +55,6 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
         evloop
     })
 }
-
 
 pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
     let check = CORE.with(|cell| {
@@ -690,26 +685,21 @@ py_class!(pub class TokioEventLoop |py| {
             Err(_) => PyTask::new(
                 py, future, Some(self.clone_ref(py)), self.handle(py).clone())?,
         };
+        let fut2 = fut.clone_ref(py);
 
         let res = py.allow_threads(|| {
             CORE.with(|cell| {
                 match *cell.borrow_mut() {
                     Some(ref mut core) => {
-                        let (rx, done_rx) = {
+                        let rx = {
                             let gil = Python::acquire_gil();
                             let py = gil.python();
-
-                            // wait for future completion
-                            let (done, done_rx) = oneshot::channel::<bool>();
-                            fut.add_callback(py, SendBoxFnOnce::from(move |fut| {
-                                let _ = done.send(true);
-                            }));
 
                             // stop fut
                             let (tx, rx) = oneshot::channel::<bool>();
                             *(self._runner(py)).borrow_mut() = Some(tx);
 
-                            (rx, done_rx)
+                            rx
                         };
 
                         // SIGINT
@@ -717,7 +707,7 @@ py_class!(pub class TokioEventLoop |py| {
                         let ctrlc = core.run(ctrlc_f).unwrap().into_future();
 
                         // wait for completion
-                        let _ = core.run(rx.select2(done_rx).select2(ctrlc));
+                        let _ = core.run(rx.select2(fut2).select2(ctrlc));
 
                         true
                     }

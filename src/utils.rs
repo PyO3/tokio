@@ -241,7 +241,7 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Durati
         Ok(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32))
     } else if let Ok(i) = PyInt::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
-            Ok(Duration::new((val * 1000) as u64, 0))
+            Ok(Duration::new(val as u64, 0))
         } else {
             Ok(Duration::new(0, 0))
         }
