@@ -61,16 +61,16 @@ py_class!(pub class PyBytes |py| {
     }
 
     def __buffer_get__(&self, view, flags) -> bool {
-        unsafe {
-            (*view).obj = ptr::null_mut();
-        }
-
         if view == ptr::null_mut() {
             unsafe {
                 let msg = ::std::ffi::CStr::from_ptr("View is null\0".as_ptr() as *const _);
                 ffi::PyErr_SetString(ffi::PyExc_BufferError, msg.as_ptr());
             }
             return false;
+        }
+
+        unsafe {
+            (*view).obj = ptr::null_mut();
         }
 
         if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {

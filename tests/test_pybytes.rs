@@ -57,5 +57,6 @@ fn test_pybytes() {
     pb.extend_into(py, &mut buf);
     assert_eq!(&buf[..], b"{\"test\": \"value\"}");
 
-
+    py.run("b=bytearray(); b.extend(pb); assert b == b'{\"test\": \"value\"}'",
+           None, Some(&d)).unwrap();
 }
