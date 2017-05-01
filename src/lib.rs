@@ -24,7 +24,6 @@ pub mod pyfuture;
 pub mod pybytes;
 pub mod pytask;
 pub mod pyunsafe;
-mod remote;
 mod event_loop;
 mod transport;
 mod server;
@@ -36,24 +35,21 @@ pub use pyfuture::PyFuture;
 pub use pytask::PyTask;
 pub use handle::{PyHandle, PyTimerHandle};
 pub use event_loop::{TokioEventLoop, new_event_loop};
-pub use remote::{RemoteTokioEventLoop, spawn_event_loop};
 pub use server::create_server;
 pub use client::create_connection;
 
 
-py_module_initializer!(_ext, init_ext, PyInit__ext, |py, m| {
+py_module_initializer!(tokio, init_ext, PyInit_tokio, |py, m| {
     m.add(py, "__doc__", "Asyncio event loop based on tokio")?;
-    m.add(py, "spawn_event_loop", py_fn!(py, spawn_event_loop(name: &PyString)))?;
     m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
 
-    // register_classes(py, m)?;
+    register_classes(py, m)?;
     Ok(())
 });
 
 
 pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
-    m.add_class::<RemoteTokioEventLoop>(py)?;
     m.add_class::<pyfuture::PyFuture>(py)?;
     m.add_class::<handle::PyHandle>(py)?;
     m.add_class::<handle::PyTimerHandle>(py)?;
