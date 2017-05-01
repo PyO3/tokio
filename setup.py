@@ -1,8 +1,5 @@
-import sys
-import os.path
-import subprocess
 from setuptools import setup
-from setuptools_rust import RustExtension, build_ext
+from setuptools_rust import RustExtension
 from setuptools.command.test import test as TestCommand
 
 
@@ -33,5 +30,4 @@ setup(name='tokio',
       setup_requires=setup_requires,
       include_package_data=True,
       zip_safe=False,
-      cmdclass=dict(test=PyTest),
-)
+      cmdclass=dict(test=PyTest))

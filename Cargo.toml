@@ -4,7 +4,7 @@ version = "0.0.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 boxfnonce = "*"

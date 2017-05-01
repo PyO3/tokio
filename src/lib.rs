@@ -13,8 +13,6 @@ extern crate boxfnonce;
 #[macro_use] extern crate cpython;
 #[macro_use] extern crate lazy_static;
 
-use cpython::*;
-
 pub mod fut;
 pub mod http;
 pub mod addrinfo;
