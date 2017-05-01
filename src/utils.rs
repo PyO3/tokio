@@ -29,6 +29,9 @@ pub struct WorkingClasses {
     pub ConnectionRefusedError: PyType,
     pub ConnectionResetError: PyType,
     pub InterruptedError: PyType,
+
+    pub Traceback: PyObject,
+    pub ExtractStack: PyObject,
 }
 
 lazy_static! {
@@ -37,6 +40,7 @@ lazy_static! {
         let py = gil.python();
         let builtins = py.import("builtins").unwrap();
         let socket = py.import("socket").unwrap();
+        let tb = py.import("traceback").unwrap();
         let exception = PyType::extract(
             py, &builtins.get(py, "Exception").unwrap()).unwrap().into_object();
 
@@ -126,6 +130,9 @@ lazy_static! {
 
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),
+
+            Traceback: tb.clone_ref(py).into_object(),
+            ExtractStack: tb.get(py, "extract_stack").unwrap(),
         }
     };
 }

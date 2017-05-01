@@ -9,7 +9,7 @@ use boxfnonce::SendBoxFnOnce;
 
 use ::TokioEventLoop;
 use utils::{Classes, PyLogger, with_py};
-use pyunsafe::{GIL, Handle};
+use pyunsafe::GIL;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum State {
@@ -21,12 +21,14 @@ pub enum State {
 pub type Callback = SendBoxFnOnce<(PyResult<PyObject>,)>;
 
 pub struct _PyFuture {
-    h: Handle,
+    pub evloop: TokioEventLoop,
     sender: Option<oneshot::Sender<PyResult<PyObject>>>,
     receiver: Option<oneshot::Receiver<PyResult<PyObject>>>,
     state: State,
     result: Option<PyObject>,
     exception: Option<PyObject>,
+    log_exc_tb: cell::Cell<bool>,
+    source_tb: Option<PyObject>,
     pub callbacks: Option<Vec<PyObject>>,
 
     // rust callbacks
@@ -37,48 +39,70 @@ unsafe impl Send for _PyFuture {}
 
 impl _PyFuture {
 
-    pub fn new(h: Handle) -> _PyFuture {
+    pub fn new(ev: TokioEventLoop) -> _PyFuture {
+        let tb = _PyFuture::extract_tb(&ev);
         let (tx, rx) = unsync::oneshot::channel();
 
         _PyFuture {
-            h: h,
+            evloop: ev,
             sender: Some(tx),
             receiver: Some(rx),
             state: State::Pending,
             result: None,
             exception: None,
+            log_exc_tb: cell::Cell::new(false),
+            source_tb: tb,
             callbacks: None,
             rcallbacks: None,
         }
     }
 
-    pub fn done_fut(h: Handle, result: PyObject) -> _PyFuture {
+    pub fn done_fut(ev: TokioEventLoop, result: PyObject) -> _PyFuture {
+        let tb = _PyFuture::extract_tb(&ev);
         _PyFuture {
-            h: h,
+            evloop: ev,
             sender: None,
             receiver: None,
             state: State::Finished,
             result: Some(result),
             exception: None,
+            log_exc_tb: cell::Cell::new(false),
+            source_tb: tb,
             callbacks: None,
             rcallbacks: None,
         }
     }
 
-    pub fn done_res(py: Python, h: Handle, result: PyResult<PyObject>) -> _PyFuture {
+    pub fn done_res(py: Python, ev: TokioEventLoop, result: PyResult<PyObject>) -> _PyFuture {
         match result {
-            Ok(result) => _PyFuture::done_fut(h, result),
-            Err(mut err) =>
+            Ok(result) => _PyFuture::done_fut(ev, result),
+            Err(mut err) => {
+                let tb = _PyFuture::extract_tb(&ev);
+
                 _PyFuture {
-                    h: h,
+                    evloop: ev,
                     sender: None,
                     receiver: None,
                     state: State::Finished,
                     result: None,
                     exception: Some(err.instance(py)),
+                    log_exc_tb: cell::Cell::new(false),
+                    source_tb: tb,
                     callbacks: None,
                     rcallbacks: None,
                 }
+            }
+        }
+    }
+
+    fn extract_tb(ev: &TokioEventLoop) -> Option<PyObject> {
+        if ev.is_debug() {
+            match Classes.ExtractStack.call(GIL::python(), NoArgs, None) {
+                Ok(tb) => Some(tb),
+                Err(_) => None,
+            }
+        } else {
+            None
         }
     }
 
@@ -127,13 +151,17 @@ impl _PyFuture {
     // future's result isn't yet available, raises InvalidStateError.  If
     // the future is done and has an exception set, this exception is raised.
     //
-    pub fn result(&self, py: Python) -> PyResult<PyObject> {
+    pub fn result(&self, py: Python, reset_log: bool) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
                 Err(PyErr::new_err(py, &Classes.InvalidStateError, ("Result is not ready.",))),
             State::Cancelled =>
                 Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             State::Finished => {
+                if reset_log {
+                    self.log_exc_tb.set(false);
+                }
+
                 match self.exception {
                     Some(ref err) => Err(PyErr::from_instance(py, err.clone_ref(py))),
                     None => match self.result {
@@ -171,7 +199,10 @@ impl _PyFuture {
                     py, Classes.CancelledError.call(py, NoArgs, None)?)),
             State::Finished =>
                 match self.exception {
-                    Some(ref err) => Ok(err.clone_ref(py)),
+                    Some(ref err) => {
+                        self.log_exc_tb.set(false);
+                        Ok(err.clone_ref(py))
+                    },
                     None => Ok(py.None()),
                 }
         }
@@ -220,6 +251,21 @@ impl _PyFuture {
     }
 
     //
+    // Return result or exception
+    //
+    pub fn get(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref exc) = self.exception {
+            Err(PyErr::from_instance(py, exc.clone_ref(py)))
+        } else {
+            if let Some(ref result) = self.result {
+                Ok(result.clone_ref(py))
+            } else {
+                Ok(py.None())
+            }
+        }
+    }
+    
+    //
     // Mark the future done and set its result.
     //
     pub fn set(&mut self, py: Python, result: PyResult<PyObject>, sender: PyObject) -> bool {
@@ -228,8 +274,10 @@ impl _PyFuture {
                 match result {
                     Ok(result) =>
                         self.result = Some(result),
-                    Err(mut err) =>
-                        self.exception = Some(err.instance(py))
+                    Err(mut err) => {
+                        self.exception = Some(err.instance(py));
+                        self.log_exc_tb.set(true);
+                    }
                 }
                 self.schedule_callbacks(py, State::Finished, sender);
                 true
@@ -285,6 +333,7 @@ impl _PyFuture {
                 }
 
                 self.exception = Some(exc);
+                self.log_exc_tb.set(true);
 
                 self.schedule_callbacks(py, State::Finished, sender);
                 Ok(py.None())
@@ -308,7 +357,7 @@ impl _PyFuture {
             },
             _ => {
                 // schedule callback
-                cb.call(self.result(py));
+                cb.call(self.result(py, false));
             },
         }
     }
@@ -321,15 +370,15 @@ impl _PyFuture {
         // complete oneshot channel
         if let Some(sender) = self.sender.take() {
             if state != State::Cancelled {
-                let _ = sender.send(self.result(py));
+                let _ = sender.send(self.result(py, false));
             }
         }
 
         // schedule rust callbacks
-        let result = self.result(py);
+        let result = self.result(py, false);
         let mut rcallbacks = self.rcallbacks.take();
 
-        self.h.spawn_fn(move|| {
+        self.evloop.href().spawn_fn(move|| {
             if let Some(ref mut rcallbacks) = rcallbacks {
                 with_py(move |py| {
                     loop {
@@ -353,9 +402,7 @@ impl _PyFuture {
         match self.callbacks.take() {
             Some(callbacks) => {
                 // call task callback
-                let result = self.result(py);
-
-                self.h.spawn_fn(move|| {
+                self.evloop.href().spawn_fn(move|| {
                     with_py(move |py| {
                         // call python callback
                         for cb in callbacks.iter() {
@@ -367,6 +414,34 @@ impl _PyFuture {
                 });
             },
             _ => (),
+        }
+    }
+
+    pub fn extract_traceback(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref tb) = self.source_tb {
+            Ok(tb.clone_ref(py))
+        } else {
+            Ok(py.None())
+        }
+    }
+}
+
+impl Drop for _PyFuture {
+    fn drop(&mut self) {
+        if self.log_exc_tb.get() {
+            let _: PyResult<()> = with_py(|py| {
+                let context = PyDict::new(py);
+                context.set_item(py, "message", "Future exception was never retrieved")?;
+                context.set_item(py, "future", "future")?;
+                if let Some(tb) = self.source_tb.take() {
+                    context.set_item(py, "source_traceback", tb)?;
+                }
+                if let Some(ref exc) = self.exception {
+                    context.set_item(py, "exception", exc.clone_ref(py))?;
+                }
+                self.evloop.call_exception_handler(py, context)?;
+                Ok(())
+            });
         }
     }
 }
@@ -385,7 +460,6 @@ impl future::Future for _PyFuture {
 }
 
 py_class!(pub class PyFuture |py| {
-    data _loop: TokioEventLoop;
     data _fut: cell::RefCell<_PyFuture>;
 
     // reference to asyncio.Future if any
@@ -432,7 +506,7 @@ py_class!(pub class PyFuture |py| {
     // the future is done and has an exception set, this exception is raised.
     //
     def result(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().result(py)
+        self._fut(py).borrow().result(py, true)
     }
 
     //
@@ -593,13 +667,13 @@ py_class!(pub class PyFuture |py| {
     // compatibility
     property _loop {
         get(&slf) -> PyResult<TokioEventLoop> {
-            Ok(slf._loop(py).clone_ref(py))
+            Ok(slf._fut(py).borrow().evloop.clone_ref(py))
         }
     }
 
     property _source_traceback {
         get(&slf) -> PyResult<PyObject> {
-            Ok(py.None())
+            slf._fut(py).borrow().extract_traceback(py)
         }
     }
 
@@ -609,22 +683,22 @@ impl PyFuture {
 
     pub fn new(py: Python, evloop: &TokioEventLoop) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, evloop.clone_ref(py),
-            cell::RefCell::new(_PyFuture::new(evloop.get_handle())),
+            py,
+            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
             cell::RefCell::new(None))
     }
 
     pub fn done_fut(py: Python, evloop: &TokioEventLoop, result: PyObject) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, evloop.clone_ref(py),
-            cell::RefCell::new(_PyFuture::done_fut(evloop.get_handle(), result)),
+            py,
+            cell::RefCell::new(_PyFuture::done_fut(evloop.clone_ref(py), result)),
             cell::RefCell::new(None))
     }
 
     pub fn done_res(py: Python, evloop: &TokioEventLoop, result: PyResult<PyObject>) -> PyResult<PyFuture> {
         PyFuture::create_instance(
-            py, evloop.clone_ref(py),
-            cell::RefCell::new(_PyFuture::done_res(py, evloop.get_handle(), result)),
+            py,
+            cell::RefCell::new(_PyFuture::done_res(py, evloop.clone_ref(py), result)),
             cell::RefCell::new(None))
     }
 
@@ -632,8 +706,8 @@ impl PyFuture {
     /// this method does not check if fut object is actually async.Future object
     pub fn from_fut(py: Python, evloop: &TokioEventLoop, fut: PyObject) -> PyResult<PyFuture> {
         let f = PyFuture::create_instance(
-            py, evloop.clone_ref(py),
-            cell::RefCell::new(_PyFuture::new(evloop.get_handle())),
+            py,
+            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
             cell::RefCell::new(Some(fut.clone_ref(py))))?;
 
         // add done callback to fut
@@ -642,6 +716,10 @@ impl PyFuture {
         fut.call_method(py, "add_done_callback", (meth,), None)?;
 
         Ok(f)
+    }
+
+    pub fn get(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).borrow().get(py)
     }
 
     pub fn set(&self, py: Python, result: PyResult<PyObject>) -> bool {

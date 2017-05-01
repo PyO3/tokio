@@ -13,7 +13,6 @@ use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
 py_class!(pub class PyTask |py| {
-    data _loop: TokioEventLoop;
     data _fut: cell::RefCell<_PyFuture>;
     data _waiter: cell::RefCell<Option<PyObject>>;
     data _must_cancel: cell::Cell<bool>;
@@ -62,7 +61,7 @@ py_class!(pub class PyTask |py| {
     // the future is done and has an exception set, this exception is raised.
     //
     def result(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().result(py)
+        self._fut(py).borrow().result(py, true)
     }
 
     //
@@ -168,7 +167,7 @@ py_class!(pub class PyTask |py| {
     // compatibility
     property _loop {
         get(&slf) -> PyResult<TokioEventLoop> {
-            Ok(slf._loop(py).clone_ref(py))
+            Ok(slf._fut(py).borrow().evloop.clone_ref(py))
         }
     }
 
@@ -189,7 +188,7 @@ py_class!(pub class PyTask |py| {
 
     property _source_traceback {
         get(&slf) -> PyResult<PyObject> {
-            Ok(py.None())
+            slf._fut(py).borrow().extract_traceback(py)
         }
     }
 
@@ -215,8 +214,8 @@ impl PyTask {
 
     pub fn new(py: Python, coro: PyObject, evloop: &TokioEventLoop) -> PyResult<PyTask> {
         let task = PyTask::create_instance(
-            py, evloop.clone_ref(py),
-            cell::RefCell::new(_PyFuture::new(evloop.get_handle())),
+            py,
+            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
             cell::RefCell::new(None),
             cell::Cell::new(false),
         )?;
@@ -234,6 +233,10 @@ impl PyTask {
         });
 
         Ok(task)
+    }
+
+    pub fn get(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).borrow().get(py)
     }
 
     //
@@ -333,7 +336,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
     *task._waiter(py).borrow_mut() = None;
 
     // set current task
-    task._loop(py).set_current_task(py, task.clone_ref(py).into_object());
+    task._fut(py).borrow().evloop.set_current_task(py, task.clone_ref(py).into_object());
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
@@ -370,7 +373,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
 
                 // fast path
                 if res.state(py) != State::Pending && retry < INPLACE_RETRY {
-                    let exc = match res.result(py) {
+                    let exc = match res.get(py) {
                         Ok(_) => None,
                         Err(ref mut err) => Some(err.instance(py)),
                     };
@@ -407,7 +410,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             else if result.hasattr(py, "_asyncio_future_blocking").unwrap() {
                 // wrap into PyFuture, use unwrap because if it failes then whole
                 // processes is hosed
-                let fut = PyFuture::from_fut(py, task._loop(py), result).unwrap();
+                let fut = PyFuture::from_fut(py, &task._fut(py).borrow().evloop, result).unwrap();
 
                 // store ref to future
                 *task._waiter(py).borrow_mut() = Some(fut.clone_ref(py).into_object());
@@ -430,7 +433,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 if retry < INPLACE_RETRY {
                     task_step(py, task2, coro, None, retry+1);
                 } else {
-                    task._loop(py).href().spawn_fn(move|| {
+                    task._fut(py).borrow().evloop.href().spawn_fn(move|| {
                         let gil = Python::acquire_gil();
                         let py = gil.python();
 
@@ -444,7 +447,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             else {
                 // Yielding something else is an error.
                 let task2 = task.clone_ref(py);
-                task._loop(py).get_handle().spawn_fn(move|| {
+                task._fut(py).borrow().evloop.href().spawn_fn(move|| {
                     let gil = Python::acquire_gil();
                     let py = gil.python();
 

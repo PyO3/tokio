@@ -712,21 +712,21 @@ py_class!(pub class TokioEventLoop |py| {
             // PyTask
             if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
                 let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             // PyFuture
             } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
                 let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             // support asyncio.Future object
             } else if fut.hasattr(py, "_asyncio_future_blocking")? {
                 let fut = PyFuture::from_fut(py, &self, fut)?;
                 let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             } else {
                 // TODO: add check for Generator object
                 let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
                 let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.result(py))
+                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             };
 
         if completed {
@@ -758,6 +758,10 @@ py_class!(pub class TokioEventLoop |py| {
 
 
 impl TokioEventLoop {
+
+    pub fn is_debug(&self) -> bool {
+        self._debug(GIL::python()).get()
+    }
 
     pub fn remote(&self) -> &Remote {
         self._remote(GIL::python())
