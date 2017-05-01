@@ -16,6 +16,7 @@ py_class!(pub class PyTask |py| {
     data _fut: cell::RefCell<_PyFuture>;
     data _waiter: cell::RefCell<Option<PyObject>>;
     data _must_cancel: cell::Cell<bool>;
+    data _blocking: cell::Cell<bool>;
 
     //
     // Cancel the future and schedule callbacks.
@@ -123,7 +124,7 @@ py_class!(pub class PyTask |py| {
     //
     def set_result(&self, result: PyObject) -> PyResult<PyObject> {
         self._fut(py).borrow_mut().set_result(
-            py, result, self.clone_ref(py).into_object())
+            py, result, self.clone_ref(py).into_object(), false)
     }
 
     //
@@ -134,7 +135,7 @@ py_class!(pub class PyTask |py| {
     //
     def set_exception(&self, exception: PyObject) -> PyResult<PyObject> {
         self._fut(py).borrow_mut().set_exception(
-            py, exception, self.clone_ref(py).into_object())
+            py, exception, self.clone_ref(py).into_object(), false)
     }
 
     //
@@ -201,12 +202,18 @@ py_class!(pub class PyTask |py| {
         }
     }
 
+    //
+    // isfuture support
+    //
     property _asyncio_future_blocking {
-        get(&slf) -> PyResult<PyBool> {
-            Ok(py.False())
+        get(&slf) -> PyResult<bool> {
+            Ok(slf._blocking(py).get())
+        }
+        set(&slf, value: bool) -> PyResult<()> {
+            slf._blocking(py).set(value);
+            Ok(())
         }
     }
-
 });
 
 
@@ -217,6 +224,7 @@ impl PyTask {
             py,
             cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
             cell::RefCell::new(None),
+            cell::Cell::new(false),
             cell::Cell::new(false),
         )?;
 
@@ -245,6 +253,17 @@ impl PyTask {
     pub fn add_callback(&self, py: Python, cb: Callback) {
         self._fut(py).borrow_mut().add_callback(py, cb);
     }
+
+    //
+    // bloking
+    //
+    pub fn is_blocking(&self) -> bool {
+        self._blocking(GIL::python()).get()
+    }
+
+    pub fn set_blocking(&self, value: bool) {
+        self._blocking(GIL::python()).set(value)
+    }
 }
 
 impl future::Future for PyTask {
@@ -267,6 +286,7 @@ py_class!(pub class PyTaskIter |py| {
         let fut = self._fut(py);
 
         if !fut._fut(py).borrow().done() {
+            fut._blocking(py).set(true);
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
@@ -318,8 +338,6 @@ fn wakeup_task(fut: PyTask, coro: PyObject, result: PyResult<PyObject>) {
 // execute task step
 //
 fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, retry: usize) {
-    // println!("task step: {:?} {:?}", task.clone_ref(py).into_object(), coro);
-
     // cancel if needed
     let mut exc = exc;
     if task._must_cancel(py).get() {
@@ -364,7 +382,40 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             }
         },
         Ok(result) => {
+            if let Ok(true) = result.hasattr(py, "_asyncio_future_blocking") {
+                if let Ok(blocking) = result.getattr(py, "_asyncio_future_blocking") {
+                    if !blocking.is_true(py).unwrap() {
+                        let mut err = PyErr::new::<exc::RuntimeError, _>(
+                            py, format!("yield was used instead of yield from \
+                                         in task {:?} with {:?}",
+                                        task.clone_ref(py).into_object(), &result));
+
+                        let waiter_task = task.clone_ref(py);
+                        task._fut(py).borrow().evloop.href().spawn_fn(move|| {
+                            let gil = Python::acquire_gil();
+                            let py = gil.python();
+
+                            // wakeup task
+                            task_step(py, waiter_task, coro, Some(err.instance(py)), 0);
+
+                            future::ok(())
+                        });
+                        return
+                    }
+                }
+            }
+
             if let Ok(res) = PyFuture::downcast_from(py, result.clone_ref(py)) {
+                if !res.is_blocking() {
+                    let mut err = PyErr::new::<exc::RuntimeError, _>(
+                        py, format!("yield was used instead of yield from \
+                                     in task {:?} with {:?}",
+                                    task.clone_ref(py).into_object(), &result));
+                    task_step(py, task.clone_ref(py), coro, Some(err.instance(py)), 0);
+                    return
+                }
+                res.set_blocking(false);
+
                 // cancel if needed
                 if task._must_cancel(py).get() {
                     let _ = res.cancel(py);
@@ -392,6 +443,16 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 }));
             }
             else if let Ok(res) = PyTask::downcast_from(py, result.clone_ref(py)) {
+                if !res.is_blocking() {
+                    let mut err = PyErr::new::<exc::RuntimeError, _>(
+                        py, format!("yield was used instead of yield from \
+                                     in task {:?} with {:?}",
+                                    task.clone_ref(py).into_object(), &result));
+                    task_step(py, task.clone_ref(py), coro, Some(err.instance(py)), 0);
+                    return
+                }
+                res.set_blocking(false);
+
                 // store ref to future
                 *task._waiter(py).borrow_mut() = Some(res.clone_ref(py).into_object());
 

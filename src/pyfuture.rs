@@ -121,7 +121,7 @@ impl _PyFuture {
     pub fn cancel(&mut self, py: Python, sender: PyObject) -> bool {
         match self.state {
             State::Pending => {
-                self.schedule_callbacks(py, State::Cancelled, sender);
+                self.schedule_callbacks(py, State::Cancelled, sender, false);
                 true
             }
             _ => false
@@ -195,8 +195,7 @@ impl _PyFuture {
                 Err(PyErr::new_err(
                     py, &Classes.InvalidStateError, "Exception is not set.")),
             State::Cancelled =>
-                Err(PyErr::from_instance(
-                    py, Classes.CancelledError.call(py, NoArgs, None)?)),
+                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             State::Finished =>
                 match self.exception {
                     Some(ref err) => {
@@ -247,20 +246,49 @@ impl _PyFuture {
     // Returns the number of callbacks removed.
     //
     pub fn remove_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<u32> {
-        unimplemented!()
+        let (callbacks, removed) =
+            if let Some(callbacks) = self.callbacks.take() {
+                let mut removed = 0;
+                let mut new = Vec::new();
+
+                for cb in callbacks {
+                    if cb != f {
+                        new.push(cb.clone_ref(py));
+                    } else {
+                        removed += 1;
+                    }
+                }
+                (new, removed)
+            } else {
+                return Ok(0)
+            };
+
+        if !callbacks.is_empty() {
+            self.callbacks = Some(callbacks)
+        }
+
+        Ok(removed)
     }
 
     //
     // Return result or exception
     //
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
-        if let Some(ref exc) = self.exception {
-            Err(PyErr::from_instance(py, exc.clone_ref(py)))
-        } else {
-            if let Some(ref result) = self.result {
-                Ok(result.clone_ref(py))
-            } else {
-                Ok(py.None())
+        match self.state {
+            State::Pending =>
+                Err(PyErr::new_err(py, &Classes.InvalidStateError, ("Result is not ready.",))),
+            State::Cancelled =>
+                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
+            State::Finished => {
+                if let Some(ref exc) = self.exception {
+                    Err(PyErr::from_instance(py, exc.clone_ref(py)))
+                } else {
+                    if let Some(ref result) = self.result {
+                        Ok(result.clone_ref(py))
+                    } else {
+                        Ok(py.None())
+                    }
+                }
             }
         }
     }
@@ -279,7 +307,7 @@ impl _PyFuture {
                         self.log_exc_tb.set(true);
                     }
                 }
-                self.schedule_callbacks(py, State::Finished, sender);
+                self.schedule_callbacks(py, State::Finished, sender, false);
                 true
             },
             _ => false
@@ -293,13 +321,13 @@ impl _PyFuture {
     // InvalidStateError.
     //
     pub fn set_result(&mut self, py: Python,
-                      result: PyObject, sender: PyObject) -> PyResult<PyObject> {
+                      result: PyObject, sender: PyObject, inplace: bool) -> PyResult<PyObject> {
         match self.state {
             State::Pending => {
                 // set result
                 self.result = Some(result);
 
-                self.schedule_callbacks(py, State::Finished, sender);
+                self.schedule_callbacks(py, State::Finished, sender, inplace);
                 Ok(py.None())
             },
             _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
@@ -312,8 +340,8 @@ impl _PyFuture {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    pub fn set_exception(&mut self, py: Python,
-                         exception: PyObject, sender: PyObject) -> PyResult<PyObject> {
+    pub fn set_exception(&mut self, py: Python, exception: PyObject,
+                         sender: PyObject, inplace: bool) -> PyResult<PyObject> {
         match self.state {
             State::Pending => {
                 // check if exception is a type object
@@ -335,7 +363,7 @@ impl _PyFuture {
                 self.exception = Some(exc);
                 self.log_exc_tb.set(true);
 
-                self.schedule_callbacks(py, State::Finished, sender);
+                self.schedule_callbacks(py, State::Finished, sender, inplace);
                 Ok(py.None())
             }
             _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
@@ -364,7 +392,8 @@ impl _PyFuture {
 
     //
     //
-    pub fn schedule_callbacks(&mut self, py: Python, state: State, owner: PyObject) {
+    pub fn schedule_callbacks(&mut self, py: Python,
+                              state: State, owner: PyObject, inplace: bool) {
         self.state = state;
 
         // complete oneshot channel
@@ -378,7 +407,7 @@ impl _PyFuture {
         let result = self.result(py, false);
         let mut rcallbacks = self.rcallbacks.take();
 
-        self.evloop.href().spawn_fn(move|| {
+        let send_rresults = move || {
             if let Some(ref mut rcallbacks) = rcallbacks {
                 with_py(move |py| {
                     loop {
@@ -396,13 +425,18 @@ impl _PyFuture {
                 });
             }
             future::ok(())
-        });
+        };
+        if inplace {
+            let _ = send_rresults();
+        } else {
+            self.evloop.href().spawn_fn(|| send_rresults());
+        }
 
         // schedule python callbacks
         match self.callbacks.take() {
             Some(callbacks) => {
                 // call task callback
-                self.evloop.href().spawn_fn(move|| {
+                let send_callbacks = move|| {
                     with_py(move |py| {
                         // call python callback
                         for cb in callbacks.iter() {
@@ -411,7 +445,13 @@ impl _PyFuture {
                         }
                     });
                     future::ok(())
-                });
+                };
+
+                if inplace {
+                    let _ = send_callbacks();
+                } else {
+                    self.evloop.href().spawn_fn(|| send_callbacks());
+                }
             },
             _ => (),
         }
@@ -461,6 +501,7 @@ impl future::Future for _PyFuture {
 
 py_class!(pub class PyFuture |py| {
     data _fut: cell::RefCell<_PyFuture>;
+    data _blocking: cell::Cell<bool>;
 
     // reference to asyncio.Future if any
     data _pyfut: cell::RefCell<Option<PyObject>>;
@@ -573,7 +614,7 @@ py_class!(pub class PyFuture |py| {
             let _ = fut.call_method(py, "set_result", (result.clone_ref(py),), None);
         }
         self._fut(py).borrow_mut().set_result(
-            py, result, self.clone_ref(py).into_object())
+            py, result, self.clone_ref(py).into_object(), false)
     }
 
     //
@@ -589,7 +630,7 @@ py_class!(pub class PyFuture |py| {
             let _ = fut.call_method(py, "set_exception", (exception.clone_ref(py),), None);
         }
         self._fut(py).borrow_mut().set_exception(
-            py, exception, self.clone_ref(py).into_object())
+            py, exception, self.clone_ref(py).into_object(), false)
     }
 
     //
@@ -607,8 +648,12 @@ py_class!(pub class PyFuture |py| {
     // isfuture support
     //
     property _asyncio_future_blocking {
-        get(&slf) -> PyResult<PyBool> {
-            Ok(py.False())
+        get(&slf) -> PyResult<bool> {
+            Ok(slf._blocking(py).get())
+        }
+        set(&slf, value: bool) -> PyResult<()> {
+            slf._blocking(py).set(value);
+            Ok(())
         }
     }
 
@@ -649,7 +694,7 @@ py_class!(pub class PyFuture |py| {
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
             if exc != py.None() {
                 let _ = self._fut(py).borrow_mut().set_exception(
-                    py, exc, self.clone_ref(py).into_object());
+                    py, exc, self.clone_ref(py).into_object(), true);
                 return Ok(py.None())
             }
         }
@@ -657,7 +702,7 @@ py_class!(pub class PyFuture |py| {
         // if fut completed with normal result
         if let Ok(result) = fut.call_method(py, "result", NoArgs, None) {
             let _ = self._fut(py).borrow_mut().set_result(
-                py, result, self.clone_ref(py).into_object());
+                py, result, self.clone_ref(py).into_object(), true);
             return Ok(py.None())
         }
 
@@ -685,6 +730,7 @@ impl PyFuture {
         PyFuture::create_instance(
             py,
             cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
+            cell::Cell::new(false),
             cell::RefCell::new(None))
     }
 
@@ -692,6 +738,7 @@ impl PyFuture {
         PyFuture::create_instance(
             py,
             cell::RefCell::new(_PyFuture::done_fut(evloop.clone_ref(py), result)),
+            cell::Cell::new(false),
             cell::RefCell::new(None))
     }
 
@@ -699,6 +746,7 @@ impl PyFuture {
         PyFuture::create_instance(
             py,
             cell::RefCell::new(_PyFuture::done_res(py, evloop.clone_ref(py), result)),
+            cell::Cell::new(false),
             cell::RefCell::new(None))
     }
 
@@ -708,6 +756,7 @@ impl PyFuture {
         let f = PyFuture::create_instance(
             py,
             cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
+            cell::Cell::new(false),
             cell::RefCell::new(Some(fut.clone_ref(py))))?;
 
         // add done callback to fut
@@ -750,6 +799,17 @@ impl PyFuture {
     pub fn add_callback(&self, py: Python, cb: Callback) {
         self._fut(py).borrow_mut().add_callback(py, cb);
     }
+
+    //
+    // bloking
+    //
+    pub fn is_blocking(&self) -> bool {
+        self._blocking(GIL::python()).get()
+    }
+
+    pub fn set_blocking(&self, value: bool) {
+        self._blocking(GIL::python()).set(value)
+    }
 }
 
 impl future::Future for PyFuture {
@@ -773,6 +833,7 @@ py_class!(pub class PyFutureIter |py| {
         let fut = self._fut(py);
 
         if !fut._fut(py).borrow().done() {
+            fut._blocking(py).set(true);
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
