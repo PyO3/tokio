@@ -3,6 +3,9 @@ name = "async-tokio"
 version = "0.0.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
 boxfnonce = "*"
 chan = "0.1"

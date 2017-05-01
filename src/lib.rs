@@ -40,7 +40,7 @@ pub use client::create_connection;
 
 
 py_module_initializer!(tokio, init_ext, PyInit_tokio, |py, m| {
-    m.add(py, "__doc__", "Asyncio event loop based on tokio")?;
+    m.add(py, "__doc__", "Asyncio event loop based on tokio-rs")?;
     m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
 
     register_classes(py, m)?;
