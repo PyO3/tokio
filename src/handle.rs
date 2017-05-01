@@ -32,7 +32,7 @@ py_class!(pub class PyTimerHandle |py| {
 
 
 pub fn call_soon(py: Python, h: &Handle,
-                 callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+                 callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
     let handle = PyHandle::create_instance(py, Cell::new(false))?;
     let handle_ref = handle.clone_ref(py);
 
@@ -49,12 +49,12 @@ pub fn call_soon(py: Python, h: &Handle,
         future::ok(())
     });
 
-    Ok(handle)
+    Ok(handle.into_object())
 }
 
 
 pub fn call_soon_threadsafe(py: Python, h: &Remote,
-                            callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+                            callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
     let handle = PyHandle::create_instance(py, Cell::new(false))?;
     let handle_ref = handle.clone_ref(py);
 
@@ -63,19 +63,19 @@ pub fn call_soon_threadsafe(py: Python, h: &Remote,
         with_py(|py| {
             // check if cancelled
             if ! handle_ref.cancelled(py).get() {
-                callback.call(py, args, None).into_log(py, "call_soon callback error");
+                callback.call(py, args, None).into_log(py, "call_soon_threadsafe callback error");
             }
         });
 
         future::ok(())
     });
 
-    Ok(handle)
+    Ok(handle.into_object())
 }
 
 
 pub fn call_later(py: Python, h: &Handle, dur: Duration,
-                  callback: PyObject, args: PyTuple) -> PyResult<PyTimerHandle> {
+                  callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
 
     // python TimerHandle
     let (cancel, rx) = oneshot::channel::<()>();
@@ -102,5 +102,5 @@ pub fn call_later(py: Python, h: &Handle, dur: Duration,
     });
     h.spawn(fut);
 
-    Ok(handle)
+    Ok(handle.into_object())
 }

@@ -26,6 +26,7 @@ use pyunsafe::{GIL, Handle};
 
 
 thread_local!(
+    pub static ID: RefCell<Option<CoreId>> = RefCell::new(None);
     pub static CORE: RefCell<Option<Core>> = RefCell::new(None);
 );
 
@@ -52,16 +53,17 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             RefCell::new(None),
         );
 
+        ID.with(|cell| { *cell.borrow_mut() = Some(core.id())});
         *cell.borrow_mut() = Some(core);
         evloop
     })
 }
 
 pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
-    let check = CORE.with(|cell| {
+    let check = ID.with(|cell| {
         match *cell.borrow() {
             None => false,
-            Some(ref core) => return core.id() == *id,
+            Some(ref id) => return id == id,
         }
     });
 
@@ -162,7 +164,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_soon(&self, *args, **kwargs) -> PyResult<handle::PyHandle> {
+    def call_soon(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
@@ -187,13 +189,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Like call_soon(), but thread-safe.
     //
-    def call_soon_threadsafe(&self, *args, **kwargs) -> PyResult<handle::PyHandle> {
-        if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
-                return Err(err)
-            }
-        }
-
+    def call_soon_threadsafe(&self, *args, **kwargs) -> PyResult<PyObject> {
         if args.len(py) < 1 {
             Err(PyErr::new::<exc::TypeError, _>(
                 py, format!("function takes at least {} arguments", 1)))
@@ -225,7 +221,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Any positional arguments after the callback will be passed to
     // the callback when it is called.
     //
-    def call_later(&self, *args, **kwargs) -> PyResult<handle::PyTimerHandle> {
+    def call_later(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
@@ -239,11 +235,17 @@ py_class!(pub class TokioEventLoop |py| {
             // get params
             let callback = args.get_item(py, 1);
             let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
-            let when = Duration::from_millis(delay);
 
-            handle::call_later(
-                py, &self.handle(py),
-                when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            if delay == 0 {
+                handle::call_soon(
+                    py, &self.handle(py),
+                    callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            } else {
+                let when = Duration::from_millis(delay);
+                handle::call_later(
+                    py, &self.handle(py),
+                    when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            }
         }
     }
 
@@ -254,7 +256,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Absolute time corresponds to the event loop's time() method.
     //
-    def call_at(&self, *args, **kwargs) -> PyResult<handle::PyTimerHandle> {
+    def call_at(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, &self.id(py)) {
                 return Err(err)
@@ -269,11 +271,17 @@ py_class!(pub class TokioEventLoop |py| {
             let callback = args.get_item(py, 1);
 
             // calculate delay
-            let when = utils::parse_seconds(py, "when", args.get_item(py, 0))?;
-            let time = when - self._instant(py).elapsed();
+            if let Some(when) = utils::parse_seconds(py, "when", args.get_item(py, 0))? {
+                let time = when - self._instant(py).elapsed();
 
-            handle::call_later(
-                py, &self.handle(py), time, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+                handle::call_later(
+                    py, &self.handle(py), time, callback,
+                    PyTuple::new(py, &args.as_slice(py)[2..]))
+            } else {
+                handle::call_soon(
+                    py, &self.handle(py),
+                    callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+            }
         }
     }
 
@@ -321,9 +329,8 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         // drop CORE
-        CORE.with(|cell| {
-            cell.borrow_mut().take()
-        });
+        ID.with(|cell| {cell.borrow_mut().take()});
+        CORE.with(|cell| {cell.borrow_mut().take()});
 
         Ok(py.None())
     }

@@ -242,15 +242,23 @@ impl ToPyErr for LookupError {
 //
 // convert PyFloat or PyInt into Duration
 //
-pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Duration> {
+pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option<Duration>> {
     if let Ok(f) = PyFloat::downcast_from(py, value.clone_ref(py)) {
         let val = f.value(py);
-        Ok(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32))
+        if val < 0.0 {
+            Ok(None)
+        } else {
+            Ok(Some(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32)))
+        }
     } else if let Ok(i) = PyInt::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
-            Ok(Duration::new(val as u64, 0))
+            if val < 0 {
+                Ok(None)
+            } else {
+                Ok(Some(Duration::new(val as u64, 0)))
+            }
         } else {
-            Ok(Duration::new(0, 0))
+            Ok(None)
         }
     } else {
         Err(PyErr::new::<exc::TypeError, _>(
@@ -264,10 +272,19 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Durati
 //
 pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
     if let Ok(f) = PyFloat::downcast_from(py, value.clone_ref(py)) {
-        Ok((f.value(py) * 1000.0) as u64)
+        let val = f.value(py);
+        if val > 0.0 {
+            Ok((val * 1000.0) as u64)
+        } else {
+            Ok(0)
+        }
     } else if let Ok(i) = PyInt::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
-            Ok((val * 1000) as u64)
+            if val < 0 {
+                Ok(0)
+            } else {
+                Ok((val * 1000) as u64)
+            }
         } else {
             Ok(0)
         }

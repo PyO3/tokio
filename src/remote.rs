@@ -7,7 +7,6 @@ use futures::future;
 use tokio_core::reactor;
 
 use addrinfo;
-use handle;
 use transport;
 use ::{PyFuture, PyTask};
 use pyunsafe::{GIL, Handle};
@@ -91,7 +90,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     //
     // Schedule callback to call later
     //
-    def call_later(&self, *args, **_kwargs) -> PyResult<handle::PyTimerHandle> {
+    def call_later(&self, *args, **_kwargs) -> PyResult<PyObject> {
         let args = args.clone_ref(py);
         let remote = self.handle(py);
 
@@ -124,7 +123,7 @@ py_class!(pub class RemoteTokioEventLoop |py| {
     //
     // Schedule callback at specific time
     //
-    def call_at(&self, *args, **kwargs) -> PyResult<handle::PyTimerHandle> {
+    def call_at(&self, *args, **kwargs) -> PyResult<PyObject> {
         let args = args.clone_ref(py);
         let remote = self.handle(py);
 
