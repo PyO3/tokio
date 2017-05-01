@@ -13,24 +13,17 @@ use pyunsafe;
 use transport::TransportFactory;
 
 
-pub fn create_server(py: Python, factory: PyObject, evloop: &TokioEventLoop,
-                     host: Option<String>, port: Option<u16>,
-                     family: i32, flags: i32, _sock: Option<PyObject>,
-                     backlog: i32, _ssl: Option<PyObject>,
+pub fn create_server(py: Python, evloop: TokioEventLoop,
+                     addrs: Vec<addrinfo::AddrInfo>, backlog: i32, _ssl: Option<PyObject>,
                      reuse_address: bool, reuse_port: bool,
-                     transport_factory: TransportFactory) -> PyResult<PyFuture> {
+                     proto_factory: PyObject, transport_factory: TransportFactory)
+                     -> PyResult<PyObject> {
 
     let handle = evloop.get_handle();
 
-    let lookup = match addrinfo::lookup_addrinfo(
-            &host.unwrap(), port.unwrap_or(0), family, flags, addrinfo::SocketType::Stream) {
-        Ok(lookup) => lookup,
-        Err(err) => return Err(err.to_pyerr(py)),
-    };
-
     // configure sockets
     let mut listeners = Vec::new();
-    for info in lookup {
+    for info in addrs {
         let builder = match info.family {
             addrinfo::Family::Inet =>
                 if let Ok(b) = TcpBuilder::new_v4() { b } else { continue },
@@ -73,13 +66,13 @@ pub fn create_server(py: Python, factory: PyObject, evloop: &TokioEventLoop,
         let (tx, rx) = unsync::oneshot::channel::<()>();
         handles.push(pyunsafe::OneshotSender::new(tx));
         Server::serve(evloop.clone_ref(py), listener.incoming(),
-                      transport_factory, factory.clone_ref(py), rx);
+                      transport_factory, proto_factory.clone_ref(py), rx);
     }
 
     let srv = TokioServer::create_instance(
         py, evloop.clone_ref(py), RefCell::new(Some(handles)))?;
 
-    PyFuture::done_fut(py, evloop, srv.into_object())
+    Ok(srv.into_object())
 }
 
 
@@ -107,11 +100,11 @@ py_class!(pub class TokioServer |py| {
 
 
 struct Server {
+    evloop: TokioEventLoop,
     stream: Incoming,
     stop: unsync::oneshot::Receiver<()>,
     transport: TransportFactory,
     factory: PyObject,
-    handle: TokioEventLoop,
 }
 
 impl Server {
@@ -122,10 +115,10 @@ impl Server {
     fn serve(evloop: TokioEventLoop, stream: Incoming, transport: TransportFactory,
              factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
 
-        let srv = Server { stop: stop, stream: stream,
-                           transport: transport, factory: factory, handle: evloop };
+        let srv = Server { evloop: evloop, stop: stop, stream: stream,
+                           transport: transport, factory: factory };
 
-        let handle = srv.handle.get_handle();
+        let handle = srv.evloop.get_handle();
         handle.spawn(
             srv.map_err(|e| {
                 error!("Server error: {}", e);
@@ -143,23 +136,22 @@ impl Future for Server
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.stop.poll() {
             // TokioServer is closed remotely
-            Ok(Async::Ready(_)) | Err(_) => Ok(Async::Ready(())),
-            Ok(Async::NotReady) => {
-                let option = self.stream.poll()?;
-                match option {
-                    Async::Ready(Some((socket, peer))) => {
-                        (self.transport)(
-                            &self.handle, &self.factory, socket, Some(peer))?;
+            Ok(Async::Ready(_)) | Err(_) => return Ok(Async::Ready(())),
+            Ok(Async::NotReady) => (),
+        }
 
-                        // we can not just return Async::NotReady here,
-                        // because self.stream is not registered within mio anymore
-                        // next stream.poll() will re-arm future
-                        self.poll()
-                    },
-                    Async::Ready(None) => Ok(Async::Ready(())),
-                    Async::NotReady => Ok(Async::NotReady),
-                }
+        let option = self.stream.poll()?;
+        match option {
+            Async::Ready(Some((socket, peer))) => {
+                (self.transport)(&self.evloop, &self.factory, socket, Some(peer))?;
+
+                // we can not just return Async::NotReady here,
+                // because self.stream is not registered within mio anymore
+                // next stream.poll() will re-arm future
+                self.poll()
             },
+            Async::Ready(None) => Ok(Async::Ready(())),
+            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }

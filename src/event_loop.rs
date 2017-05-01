@@ -14,11 +14,11 @@ use tokio_core::reactor::{Core, CoreId, Remote};
 use native_tls::TlsConnector;
 use tokio_signal;
 
+use ::{PyFuture, PyTask};
 use addrinfo;
 use client;
 use handle;
 use http;
-use ::{PyFuture, PyTask};
 use server;
 use transport;
 use utils::{self, with_py, ToPyErr};
@@ -421,16 +421,9 @@ py_class!(pub class TokioEventLoop |py| {
                       reuse_address: bool = true,
                       reuse_port: bool = true) -> PyResult<PyFuture> {
 
-        if let Some(ssl) = ssl {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, PyString::new(py, "ssl argument is not supported yet")));
-        }
-
-        server::create_server(
-            py, protocol_factory, &self,
-            Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
-            family, flags, sock, backlog, ssl, reuse_address, reuse_port,
-            transport::tcp_transport_factory)
+        self.create_server_helper(
+            py, protocol_factory, host, port, family, flags,
+            sock, backlog, ssl, reuse_address, reuse_port, transport::tcp_transport_factory)
     }
 
     def create_http_server(&self, protocol_factory: PyObject,
@@ -442,16 +435,10 @@ py_class!(pub class TokioEventLoop |py| {
                            ssl: Option<PyObject> = None,
                            reuse_address: bool = true,
                            reuse_port: bool = true) -> PyResult<PyFuture> {
-        if let Some(ssl) = ssl {
-            return Err(PyErr::new::<exc::ValueError, _>(
-                py, PyString::new(py, "ssl argument is not supported yet")));
-        }
 
-        server::create_server(
-            py, protocol_factory, &self,
-            Some(String::from(host.unwrap().to_string_lossy(py))), Some(port.unwrap_or(0)),
-            family, flags, sock, backlog, ssl, reuse_address, reuse_port,
-            http::http_transport_factory)
+        self.create_server_helper(
+            py, protocol_factory, host, port, family, flags,
+            sock, backlog, ssl, reuse_address, reuse_port, http::http_transport_factory)
     }
 
     // Connect to a TCP server.
@@ -717,7 +704,7 @@ py_class!(pub class TokioEventLoop |py| {
             } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
-            // support asyncio.Future object
+            // asyncio.Future
             } else if fut.hasattr(py, "_asyncio_future_blocking")? {
                 let fut = PyFuture::from_fut(py, &self, fut)?;
                 let fut2 = fut.clone_ref(py);
@@ -759,28 +746,34 @@ py_class!(pub class TokioEventLoop |py| {
 
 impl TokioEventLoop {
 
+    /// Check if ``debug`` mode is enabled
     pub fn is_debug(&self) -> bool {
         self._debug(GIL::python()).get()
     }
 
+    /// Get reference to tokio remote handle
     pub fn remote(&self) -> &Remote {
         self._remote(GIL::python())
     }
 
+    /// Get reference to tokio handle
     pub fn href(&self) -> &Handle {
         self.handle(GIL::python())
     }
 
+    /// Clone tokio handle
     pub fn get_handle(&self) -> Handle {
         self.handle(GIL::python()).clone()
     }
 
+    /// set current executing task (for asyncio.Task.current_task api)
     pub fn set_current_task(&self, py: Python, task: PyObject) {
         *self._current_task(py).borrow_mut() = Some(task)
     }
 
-    pub fn run_future(&self,fut: Box<Future<Item=PyResult<PyObject>,
-                                            Error=unsync::oneshot::Canceled>>) -> bool {
+    /// Run future to completion
+    pub fn run_future(&self, fut: Box<Future<Item=PyResult<PyObject>,
+                                             Error=unsync::oneshot::Canceled>>) -> bool {
         CORE.with(|cell| {
             match *cell.borrow_mut() {
                 Some(ref mut core) => {
@@ -809,4 +802,75 @@ impl TokioEventLoop {
         })
     }
 
+    pub fn create_server_helper(&self, py: Python, protocol_factory: PyObject,
+                                host: Option<PyString>, port: Option<u16>,
+                                family: i32, flags: i32, sock: Option<PyObject>,
+                                backlog: i32, ssl: Option<PyObject>,
+                                reuse_address: bool, reuse_port: bool,
+                                transport_factory: transport::TransportFactory)
+                                -> PyResult<PyFuture> {
+
+        match (&host, &port) {
+            (&None, &None) => {
+                if let Some(_) = sock {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "sock is not supported yet"))
+                } else {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "Neither host/port nor sock were specified"))
+                }
+            },
+            _ => ()
+        }
+
+        if let Some(ssl) = ssl {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, PyString::new(py, "ssl argument is not supported yet")));
+        }
+
+        // exctract hostname
+        let host = host.map(|s| String::from(s.to_string_lossy(py)))
+            .unwrap_or(String::new());
+
+        // waiter future
+        let fut = PyFuture::new(py, &self)?;
+        let fut_srv = fut.clone_ref(py);
+        let evloop = self.clone_ref(py);
+
+        // resolve addresses and start listening
+        let conn = addrinfo::lookup(&self._lookup(py),
+                                    host, port.unwrap_or(0),
+                                    family, flags, addrinfo::SocketType::Stream)
+            .map_err(|err| with_py(
+                |py| io::Error::new(io::ErrorKind::Other, err.description()).to_pyerr(py)))
+            .then(move |result| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                match result {
+                    Err(err) => {
+                        let _ = fut_srv.set(py, Err(err));
+                    },
+                    Ok(Err(err)) => {
+                        let _ = fut_srv.set(py, Err(err.to_pyerr(py)));
+                    },
+                    Ok(Ok(addrs)) => {
+                        if addrs.is_empty() {
+                            let _ = fut_srv.set(
+                                py, Err(PyErr::new::<exc::RuntimeError, _>(
+                                    py, "getaddrinfo() returned empty list")));
+                        } else {
+                            let res = server::create_server(
+                                py, evloop, addrs, backlog, ssl, reuse_address, reuse_port,
+                                protocol_factory, transport_factory);
+                            let _ = fut_srv.set(py, res);
+                        }
+                    }
+                }
+                future::ok(())
+            });
+
+        self.handle(py).spawn(conn);
+        Ok(fut)
+    }
 }
