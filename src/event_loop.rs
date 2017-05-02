@@ -17,7 +17,7 @@ use tokio_signal;
 use ::{PyFuture, PyTask};
 use addrinfo;
 use client;
-use handle;
+use handle::PyHandle;
 use http;
 use server;
 use transport;
@@ -49,6 +49,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             addrinfo::start_workers(3),
             RefCell::new(None),
             RefCell::new(py.None()),
+            Cell::new(100),
             Cell::new(false),
             RefCell::new(None),
         );
@@ -81,7 +82,8 @@ enum RunStatus {
     Stopped,
     CtrlC,
     NoEventLoop,
-    Error
+    Error,
+    PyError(PyErr),
 }
 
 
@@ -91,8 +93,9 @@ py_class!(pub class TokioEventLoop |py| {
     data _remote: Remote;
     data _instant: Instant;
     data _lookup: addrinfo::LookupWorkerSender;
-    data _runner: RefCell<Option<oneshot::Sender<bool>>>;
+    data _runner: RefCell<Option<oneshot::Sender<PyResult<()>>>>;
     data _exception_handler: RefCell<PyObject>;
+    data _slow_callback_duration: Cell<u64>;
     data _debug: Cell<bool>;
     data _current_task: RefCell<Option<PyObject>>;
 
@@ -178,9 +181,10 @@ py_class!(pub class TokioEventLoop |py| {
             // get params
             let callback = args.get_item(py, 0);
 
-            handle::call_soon(
-                py, &self.handle(py),
-                callback, PyTuple::new(py, &args.as_slice(py)[1..]))
+            let h = PyHandle::new(py, &self,
+                                  callback, PyTuple::new(py, &args.as_slice(py)[1..]))?;
+            h.call_soon(py);
+            Ok(h.into_object())
         }
     }
 
@@ -197,9 +201,13 @@ py_class!(pub class TokioEventLoop |py| {
             // get params
             let callback = args.get_item(py, 0);
 
-            handle::call_soon_threadsafe(
-                py, self._remote(py),
-                callback, PyTuple::new(py, &args.as_slice(py)[1..]))
+            // create handle and schedule work
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[1..]))?;
+
+            h.call_soon_threadsafe(py);
+
+            Ok(h.into_object())
         }
     }
 
@@ -236,16 +244,16 @@ py_class!(pub class TokioEventLoop |py| {
             let callback = args.get_item(py, 1);
             let delay = utils::parse_millis(py, "delay", args.get_item(py, 0))?;
 
+            // create handle and schedule work
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[2..]))?;
+
             if delay == 0 {
-                handle::call_soon(
-                    py, &self.handle(py),
-                    callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+                h.call_soon(py);
             } else {
-                let when = Duration::from_millis(delay);
-                handle::call_later(
-                    py, &self.handle(py),
-                    when, callback, PyTuple::new(py, &args.as_slice(py)[2..]))
-            }
+                h.call_later(py, Duration::from_millis(delay));
+            };
+            Ok(h.into_object())
         }
     }
 
@@ -270,18 +278,19 @@ py_class!(pub class TokioEventLoop |py| {
             // get params
             let callback = args.get_item(py, 1);
 
+            // create handle and schedule work
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[2..]))?;
+
             // calculate delay
             if let Some(when) = utils::parse_seconds(py, "when", args.get_item(py, 0))? {
                 let time = when - self._instant(py).elapsed();
 
-                handle::call_later(
-                    py, &self.handle(py), time, callback,
-                    PyTuple::new(py, &args.as_slice(py)[2..]))
+                h.call_later(py, time);
             } else {
-                handle::call_soon(
-                    py, &self.handle(py),
-                    callback, PyTuple::new(py, &args.as_slice(py)[2..]))
+                h.call_soon(py);
             }
+            Ok(h.into_object())
         }
     }
 
@@ -293,7 +302,7 @@ py_class!(pub class TokioEventLoop |py| {
 
         match runner  {
             Some(tx) => {
-                let _ = tx.send(true);
+                let _ = tx.send(Ok(()));
                 Ok(py.True())
             },
             None => Ok(py.False()),
@@ -308,10 +317,10 @@ py_class!(pub class TokioEventLoop |py| {
     }
 
     def is_closed(&self) -> PyResult<bool> {
-        CORE.with(|cell| {
-            match cell.try_borrow() {
-                Ok(ref cell) => Ok(cell.is_some()),
-                Err(_) => Ok(true)
+        ID.with(|cell| {
+            match *cell.borrow() {
+                None => Ok(true),
+                Some(_) => Ok(false),
             }
         })
     }
@@ -590,7 +599,7 @@ py_class!(pub class TokioEventLoop |py| {
     // will be a dict object (see `call_exception_handler()`
     // documentation for details about context).
     def set_exception_handler(&self, handler: PyObject) -> PyResult<PyObject> {
-        if !handler.is_callable(py) {
+        if handler != py.None() && !handler.is_callable(py) {
             Err(PyErr::new::<exc::TypeError, _>(
                 py, format!("A callable object or None is expected, got {:?}", handler)))
         } else {
@@ -646,7 +655,7 @@ py_class!(pub class TokioEventLoop |py| {
                             let py = gil.python();
 
                             // set cancel sender
-                            let (tx, rx) = oneshot::channel::<bool>();
+                            let (tx, rx) = oneshot::channel();
                             *(self._runner(py)).borrow_mut() = Some(tx);
                             rx
                         };
@@ -658,9 +667,12 @@ py_class!(pub class TokioEventLoop |py| {
 
                             let fut = rx.select2(ctrlc).then(|res| {
                                 match res {
-                                    Ok(future::Either::A(_)) => future::ok(RunStatus::Stopped),
+                                    Ok(future::Either::A((res, _))) => match res {
+                                        Ok(_) => future::ok(RunStatus::Stopped),
+                                        Err(err) => future::ok(RunStatus::PyError(err)),
+                                    },
                                     Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
-                                    Err(e) => future::err(()),
+                                    Err(_) => future::err(()),
                                 }
                             });
                             match core.run(fut) {
@@ -684,6 +696,7 @@ py_class!(pub class TokioEventLoop |py| {
         match res {
             RunStatus::Stopped => Ok(py.None()),
             RunStatus::CtrlC => Ok(py.None()),
+            RunStatus::PyError(err) => Err(err),
             RunStatus::Error => Err(
                 PyErr::new::<exc::RuntimeError, _>(py, "Unknown runtime error")),
             RunStatus::NoEventLoop => Err(no_loop_exc(py)),
@@ -705,14 +718,28 @@ py_class!(pub class TokioEventLoop |py| {
         let (completed, result) =
             // PyTask
             if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
+                if !fut.is_same_loop(py, &self) {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "loop argument must agree with Future"))
+                }
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             // PyFuture
             } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
+                if !fut.is_same_loop(py, &self) {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "loop argument must agree with Future"))
+                }
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             // asyncio.Future
             } else if fut.hasattr(py, "_asyncio_future_blocking")? {
+                let l = fut.getattr(py, "_loop")?;
+                if l != self.to_py_object(py).into_object() {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "loop argument must agree with Future"))
+                }
+
                 let fut = PyFuture::from_fut(py, &self, fut)?;
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
@@ -740,12 +767,23 @@ py_class!(pub class TokioEventLoop |py| {
         Ok(self._debug(py).get())
     }
 
-    //
-    // Set event loop debug flag
-    //
     def set_debug(&self, enabled: bool) -> PyResult<PyObject> {
         self._debug(py).set(enabled);
         Ok(py.None())
+    }
+
+    //
+    // slow_callback_duration
+    //
+    property slow_callback_duration {
+        get(&slf) -> PyResult<f32> {
+            Ok(slf._slow_callback_duration(py).get() as f32 / 1000.0)
+        }
+        set(&slf, value: PyObject) -> PyResult<()> {
+            let millis = utils::parse_millis(py, "slow_callback_duration", value)?;
+            slf._slow_callback_duration(py).set(millis);
+            Ok(())
+        }
     }
 
 });
@@ -773,6 +811,18 @@ impl TokioEventLoop {
         self.handle(GIL::python()).clone()
     }
 
+    /// Stop with py exception
+    pub fn stop_with_err(&self, py: Python, err: PyErr) {
+        let runner = self._runner(py).borrow_mut().take();
+
+        match runner  {
+            Some(tx) => {
+                let _ = tx.send(Err(err));
+            },
+            None => (),
+        }
+    }
+
     /// set current executing task (for asyncio.Task.current_task api)
     pub fn set_current_task(&self, py: Python, task: PyObject) {
         *self._current_task(py).borrow_mut() = Some(task)
@@ -789,7 +839,7 @@ impl TokioEventLoop {
                         let py = gil.python();
 
                         // stop fut
-                        let (tx, rx) = oneshot::channel::<bool>();
+                        let (tx, rx) = oneshot::channel();
                         *(self._runner(py)).borrow_mut() = Some(tx);
 
                         rx
@@ -879,5 +929,13 @@ impl TokioEventLoop {
 
         self.handle(py).spawn(conn);
         Ok(fut)
+    }
+}
+
+
+impl PartialEq for TokioEventLoop {
+    fn eq(&self, other: &TokioEventLoop) -> bool {
+        let py = GIL::python();
+        self.id(py) == other.id(py)
     }
 }

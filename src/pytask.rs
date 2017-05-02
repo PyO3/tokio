@@ -264,6 +264,13 @@ impl PyTask {
     pub fn set_blocking(&self, value: bool) {
         self._blocking(GIL::python()).set(value)
     }
+
+    //
+    // helpers methods
+    //
+    pub fn is_same_loop(&self, py: Python, evloop: &TokioEventLoop) -> bool {
+        &self._fut(py).borrow().evloop == evloop
+    }
 }
 
 impl future::Future for PyTask {

@@ -472,7 +472,7 @@ impl Drop for _PyFuture {
             let _: PyResult<()> = with_py(|py| {
                 let context = PyDict::new(py);
                 context.set_item(py, "message", "Future exception was never retrieved")?;
-                context.set_item(py, "future", "future")?;
+                context.set_item(py, "future", "PyFuture")?;
                 if let Some(tb) = self.source_tb.take() {
                     context.set_item(py, "source_traceback", tb)?;
                 }
@@ -809,6 +809,13 @@ impl PyFuture {
 
     pub fn set_blocking(&self, value: bool) {
         self._blocking(GIL::python()).set(value)
+    }
+
+    //
+    // helpers methods
+    //
+    pub fn is_same_loop(&self, py: Python, evloop: &TokioEventLoop) -> bool {
+        &self._fut(py).borrow().evloop == evloop
     }
 }
 

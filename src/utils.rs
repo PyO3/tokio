@@ -30,6 +30,7 @@ pub struct WorkingClasses {
     pub ConnectionResetError: PyType,
     pub InterruptedError: PyType,
 
+    pub Sys: PyObject,
     pub Traceback: PyObject,
     pub ExtractStack: PyObject,
 }
@@ -131,6 +132,7 @@ lazy_static! {
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),
 
+            Sys: py.import("sys").unwrap().into_object(),
             Traceback: tb.clone_ref(py).into_object(),
             ExtractStack: tb.get(py, "extract_stack").unwrap(),
         }

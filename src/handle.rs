@@ -4,103 +4,118 @@ use std::time::Duration;
 use cpython::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
-use tokio_core::reactor::{Timeout, Remote};
+use tokio_core::reactor::Timeout;
 
-use pyunsafe::Handle;
-use utils::{with_py, PyLogger};
+use ::{TokioEventLoop, Classes, with_py};
 
 
 py_class!(pub class PyHandle |py| {
-    data cancelled: Cell<bool>;
+    data _loop: TokioEventLoop;
+    data _cancelled: Cell<bool>;
+    data _cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
+    data _callback: PyObject;
+    data _args: PyTuple;
+    data _source_traceback: Option<PyObject>;
 
     def cancel(&self) -> PyResult<PyObject> {
-        self.cancelled(py).set(true);
-        Ok(py.None())
-    }
-});
+        self._cancelled(py).set(true);
 
-py_class!(pub class PyTimerHandle |py| {
-    data cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
-
-    def cancel(&self) -> PyResult<PyObject> {
-        if let Some(tx) = self.cancel_handle(py).borrow_mut().take() {
+        if let Some(tx) = self._cancel_handle(py).borrow_mut().take() {
             let _ = tx.send(());
         }
+
         Ok(py.None())
     }
 });
 
 
-pub fn call_soon(py: Python, h: &Handle,
-                 callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
-    let handle = PyHandle::create_instance(py, Cell::new(false))?;
-    let handle_ref = handle.clone_ref(py);
+impl PyHandle {
 
-    // schedule work
-    h.spawn_fn(move || {
-        with_py(|py| {
+    pub fn new(py: Python, evloop: &TokioEventLoop,
+               callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+
+        let tb = if evloop.is_debug() {
+            let frame = Classes.Sys.call_method(py, "_getframe", (0,), None)?;
+            Some(Classes.ExtractStack.call(py, (frame,), None)?)
+        } else {
+            None
+        };
+
+        PyHandle::create_instance(
+            py, evloop.clone_ref(py), Cell::new(false), RefCell::new(None), callback, args, tb)
+    }
+
+    pub fn call_soon(&self, py: Python) {
+        let h = self.clone_ref(py);
+
+        // schedule work
+        self._loop(py).get_handle().spawn_fn(move || {
+            h.run();
+            future::ok(())
+        });
+    }
+
+    pub fn call_soon_threadsafe(&self, py: Python) {
+        let h = self.clone_ref(py);
+
+        // schedule work
+        self._loop(py).remote().spawn(move |_| {
+            h.run();
+            future::ok(())
+        });
+    }
+
+    pub fn call_later(&self, py: Python, when: Duration) {
+        // cancel onshot
+        let (cancel, rx) = oneshot::channel::<()>();
+        *self._cancel_handle(py).borrow_mut() = Some(cancel);
+
+        // we need to hold reference, otherwise python will release handle object
+        let h = self.clone_ref(py);
+
+        // start timer
+        let fut = Timeout::new(when, self._loop(py).href()).unwrap().select2(rx)
+            .then(move |res| {
+                if let Ok(future::Either::A(_)) = res {
+                    // timeout got fired, call callback
+                    h.run();
+                }
+                future::ok(())
+            });
+        self._loop(py).href().spawn(fut);
+    }
+
+    fn run(&self) {
+        let _: PyResult<()> = with_py(|py| {
             // check if cancelled
-            if ! handle_ref.cancelled(py).get() {
-                callback.call(py, args, None)
-                    .into_log(py, "call_soon callback error");
+            if self._cancelled(py).get() {
+                return Ok(())
             }
-        });
 
-        future::ok(())
-    });
+            let result = self._callback(py).call(py, self._args(py).clone_ref(py), None);
 
-    Ok(handle.into_object())
-}
+            // handle python exception
+            if let Err(err) = result {
+                if err.matches(py, &Classes.Exception) {
+                    let context = PyDict::new(py);
+                    context.set_item(py, "message",
+                                     format!("Exception in callback {:?} {:?}",
+                                             self._callback(py),
+                                             self._args(py).clone_ref(py).into_object()))?;
+                    context.set_item(py, "handle",
+                                     format!("{:?}", self.clone_ref(py).into_object()))?;
+                    context.set_item(py, "exception", err.clone_ref(py).instance(py))?;
 
-
-pub fn call_soon_threadsafe(py: Python, h: &Remote,
-                            callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
-    let handle = PyHandle::create_instance(py, Cell::new(false))?;
-    let handle_ref = handle.clone_ref(py);
-
-    // schedule work
-    h.spawn(move |_| {
-        with_py(|py| {
-            // check if cancelled
-            if ! handle_ref.cancelled(py).get() {
-                callback.call(py, args, None).into_log(py, "call_soon_threadsafe callback error");
+                    if let Some(ref tb) = *self._source_traceback(py) {
+                        context.set_item(py, "source_traceback", tb.clone_ref(py))?;
+                    }
+                    self._loop(py).call_exception_handler(py, context)?;
+                } else {
+                    // escalate to event loop
+                    self._loop(py).stop_with_err(py, err);
+                }
             }
+            Ok(())
         });
-
-        future::ok(())
-    });
-
-    Ok(handle.into_object())
-}
-
-
-pub fn call_later(py: Python, h: &Handle, dur: Duration,
-                  callback: PyObject, args: PyTuple) -> PyResult<PyObject> {
-
-    // python TimerHandle
-    let (cancel, rx) = oneshot::channel::<()>();
-
-    let handle = PyTimerHandle::create_instance(py, RefCell::new(Some(cancel)))?;
-
-    // we need to hold reference, otherwise python will release handle object
-    let handle_ref = handle.clone_ref(py);
-
-    // start timer
-    let fut = Timeout::new(dur, &h).unwrap().select2(rx).then(move |res| {
-        with_py(|py| {
-            // drop ref to handle
-            handle_ref.release_ref(py);
-
-            if let Ok(future::Either::A(_)) = res {
-                // timeout got fired, call callback
-                callback.call(py, args, None)
-                    .into_log(py, "call_later callback error");
-            }
-        });
-
-        future::ok(())
-    });
-    h.spawn(fut);
-
-    Ok(handle.into_object())
+    }
 }
