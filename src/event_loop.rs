@@ -360,8 +360,7 @@ py_class!(pub class TokioEventLoop |py| {
 
         // lookup process future
         let lookup = addrinfo::lookup(
-            &self._lookup(py),
-            String::from(host.to_string(py)?.as_ref()),
+            &self._lookup(py), Some(String::from(host.to_string(py)?)),
             port, family, flags, addrinfo::SocketType::from_int(socktype));
 
         // convert addr info to python comaptible  values
@@ -428,7 +427,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Return a Server object which can be used to stop the service.
     //
     def create_server(&self, protocol_factory: PyObject,
-                      host: Option<PyString>, port: Option<u16> = None,
+                      host: Option<PyString> = None, port: Option<u16> = None,
                       family: i32 = 0,
                       flags: i32 = addrinfo::AI_PASSIVE,
                       sock: Option<PyObject> = None,
@@ -443,7 +442,7 @@ py_class!(pub class TokioEventLoop |py| {
     }
 
     def create_http_server(&self, protocol_factory: PyObject,
-                           host: Option<PyString>, port: Option<u16> = None,
+                           host: Option<PyString> = None, port: Option<u16> = None,
                            family: i32 = 0,
                            flags: i32 = addrinfo::AI_PASSIVE,
                            sock: Option<PyObject> = None,
@@ -532,13 +531,16 @@ py_class!(pub class TokioEventLoop |py| {
                 }
 
                 // exctract hostname
-                let host = host.map(|s| String::from(s.to_string_lossy(py)))
-                    .unwrap_or(String::new());
+                let host = host.map(
+                    |s| Some(String::from(s.to_string_lossy(py)))).unwrap_or(None);
 
                 // server hostname for ssl validation
                 let server_hostname = match server_hostname {
                     Some(s) => String::from(s.to_string(py)?),
-                    None => host.clone(),
+                    None => match host {
+                        Some(ref h) => h.clone(),
+                        None => String::new(),
+                    }
                 };
 
                 let fut = PyFuture::new(py, &self)?;
@@ -886,8 +888,7 @@ impl TokioEventLoop {
         }
 
         // exctract hostname
-        let host = host.map(|s| String::from(s.to_string_lossy(py)))
-            .unwrap_or(String::new());
+        let host = host.map(|s| Some(String::from(s.to_string_lossy(py)))).unwrap_or(None);
 
         // waiter future
         let fut = PyFuture::new(py, &self)?;
@@ -906,6 +907,7 @@ impl TokioEventLoop {
 
                 match result {
                     Err(err) => {
+                        println!("lookup error: {:?}", err);
                         let _ = fut_srv.set(py, Err(err));
                     },
                     Ok(Err(err)) => {

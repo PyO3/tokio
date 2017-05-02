@@ -14,7 +14,10 @@ use std::thread;
 use chan;
 use futures::sync::oneshot;
 
-pub const AI_PASSIVE: libc::c_int = 0x0020;
+pub const AI_PASSIVE: libc::c_int = 0x0001;
+pub const AI_CANONNAME: libc::c_int = 0x0002;
+pub const AI_NUMERICSERV: libc::c_int = 0x0400;
+
 
 #[derive(Debug)]
 /// Address family
@@ -189,7 +192,7 @@ fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> 
 
 
 pub struct LookupParams {
-    host: String,
+    host: Option<String>,
     port: u16,
     family: libc::c_int,
     flags: libc::c_int,
@@ -197,7 +200,7 @@ pub struct LookupParams {
 }
 
 impl LookupParams {
-    pub fn new(host: String, port: u16,
+    pub fn new(host: Option<String>, port: u16,
                family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> LookupParams {
         LookupParams {
             host: host,
@@ -219,9 +222,8 @@ pub struct LookupAddrInfo {
 
 /// Lookup a addr info via dns, return an iterator of addr infos.
 pub fn lookup_addrinfo(
-    host: &str, port: u16,
+    host: Option<String>, port: u16,
     family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> Result<LookupAddrInfo, LookupError> {
-    let c_host = CString::new(host)?;
     let mut res = ptr::null_mut();
     let hints = libc::addrinfo {
         ai_flags: flags,
@@ -235,7 +237,15 @@ pub fn lookup_addrinfo(
     };
 
     unsafe {
-        match libc::getaddrinfo(c_host.as_ptr(), ptr::null(), &hints, &mut res) {
+        let (c_host, c_srv) = if let Some(host) = host {
+            (CString::new(host.as_str())?.as_ptr(), ptr::null())
+        } else {
+            (ptr::null(), CString::new("0")?.as_ptr())
+        };
+
+        let lres =  libc::getaddrinfo(c_host, c_srv, &hints, &mut res);
+        // println!("result: {} {} {}", lres, flags, AI_PASSIVE);
+        match lres {
             0 => Ok(LookupAddrInfo { port: port, orig: res, cur: res }),
             _ => Err(LookupError::Generic),
         }
@@ -352,7 +362,7 @@ pub fn start_workers(num: usize) -> LookupWorkerSender {
                 match r.recv() {
                     None => return,
                     Some((params, tx)) => {
-                        match lookup_addrinfo(params.host.as_str(), params.port,
+                        match lookup_addrinfo(params.host, params.port,
                                               params.family, params.flags, params.socktype) {
                             Err(err) => {
                                 let _ = tx.send(Err(err));
@@ -371,7 +381,7 @@ pub fn start_workers(num: usize) -> LookupWorkerSender {
 }
 
 pub fn lookup(sender: &LookupWorkerSender,
-              host: String, port: u16,
+              host: Option<String>, port: u16,
               family: libc::c_int, flags: libc::c_int, socktype: SocketType)
               -> LookupResultReceiver {
     // prepare work item

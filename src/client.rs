@@ -80,7 +80,7 @@ fn connect(addrs: Vec<addrinfo::AddrInfo>, handle: Handle)
     }).map_err(|e| {
         match e {
             UntilError::NoResult => io::Error::new(
-                io::ErrorKind::Other, "Can not connect to host"),
+                io::ErrorKind::ConnectionRefused, "Can not connect to host"),
             _ => unreachable!(),
         }
     });
