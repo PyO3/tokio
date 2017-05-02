@@ -16,6 +16,7 @@ use futures::sync::oneshot;
 
 pub const AI_PASSIVE: libc::c_int = 0x0001;
 pub const AI_CANONNAME: libc::c_int = 0x0002;
+pub const AI_NUMERICHOST: libc::c_int = 0x0004;
 pub const AI_NUMERICSERV: libc::c_int = 0x0400;
 
 
@@ -236,15 +237,17 @@ pub fn lookup_addrinfo(
         ai_next: ptr::null_mut(),
     };
 
-    unsafe {
-        let (c_host, c_srv) = if let Some(host) = host {
-            (CString::new(host.as_str())?.as_ptr(), ptr::null())
-        } else {
-            (ptr::null(), CString::new("0")?.as_ptr())
-        };
+    let tmp;
+    let (c_host, c_srv) = if let Some(host) = host {
+        tmp = CString::new(host)?;
+        (tmp.as_ptr(), ptr::null())
+    } else {
+        tmp = CString::new(port.to_string())?;
+        (ptr::null(), tmp.as_ptr())
+    };
 
-        let lres =  libc::getaddrinfo(c_host, c_srv, &hints, &mut res);
-        // println!("result: {} {} {}", lres, flags, AI_PASSIVE);
+    unsafe {
+        let lres = libc::getaddrinfo(c_host, c_srv, &hints, &mut res);
         match lres {
             0 => Ok(LookupAddrInfo { port: port, orig: res, cur: res }),
             _ => Err(LookupError::Generic),

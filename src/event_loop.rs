@@ -907,7 +907,6 @@ impl TokioEventLoop {
 
                 match result {
                     Err(err) => {
-                        println!("lookup error: {:?}", err);
                         let _ = fut_srv.set(py, Err(err));
                     },
                     Ok(Err(err)) => {
