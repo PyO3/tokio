@@ -2,8 +2,8 @@ use std::io;
 use std::ptr;
 use libc::c_void;
 
-use cpython::{exc, Python, PyClone,
-              PyResult, PyObject, PySlice, PyErr, PythonObjectWithCheckedDowncast};
+use cpython::{exc, Python, PythonObject, PyClone,
+              PyResult, PyObject, PySlice, PyErr, PythonObjectWithCheckedDowncast, ToPyObject};
 use cpython::_detail::ffi;
 use bytes::{Bytes, BytesMut, BufMut};
 
@@ -19,7 +19,7 @@ py_class!(pub class PyBytes |py| {
         Ok(self._bytes(py).len())
     }
 
-    def __getitem__(&self, key: PyObject) -> PyResult<PyBytes> {
+    def __getitem__(&self, key: PyObject) -> PyResult<PyObject> {
         // access by slice
         if let Ok(slice) = PySlice::downcast_from(py, key.clone_ref(py)) {
             let bytes = self._bytes(py);
@@ -39,7 +39,7 @@ py_class!(pub class PyBytes |py| {
                 }
                 buf.freeze()
             };
-            Ok(PyBytes::new(py, s)?)
+            Ok(PyBytes::new(py, s)?.into_object())
         }
         // access by index
         else if let Ok(idx) = key.extract::<isize>(py) {
@@ -50,7 +50,7 @@ py_class!(pub class PyBytes |py| {
                 let bytes = self._bytes(py);
 
                 if idx < bytes.len() {
-                    Ok(PyBytes::new(py, bytes.slice(idx, idx+1))?)
+                    Ok(bytes[idx].to_py_object(py).into_object())
                 } else {
                     Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
                 }

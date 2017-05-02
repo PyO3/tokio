@@ -52,6 +52,8 @@ fn test_pybytes() {
         .log_error(py, "assert error").unwrap();
     py.run("assert str(pb[2:6:2], encoding=\"utf-8\") == 'ts'", None, Some(&d))
         .log_error(py, "assert error").unwrap();
+    py.run("assert isinstance(pb[2], int)", None, Some(&d))
+        .log_error(py, "assert error").unwrap();
 
     let mut buf = BytesMut::with_capacity(24);
     pb.extend_into(py, &mut buf);
