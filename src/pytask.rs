@@ -498,19 +498,15 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             else if result == py.None() {
                 // call soon
                 let task2 = task.clone_ref(py);
-                if retry < INPLACE_RETRY {
-                    task_step(py, task2, coro, None, retry+1);
-                } else {
-                    task._fut(py).borrow().evloop.href().spawn_fn(move|| {
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
+                task._fut(py).borrow().evloop.href().spawn_fn(move|| {
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
 
-                        // wakeup task
-                        task_step(py, task2, coro, None, 0);
+                    // wakeup task
+                    task_step(py, task2, coro, None, 0);
 
-                        future::ok(())
-                    });
-                }
+                    future::ok(())
+                });
             }
             else {
                 // Yielding something else is an error.
