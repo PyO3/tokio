@@ -21,7 +21,7 @@ use handle::PyHandle;
 use http;
 use server;
 use transport;
-use utils::{self, with_py, ToPyErr};
+use utils::{self, with_py, ToPyErr, Classes};
 use pyunsafe::{GIL, Handle};
 
 
@@ -47,6 +47,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             core.remote(),
             Instant::now(),
             addrinfo::start_workers(3),
+            RefCell::new(None),
             RefCell::new(None),
             RefCell::new(py.None()),
             Cell::new(100),
@@ -94,6 +95,7 @@ py_class!(pub class TokioEventLoop |py| {
     data _instant: Instant;
     data _lookup: addrinfo::LookupWorkerSender;
     data _runner: RefCell<Option<oneshot::Sender<PyResult<()>>>>;
+    data _executor: RefCell<Option<PyObject>>;
     data _exception_handler: RefCell<PyObject>;
     data _slow_callback_duration: Cell<u64>;
     data _debug: Cell<bool>;
@@ -337,6 +339,50 @@ py_class!(pub class TokioEventLoop |py| {
         ID.with(|cell| {cell.borrow_mut().take()});
         CORE.with(|cell| {cell.borrow_mut().take()});
 
+        Ok(py.None())
+    }
+
+    //
+    // Executor api
+    //
+    def run_in_executor(&self, *args, **kwargs) -> PyResult<PyObject> {
+        if self._debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
+        // get params
+        if args.len(py) < 2 {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "function takes at least 2 arguments"))
+        }
+        let mut executor = args.get_item(py, 0);
+        let args = PyTuple::new(py, &args.as_slice(py)[1..]);
+
+        // get or create default executor
+        if executor == py.None() {
+            let exec = self._executor(py).borrow().as_ref().map(|ex| ex.clone_ref(py));
+            executor = if let Some(ex) = exec {
+                ex
+            } else {
+                let concurrent = py.import("concurrent.futures")?;
+                let executor = concurrent.call(py, "ThreadPoolExecutor", NoArgs, None)?;
+                *self._executor(py).borrow_mut() = Some(executor.clone_ref(py));
+                executor
+            };
+        }
+
+        // submit function
+        let fut = executor.call_method(py, "submit", args, None)?;
+
+        // wrap_future
+        let kwargs = PyDict::new(py);
+        let _ = kwargs.set_item(py, "loop", self.clone_ref(py))?;
+        Classes.Asyncio.call(py, "wrap_future", (fut,), Some(&kwargs))
+    }
+
+    def set_default_executor(&self, executor: PyObject) -> PyResult<PyObject> {
+        *self._executor(py).borrow_mut() = Some(executor);
         Ok(py.None())
     }
 
@@ -778,10 +824,14 @@ py_class!(pub class TokioEventLoop |py| {
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             } else {
-                // TODO: add check for Generator object
-                let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
-                let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
+                if utils::isgenerator(&fut) {
+                    let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
+                    let fut2 = fut.clone_ref(py);
+                    (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
+                } else {
+                    return Err(PyErr::new::<exc::TypeError, _>(
+                        py, "Future or Generator object is required"))
+                }
             };
 
         if completed {

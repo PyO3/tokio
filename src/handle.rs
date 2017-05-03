@@ -35,7 +35,7 @@ impl PyHandle {
                callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
 
         let tb = if evloop.is_debug() {
-            let frame = Classes.Sys.call_method(py, "_getframe", (0,), None)?;
+            let frame = Classes.Sys.call(py, "_getframe", (0,), None)?;
             Some(Classes.ExtractStack.call(py, (frame,), None)?)
         } else {
             None

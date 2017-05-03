@@ -1,5 +1,6 @@
 #![allow(non_upper_case_globals)]
 
+use cpython;
 use cpython::*;
 use std::io;
 use std::os::raw::c_long;
@@ -30,8 +31,9 @@ pub struct WorkingClasses {
     pub ConnectionResetError: PyType,
     pub InterruptedError: PyType,
 
-    pub Sys: PyObject,
-    pub Traceback: PyObject,
+    pub Sys: PyModule,
+    pub Asyncio: PyModule,
+    pub Traceback: PyModule,
     pub ExtractStack: PyObject,
 }
 
@@ -42,68 +44,19 @@ lazy_static! {
         let builtins = py.import("builtins").unwrap();
         let socket = py.import("socket").unwrap();
         let tb = py.import("traceback").unwrap();
-        let exception = PyType::extract(
-            py, &builtins.get(py, "Exception").unwrap()).unwrap().into_object();
-
-        // for py2.7
-        let ioerror = PyType::extract(
-            py, &builtins.get(py, "IOError").unwrap()).unwrap().into_object();
-
-        let cancelled;
-        let invalid_state;
-        let timeout;
-        if let Ok(asyncio) = py.import("asyncio") {
-            cancelled =  PyType::extract(
-                py, &asyncio.get(py, "CancelledError").unwrap()).unwrap();
-            invalid_state = PyType::extract(
-                py, &asyncio.get(py, "InvalidStateError").unwrap()).unwrap();
-            timeout = PyType::extract(
-                py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap();
-        } else {
-            let tokio = if let Ok(tokio) = PyModule::new(py, "tokio") {
-                tokio
-            } else {
-                PyModule::import(py, "tokio").unwrap()
-            };
-
-            let has_exc = if let Ok(_) = tokio.get(py, "CancelledError") {
-                true
-            } else {
-                false
-            };
-
-            cancelled = if !has_exc {
-                PyErr::new_type(
-                    py, "tokio.CancelledError", Some(exception.clone_ref(py)), None)
-            } else {
-                PyType::extract(
-                    py, &tokio.get(py, "CancelledError").unwrap()).unwrap()
-            };
-
-            invalid_state = if !has_exc {
-                PyErr::new_type(
-                    py, "tokio.InvalidStateError", Some(exception.clone_ref(py)), None)
-            } else {
-                PyType::extract(
-                    py, &tokio.get(py, "InvalidStateError").unwrap()).unwrap()
-            };
-
-            timeout = if !has_exc {
-                PyErr::new_type(
-                    py, "tokio.TimeoutError", Some(exception.clone_ref(py)), None)
-            } else {
-                PyType::extract(
-                    py, &tokio.get(py, "TimeoutError").unwrap()).unwrap()
-            };
-        }
+        let asyncio = py.import("asyncio").unwrap();
 
         WorkingClasses {
             // asyncio types
             Future: py.get_type::<PyFuture>(),
 
-            CancelledError: cancelled,
-            InvalidStateError: invalid_state,
-            TimeoutError: timeout,
+            Asyncio: asyncio.clone_ref(py),
+            CancelledError: PyType::extract(
+                py, &asyncio.get(py, "CancelledError").unwrap()).unwrap(),
+            InvalidStateError: PyType::extract(
+                py, &asyncio.get(py, "InvalidStateError").unwrap()).unwrap(),
+            TimeoutError: PyType::extract(
+                py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap(),
 
             // general purpose types
             StopIteration: PyType::extract(
@@ -114,26 +67,20 @@ lazy_static! {
                 py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
 
             BrokenPipeError: PyType::extract(
-                py, &builtins.get(py, "BrokenPipeError").unwrap_or(
-                    ioerror.clone_ref(py))).unwrap(),
+                py, &builtins.get(py, "BrokenPipeError").unwrap()).unwrap(),
             ConnectionAbortedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionAbortedError").unwrap_or(
-                    ioerror.clone_ref(py))).unwrap(),
+                py, &builtins.get(py, "ConnectionAbortedError").unwrap()).unwrap(),
             ConnectionRefusedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionRefusedError").unwrap_or(
-                    ioerror.clone_ref(py))).unwrap(),
+                py, &builtins.get(py, "ConnectionRefusedError").unwrap()).unwrap(),
             ConnectionResetError: PyType::extract(
-                py, &builtins.get(py, "ConnectionResetError").unwrap_or(
-                    ioerror.clone_ref(py))).unwrap(),
+                py, &builtins.get(py, "ConnectionResetError").unwrap()).unwrap(),
             InterruptedError: PyType::extract(
-                py, &builtins.get(py, "InterruptedError").unwrap_or(
-                    ioerror.clone_ref(py))).unwrap(),
-
+                py, &builtins.get(py, "InterruptedError").unwrap()).unwrap(),
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),
 
-            Sys: py.import("sys").unwrap().into_object(),
-            Traceback: tb.clone_ref(py).into_object(),
+            Sys: py.import("sys").unwrap(),
+            Traceback: tb.clone_ref(py),
             ExtractStack: tb.get(py, "extract_stack").unwrap(),
         }
     };
@@ -145,6 +92,12 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
     let gil = Python::acquire_gil();
     let py = gil.python();
     f(py)
+}
+
+pub fn isgenerator(ob: &PyObject) -> bool {
+    unsafe {
+        cpython::_detail::ffi::PyGen_Check(ob.as_ptr()) != 0
+    }
 }
 
 

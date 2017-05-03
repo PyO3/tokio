@@ -1,3 +1,5 @@
+#![recursion_limit="1024"]
+
 extern crate chan;
 extern crate libc;
 extern crate net2;
