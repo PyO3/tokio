@@ -27,7 +27,9 @@ is to create a virtual env, so that you'll have ``python`` commands pointing to 
 
 2. ``cd tokio``
 
-3. ``python ./setup.py develop``
+3. ``make buid``
+
+4. ``make test``
 
 
 License
