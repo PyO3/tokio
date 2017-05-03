@@ -170,7 +170,7 @@ def test_call_later_negative(loop):
     assert calls == ['a']
 
 
-@pytest.mark.skipif(os.environ.get('TRAVIS_OS_NAME'),
+@pytest.mark.skipif(os.environ.get('TRAVIS_OS_NAME') is not None,
                     reason='time is not monotonic on Travis')
 def test_call_at(loop):
     i = 0
