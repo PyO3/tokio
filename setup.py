@@ -33,6 +33,18 @@ tests_require = install_requires + ['pytest', 'pytest-timeout']
 
 setup(name='tokio',
       version='0.0.1',
+      classifiers=[
+          'License :: OSI Approved :: Apache Software License',
+          'Intended Audience :: Developers',
+          'Programming Language :: Python',
+          'Programming Language :: Python :: 3 :: Only',
+          'Programming Language :: Python :: 3.5',
+          'Programming Language :: Python :: 3.6',
+          'Operating System :: POSIX',
+          'Operating System :: MacOS :: MacOS X',
+          'Topic :: Internet :: WWW/HTTP',
+          'Framework :: AsyncIO',
+      ],
       author='Nikolay Kim',
       author_email='fafhrd91@gmail.com',
       url='https://github.com/PyO3/async-tokio/',
