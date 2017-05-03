@@ -2,7 +2,8 @@ use std::io;
 use std::ptr;
 use libc::c_void;
 
-use cpython::{exc, Python, PythonObject, PyClone,
+use twoway;
+use cpython::{self, exc, Python, PythonObject, PyClone,
               PyResult, PyObject, PySlice, PyErr, PythonObjectWithCheckedDowncast, ToPyObject};
 use cpython::_detail::ffi;
 use bytes::{Bytes, BytesMut, BufMut};
@@ -112,6 +113,99 @@ py_class!(pub class PyBytes |py| {
         }
 
         true
+    }
+
+    def __add__(lhs, rhs) -> PyResult<PyObject> {
+        let lhs = PyBytes::downcast_from(py, lhs.clone_ref(py).into_object())?;
+
+        if let Ok(rhs) = PyBytes::downcast_from(py, rhs.clone_ref(py).into_object()) {
+            let len = lhs._bytes(py).len() + rhs._bytes(py).len();
+            let mut buf = BytesMut::with_capacity(len);
+            buf.extend(lhs._bytes(py));
+            buf.extend(rhs._bytes(py));
+            Ok(PyBytes::new(py, buf.freeze())?.into_object())
+        }
+        else if let Ok(rhs) = cpython::PyBytes::downcast_from(
+                 py, rhs.clone_ref(py).into_object()) {
+            let data = rhs.data(py);
+            let len = lhs._bytes(py).len() + data.len();
+            let mut buf = BytesMut::with_capacity(len);
+            buf.extend(lhs._bytes(py));
+            buf.extend(data);
+            Ok(PyBytes::new(py, buf.freeze())?.into_object())
+        }
+        else {
+            Err(PyErr::new::<exc::TypeError, _>(
+                py, format!("Can not add {:?} and {:?}", lhs.into_object(), rhs)))
+        }
+    }
+
+    def __richcmp__(&self, other: PyObject, op: cpython::CompareOp) -> PyResult<bool> {
+        match op {
+            cpython::CompareOp::Eq => {
+                if let Ok(other) = PyBytes::downcast_from(py, other.clone_ref(py).into_object()) {
+                    Ok(self._bytes(py).as_ref() == other._bytes(py).as_ref())
+                }
+                else if let Ok(other) = cpython::PyBytes::downcast_from(
+                    py, other.clone_ref(py).into_object()) {
+                    Ok(self._bytes(py).as_ref() == other.data(py).as_ref())
+                }
+                else {
+                    Err(PyErr::new::<exc::TypeError, _>(
+                        py, format!("Can not compare PyBytes and {:?}",
+                                    other.get_type(py).into_object())))
+                }
+            },
+            _ =>
+                Err(PyErr::new::<exc::TypeError, _>(py, "Can not complete this operation")),
+        }
+    }
+
+    def find(&self, sub: cpython::PyBytes,
+             start: Option<isize> = None, end: Option<isize> = None) -> PyResult<isize> {
+        let mut pre = 0;
+        let pos = match (&start, &end) {
+            (&None, &None) => {
+                twoway::find_bytes(self._bytes(py).as_ref(), sub.data(py))
+            }
+            _ => {
+                let start = if let Some(start) = start {start} else {0};
+                let end = if let Some(end) = end {end} else {-1};
+
+                let bytes = self._bytes(py);
+                let slice = PySlice::new(py, start, end, 1);
+                let indices = slice.indices(py, bytes.len() as i64)?;
+                pre = indices.start as usize;
+                let end = (indices.stop+1) as usize;
+                twoway::find_bytes(&bytes[pre..end], sub.data(py))
+            }
+        };
+
+        if let Some(pos) = pos {
+            Ok((pos+pre) as isize)
+        } else {
+            Ok(-1)
+        }
+    }
+
+    def decode(&self, encoding: Option<cpython::PyString> = None,
+               errors: Option<cpython::PyString> = None) -> PyResult<cpython::PyUnicode> {
+        let bytes = self.as_object();
+        match (encoding, errors) {
+            (Some(enc), Some(err)) =>
+                Ok(cpython::PyString::from_object(
+                    py, bytes,
+                    enc.to_string_lossy(py).as_ref(), err.to_string_lossy(py).as_ref())),
+            (Some(enc), None) =>
+                Ok(cpython::PyString::from_object(
+                    py, bytes, enc.to_string_lossy(py).as_ref(), "strict")),
+            (None, Some(err)) =>
+                Ok(cpython::PyString::from_object(
+                    py, bytes, "utf-8", err.to_string_lossy(py).as_ref())),
+            (None, None) =>
+                Ok(cpython::PyString::from_object(
+                    py, bytes, "utf-8", "strict")),
+        }
     }
 });
 

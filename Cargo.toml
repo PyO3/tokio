@@ -13,6 +13,7 @@ log = "0.3"
 net2 = "0.2"
 libc = "0.2"
 lazy_static = "0.2"
+twoway = "0.1"
 bytes = "0.4"
 futures = "0.1"
 native-tls = "0.1"
@@ -26,8 +27,8 @@ tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 #tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 
 [dependencies.cpython]
-#path = "../tokio/rust-cpython"
-git = "https://github.com/PyO3/rust-cpython.git"
+path = "../tokio/rust-cpython"
+#git = "https://github.com/PyO3/rust-cpython.git"
 default-features = false
 
 [dev-dependencies]

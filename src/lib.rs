@@ -2,6 +2,7 @@ extern crate chan;
 extern crate libc;
 extern crate net2;
 extern crate bytes;
+extern crate twoway;
 extern crate futures;
 extern crate native_tls;
 extern crate tokio_io;
