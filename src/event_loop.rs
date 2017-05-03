@@ -335,6 +335,13 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
+        // shutdown executor
+        if let Some(executor) = self._executor(py).borrow_mut().take() {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item(py, "wait", false)?;
+            let _ = executor.call_method(py, "shutdown", NoArgs, Some(&kwargs));
+        }
+
         // drop CORE
         ID.with(|cell| {cell.borrow_mut().take()});
         CORE.with(|cell| {cell.borrow_mut().take()});
