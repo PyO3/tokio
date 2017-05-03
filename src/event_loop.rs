@@ -564,8 +564,7 @@ py_class!(pub class TokioEventLoop |py| {
                 }
 
                 // exctract hostname
-                let host = host.map(
-                    |s| Some(String::from(s.to_string_lossy(py)))).unwrap_or(None);
+                let host = host.map(|s| String::from(s.to_string_lossy(py)));
 
                 // server hostname for ssl validation
                 let server_hostname = match server_hostname {
@@ -921,7 +920,7 @@ impl TokioEventLoop {
         }
 
         // exctract hostname
-        let host = host.map(|s| Some(String::from(s.to_string_lossy(py)))).unwrap_or(None);
+        let host = host.map(|s| String::from(s.to_string_lossy(py)));
 
         // waiter future
         let fut = PyFuture::new(py, &self)?;
