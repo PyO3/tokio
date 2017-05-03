@@ -233,10 +233,12 @@ impl _PyFuture {
                 }
             },
             _ => {
-                f.call(py, (owner,), None).into_log(py, "future callback error");
+                self.evloop.href().spawn_fn(move || with_py(|py| {
+                    f.call(py, (owner,), None).into_log(py, "future callback error");
+                    future::ok(())
+                }));
             },
         }
-
         Ok(py.None())
     }
 
