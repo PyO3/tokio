@@ -1,7 +1,7 @@
 Asyncio event loop based on tokio-rs (WIP)
 ==========================================
 
-async-tokio is asyncio event loop written in rust.
+tokio is asyncio event loop written in rust.
 
 
 Using tokio loop
@@ -23,9 +23,9 @@ Development of tokio loop
 To build tokio loop, you'll need rust 1.15 and Python 3.5.  The best way
 is to create a virtual env, so that you'll have ``python`` commands pointing to the correct tools.
 
-1. ``git clone git@github.com:PyO3/async-tokio.git``
+1. ``git clone git@github.com:PyO3/tokio.git``
 
-2. ``cd async-tokio``
+2. ``cd tokio``
 
 3. ``python ./setup.py develop``
 
