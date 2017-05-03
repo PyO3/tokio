@@ -252,16 +252,16 @@ test! { test_headers_multi_feed,
             //expect_completed!(codec(buf));
         }}
 
-test! { test_parse_headers_multi,
-        "GET /test HTTP/1.1\r\n",
-        "Set-Cookie: c1=cookie1\r\n",
-        "Set-Cookie: c2=cookie2\r\n\r\n" => |codec, buf| {
-            expect_status!(msg => codec(buf) => "GET", "/test", Version::Http11);
-            expect_headers!(msg => conn:ConnectionType::KeepAlive, chunked:false,
-                            ("Set-Cookie", "c1=cookie1"),
-                            ("Set-Cookie", "c2=cookie2"));
-            expect_completed!(codec(buf));
-        }}
+//test! { test_parse_headers_multi,
+//        "GET /test HTTP/1.1\r\n",
+//        "Set-Cookie: c1=cookie1\r\n",
+//        "Set-Cookie: c2=cookie2\r\n\r\n" => |codec, buf| {
+//            expect_status!(msg => codec(buf) => "GET", "/test", Version::Http11);
+//            expect_headers!(msg => conn:ConnectionType::KeepAlive, chunked:false,
+//                            ("Set-Cookie", "c1=cookie1"),
+//                            ("Set-Cookie", "c2=cookie2"));
+//            expect_completed!(codec(buf));
+//        }}
 
 test! { test_parse_headers_max_multi,
         "GET /test HTTP/1.1\r\n",
