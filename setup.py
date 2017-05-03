@@ -18,6 +18,8 @@ class PyTest(TestCommand):
     user_options = []
 
     def run(self):
+        self.run_command("test_rust")
+
         import subprocess
         import sys
         errno = subprocess.call([sys.executable, '-m', 'pytest', 'tests'])

@@ -17,5 +17,6 @@ install:
   - export LIBRARY_PATH="$LIBRARY_PATH:$PYTHON_LIB"
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$PYTHON_LIB:$HOME/rust/lib"
   - rustc -V
+  - python -m pip install setuptools-rust
 script:
-  - cargo test --features=cpython/python3-sys
+  - python setyp.py test
