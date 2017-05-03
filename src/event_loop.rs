@@ -400,15 +400,27 @@ py_class!(pub class TokioEventLoop |py| {
         if len < 1 {
             return Err(PyErr::new::<exc::ValueError, _>(py, "host is required"))
         }
-        let host = if let Ok(host) = PyString::downcast_from(py, args.get_item(py, 0)) {
-            host
+        let host_arg = args.get_item(py, 0);
+        let host = if host_arg == py.None() {
+            None
+        } else if let Ok(host) = PyString::downcast_from(py, host_arg) {
+            Some(String::from(host.to_string(py)?))
         } else {
-            return Err(PyErr::new::<exc::TypeError, _>(py, "string type is required as host"))
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "string or none type is required as host"))
         };
         if len < 2 {
             return Err(PyErr::new::<exc::ValueError, _>(py, "port is required"))
         }
-        let port: u16 = args.get_item(py, 1).extract(py)?;
+        let port_arg = args.get_item(py, 1);
+        let port: u16 = if port_arg == py.None() {
+            0
+        } else if let Ok(port) = port_arg.extract(py) {
+            port
+        } else {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "int or none type is required as port"))
+        };
 
         let mut family: i32 = 0;
         let mut socktype: i32 = 0;
@@ -439,7 +451,7 @@ py_class!(pub class TokioEventLoop |py| {
 
         // lookup process future
         let lookup = addrinfo::lookup(
-            &self._lookup(py), Some(String::from(host.to_string(py)?)),
+            &self._lookup(py), host,
             port, family, flags, addrinfo::SocketType::from_int(socktype));
 
         // convert addr info to python comaptible  values
