@@ -175,8 +175,7 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         if args.len(py) < 1 {
-            Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("function takes at least {} arguments", 1)))
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 1 arguments"))
         } else {
             // get params
             let callback = args.get_item(py, 0);
@@ -195,8 +194,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def call_soon_threadsafe(&self, *args, **kwargs) -> PyResult<PyObject> {
         if args.len(py) < 1 {
-            Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("function takes at least {} arguments", 1)))
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 1 arguments"))
         } else {
             // get params
             let callback = args.get_item(py, 0);
@@ -236,9 +234,8 @@ py_class!(pub class TokioEventLoop |py| {
             }
         }
 
-        if args.len(py) < 1 {
-            Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("function takes at least {} arguments", 1)))
+        if args.len(py) < 2 {
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 2 arguments"))
         } else {
             // get params
             let callback = args.get_item(py, 1);
@@ -272,8 +269,7 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         if args.len(py) < 2 {
-            Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("function takes at least {} arguments", 2)))
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 2 arguments"))
         } else {
             // get params
             let callback = args.get_item(py, 1);
@@ -348,9 +344,46 @@ py_class!(pub class TokioEventLoop |py| {
     // item = (family, type, proto, canonname, sockaddr)
     // sockaddr(IPV4) = (address, port)
     // sockaddr(IPV6) = (address, port, flow info, scope id)
-    def getaddrinfo(&self, host: PyString, port: u16,
-                    family: i32=0, socktype: i32 = 0,
-                    proto: i32 = 0, flags: i32 = 0) -> PyResult<PyFuture> {
+    def getaddrinfo(&self, *args, **kwargs) -> PyResult<PyFuture> {
+                    //host: PyString, port: u16,
+                    //family: i32 = 0, _type: i32 = 0,
+                    //proto: i32 = 0, flags: i32 = 0) -> PyResult<PyFuture> {
+
+        // parse params
+        let len = args.len(py);
+        if len < 1 {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "host is required"))
+        }
+        let host = if let Ok(host) = PyString::downcast_from(py, args.get_item(py, 0)) {
+            host
+        } else {
+            return Err(PyErr::new::<exc::TypeError, _>(py, "string type is required as host"))
+        };
+        if len < 2 {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "port is required"))
+        }
+        let port: u16 = args.get_item(py, 1).extract(py)?;
+
+        let mut family: i32 = 0;
+        let mut socktype: i32 = 0;
+        let mut _proto: i32 = 0;
+        let mut flags: i32 = 0;
+
+        if let Some(kwargs) = kwargs {
+            if let Some(f) = kwargs.get_item(py, "family") {
+                family = f.extract(py)?
+            }
+            if let Some(s) = kwargs.get_item(py, "type") {
+                socktype = s.extract(py)?
+            }
+            if let Some(p) = kwargs.get_item(py, "proto") {
+                _proto = p.extract(py)?
+            }
+            if let Some(f) = kwargs.get_item(py, "flags") {
+                flags = f.extract(py)?
+            }
+        }
+
         // result future
         let res = PyFuture::new(py, &self)?;
 
