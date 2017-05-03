@@ -94,9 +94,13 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
     f(py)
 }
 
-pub fn isgenerator(ob: &PyObject) -> bool {
+pub fn iscoroutine(ob: &PyObject) -> bool {
     unsafe {
-        cpython::_detail::ffi::PyGen_Check(ob.as_ptr()) != 0
+        (cpython::_detail::ffi::PyCoro_Check(ob.as_ptr()) != 0 ||
+         cpython::_detail::ffi::PyCoroWrapper_Check(ob.as_ptr()) != 0 ||
+         cpython::_detail::ffi::PyAsyncGen_Check(ob.as_ptr()) != 0 ||
+         cpython::_detail::ffi::PyIter_Check(ob.as_ptr()) != 0 ||
+         cpython::_detail::ffi::PyGen_Check(ob.as_ptr()) != 0)
     }
 }
 

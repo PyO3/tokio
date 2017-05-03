@@ -824,7 +824,7 @@ py_class!(pub class TokioEventLoop |py| {
                 let fut2 = fut.clone_ref(py);
                 (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
             } else {
-                if utils::isgenerator(&fut) {
+                if utils::iscoroutine(&fut) {
                     let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
                     let fut2 = fut.clone_ref(py);
                     (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
