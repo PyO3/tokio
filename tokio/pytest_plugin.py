@@ -1,5 +1,4 @@
 import asyncio
-import collections
 import contextlib
 import re
 import tempfile
@@ -119,13 +118,6 @@ def other_loop(request):
 @pytest.fixture(params=['current', 'asyncio'])
 def loop_type(request):
     yield request.param
-
-
-@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
-def create_future(request):
-    """Return an instance of the event loop."""
-    with loop_context(request.param, fast=False) as _loop:
-        yield _loop.create_future
 
 
 @pytest.fixture

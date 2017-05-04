@@ -1,11 +1,5 @@
 import asyncio
-import concurrent.futures
-import re
-import sys
-import threading
 from asyncio import test_utils
-from test import support
-from unittest import mock
 
 import pytest
 
