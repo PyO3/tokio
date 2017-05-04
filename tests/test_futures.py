@@ -11,11 +11,6 @@ import pytest
 
 
 @pytest.fixture
-def create_future(loop):
-    yield loop.create_future
-
-
-@pytest.fixture
 def make_callback():
     # Create a callback function that appends thing to bag.
     def _make_callback(bag, thing):

@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import contextlib
 import re
 import tempfile
@@ -101,18 +102,54 @@ LOOP_FACTORIES = []
 LOOP_FACTORY_IDS = []
 
 
-@pytest.yield_fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
+@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
 def loop(request):
     """Return an instance of the event loop."""
     with loop_context(request.param, fast=False) as _loop:
         yield _loop
 
 
-@pytest.yield_fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
+@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
 def other_loop(request):
     """Return an instance of the event loop."""
     with loop_context(request.param, fast=False) as _loop:
         yield _loop
+
+
+@pytest.fixture(params=['current', 'asyncio'])
+def loop_type(request):
+    yield request.param
+
+
+@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
+def create_future(request):
+    """Return an instance of the event loop."""
+    with loop_context(request.param, fast=False) as _loop:
+        yield _loop.create_future
+
+
+@pytest.fixture
+def create_future(loop, loop_type):
+    """Return an instance of Future."""
+    def _create_future():
+        if loop_type == 'current':
+            return loop.create_future()
+        elif loop_type == 'asyncio':
+            return asyncio.Future(loop=loop)
+
+    yield _create_future
+
+
+@pytest.fixture
+def create_task(loop, loop_type):
+    """Return an instance of the Task."""
+    def _create_task(coro):
+        if loop_type == 'current':
+            return loop.create_task(coro)
+        elif loop_type == 'asyncio':
+            return asyncio.Task(coro, loop=loop)
+
+    yield _create_task
 
 
 @pytest.fixture
