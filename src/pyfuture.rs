@@ -284,6 +284,7 @@ impl _PyFuture {
                 Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             State::Finished => {
                 if let Some(ref exc) = self.exception {
+                    self.log_exc_tb.set(false);
                     Err(PyErr::from_instance(py, exc.clone_ref(py)))
                 } else {
                     if let Some(ref result) = self.result {
