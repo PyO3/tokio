@@ -1,11 +1,6 @@
 import asyncio
-import gc
 import socket
-import unittest.mock
-import uvloop
-import ssl
 import sys
-import threading
 
 import pytest
 import uvloop
@@ -46,10 +41,12 @@ class MyBaseProto(asyncio.Protocol):
             self.done.set_result(None)
 
 
+# @pytest.mark.skipif(
+# sys.version_info[:3] == (3, 5, 2),
+# reason='See https://github.com/python/asyncio/pull/366 for details')
 
-@pytest.mark.skip #if(
-    #sys.version_info[:3] == (3, 5, 2),
-    #reason='See https://github.com/python/asyncio/pull/366 for details')
+
+@pytest.mark.skip
 def test_create_server_1(loop):
     CNT = 0           # number of clients that were successful
     TOTAL_CNT = 25    # total number of clients that test will create
@@ -235,9 +232,9 @@ def test_create_server_5(loop, port):
 
 @pytest.mark.skipif(not hasattr(socket, 'SO_REUSEPORT'),
                     reason='The system does not support SO_REUSEPORT')
-@pytest.mark.skipif( sys.version_info[:3] < (3, 5, 1),
+@pytest.mark.skipif(sys.version_info[:3] < (3, 5, 1),
                     reason='asyncio in CPython 3.5.0 does not have the '
-                     'reuse_port argument')
+                    'reuse_port argument')
 def test_create_server_6(loop, port):
 
     async def runner():
@@ -282,9 +279,9 @@ def test_create_connection_1(loop):
         writer.write(b'AAAA')
         assert (await reader.readexactly(2)) == b'OK'
 
-        #with pytest.raises(TypeError) as excinfo:
+        # with pytest.raises(TypeError) as excinfo:
         #    writer.write('AAAA')
-        #excinfo.match(r'(a bytes-like object)|(must be byte-ish)')
+        # excinfo.match(r'(a bytes-like object)|(must be byte-ish)')
 
         writer.write(b'BBBB')
         assert (await reader.readexactly(4)) == b'SPAM'
@@ -402,8 +399,9 @@ def test_create_connection_4(loop):
         reader, writer = await asyncio.open_connection(sock=sock, loop=loop)
 
     async def runner():
-        with self.assertRaisesRegex(OSError, 'Bad file'):
+        with pytest.raises(OSError) as excinfo:
             await client()
+        excinfo.match('Bad file')
 
     loop.run_until_complete(runner())
 

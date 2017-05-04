@@ -133,6 +133,7 @@ class BaseTestCase(unittest.TestCase, metaclass=BaseTestCaseMeta):
     def skip_unclosed_handles_check(self):
         self._check_unclosed_resources_in_debug = False
 
+
 def _cert_fullname(name):
     fullname = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
@@ -384,7 +385,7 @@ class _Command:
 
 class write(_Command):
 
-    def __init__(self, data:bytes):
+    def __init__(self, data: bytes):
         self._data = data
 
     def _run(self, sock):
