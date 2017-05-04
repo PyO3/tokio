@@ -6,6 +6,7 @@ use std::net;
 use std::error::Error;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
+use std::fmt::Write;
 
 use cpython::*;
 use futures::{future, unsync, Future, Stream};
@@ -728,7 +729,15 @@ py_class!(pub class TokioEventLoop |py| {
     def call_exception_handler(&self, context: PyDict) -> PyResult<PyObject> {
         let handler = self._exception_handler(py).borrow();
         if *handler == py.None() {
-            error!("Unhandled error in ecent loop, context: {}", context.into_object());
+            let mut log = String::new();
+            let  _ = match context.get_item(py, "message") {
+                Some(s) => writeln!(log, "{}", s),
+                None => writeln!(log, "Unhandled exception in event loop")
+            };
+            if let Some(err) = context.get_item(py, "exception") {
+                utils::print_exception(py, &mut log, PyErr::from_instance(py, err));
+            }
+            error!("{}", log);
         } else {
             let res = handler.call(py, (self.clone_ref(py), context.clone_ref(py),), None);
             if let Err(err) = res {
@@ -1031,6 +1040,45 @@ impl TokioEventLoop {
 
         self.handle(py).spawn(conn);
         Ok(fut)
+    }
+
+    pub fn with<T, F>(&self, py: Python, message: &str, f: F)
+        where F: FnOnce(Python) -> PyResult<T> {
+
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        if let Err(err) = f(py) {
+            self.log_exception(py, message, Some(err), None, None);
+        }
+    }
+
+    pub fn log_error(&self, py: Python, err: PyErr, message: &str) -> PyErr {
+        self.log_exception(py, message, Some(err.clone_ref(py)), None, None);
+        err
+    }
+
+    pub fn log_exception(&self, py: Python, message: &str,
+                         exception: Option<PyErr>,
+                         source_traceback: Option<PyObject>,
+                         kwargs: Option<&[(PyObject, PyObject)]>) {
+        let _: PyResult<()> = {
+            let context = PyDict::new(py);
+            let _ = context.set_item(py, "message", "Future exception was never retrieved");
+            source_traceback.map(
+                |tb| context.set_item(py, "source_traceback", tb));
+            exception.map(
+                |mut exc| context.set_item(py, "exception", exc.instance(py)));
+
+            if let Some(kwargs) = kwargs {
+                for &(ref key, ref val) in kwargs {
+                    let _ = context.set_item(py, key.clone_ref(py), val.clone_ref(py));
+                }
+            }
+            let _ = self.call_exception_handler(py, context);
+
+            Ok(())
+        };
     }
 }
 

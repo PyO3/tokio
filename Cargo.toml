@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 boxfnonce = "*"
 chan = "0.1"
 log = "0.3"
+env_logger = "0.4"
 net2 = "0.2"
 libc = "0.2"
 lazy_static = "0.2"

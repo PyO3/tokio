@@ -57,7 +57,8 @@ pub fn tcp_transport_factory<T>(
     let py = gil.python();
 
     // create protocol
-    let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
+    let proto = factory.call(py, NoArgs, None)
+        .log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
     let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto)?;
@@ -144,7 +145,7 @@ impl PyTcpTransport {
 
         // connection made
         connection_made.call(py, (transport.clone_ref(py),), None)
-            .log_error(py, "Protocol.connection_made error")?;
+            .map_err(|err| evloop.log_error(py, err, "Protocol.connection_made error"))?;
 
         Ok(transport)
     }
@@ -152,9 +153,9 @@ impl PyTcpTransport {
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
         with_py(|py| {
-            self._connection_lost(py).call(py, (py.None(),), None)
-                .into_log(py, "connection_lost error");
-        });
+            self._loop(py).with(
+                py, "Protocol.connection_made error",
+                |py| self._connection_lost(py).call(py, (py.None(),), None))});
     }
 
     pub fn connection_error(&self, err: io::Error) {
@@ -182,8 +183,10 @@ impl PyTcpTransport {
         with_py(|py| {
             let _ = pybytes::PyBytes::new(py, bytes)
                 .map_err(|e| e.into_log(py, "can not create PyBytes"))
-                .map(|bytes| self._data_received(py).call(py, (bytes,), None)
-                     .into_log(py, "data_received error"));
+                .map(|bytes| self._loop(py).with(
+                    py, "data_received error", |py|
+                    self._data_received(py).call(py, (bytes,), None)));
+                //.into_log(py, "data_received error"));
         });
     }
 

@@ -12,6 +12,7 @@ extern crate tokio_core;
 extern crate tokio_signal;
 extern crate tokio_tls;
 extern crate boxfnonce;
+extern crate env_logger;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
 #[macro_use] extern crate lazy_static;
@@ -41,6 +42,8 @@ pub use client::create_connection;
 
 
 py_module_initializer!(tokio, init__tokio, PyInit__tokio, |py, m| {
+    let _ = env_logger::init();
+
     m.add(py, "__doc__", "Asyncio event loop based on tokio-rs")?;
     m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
 

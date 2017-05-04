@@ -6,6 +6,7 @@ use std::io;
 use std::os::raw::c_long;
 use std::time::Duration;
 use std::error::Error;
+use std::fmt::Write;
 
 use pyfuture::PyFuture;
 use addrinfo::LookupError;
@@ -197,6 +198,21 @@ impl ToPyErr for LookupError {
     }
 }
 
+
+//
+// Format exception
+//
+pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
+    let res = Classes.Traceback.call(py, "format_exception",
+                                     (err.ptype, err.pvalue, err.ptraceback), None);
+    if let Ok(lines) = res {
+        if let Ok(lines) = PyList::downcast_from(py, lines) {
+            for idx in 0..lines.len(py) {
+                let _ = write!(w, "{}", lines.get_item(py, idx));
+            }
+        }
+    }
+}
 
 //
 // convert PyFloat or PyInt into Duration
