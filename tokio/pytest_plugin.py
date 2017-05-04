@@ -150,3 +150,15 @@ def match():
         return re.match(pattern, msg) is not None
 
     yield regex_match
+
+
+@pytest.fixture
+def run_briefly():
+    def _run_briefly(loop):
+        @asyncio.coroutine
+        def once():
+            pass
+        t = asyncio.Task(once(), loop=loop)
+        loop.run_until_complete(t)
+
+    yield _run_briefly
