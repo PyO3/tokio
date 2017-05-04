@@ -153,7 +153,7 @@ py_class!(pub class PyTask |py| {
     // Python GC support
     //
     def __traverse__(&self, visit) {
-        if let Some(callbacks) = self._fut(py).borrow_mut().callbacks.take() {
+        if let Some(ref callbacks) = self._fut(py).borrow_mut().callbacks {
             for callback in callbacks.iter() {
                 visit.call(callback)?;
             }
@@ -373,8 +373,9 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
     match res {
         Err(mut err) => {
             if err.matches(py, &Classes.StopIteration) {
-                task.set_result(py, err.instance(py).getattr(py, "value").unwrap())
-                    .into_log(py, "can not get StopIteration.value");
+                let _ = task._fut(py).borrow_mut().set_result(
+                    py, err.instance(py).getattr(py, "value").unwrap(),
+                    task.clone_ref(py).into_object(), false);
             }
             else if err.matches(py, &Classes.CancelledError) {
                 let _ = task._fut(py).borrow_mut().cancel(py, task.clone_ref(py).into_object());

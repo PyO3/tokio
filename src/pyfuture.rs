@@ -59,6 +59,7 @@ impl _PyFuture {
 
     pub fn done_fut(ev: TokioEventLoop, result: PyObject) -> _PyFuture {
         let tb = _PyFuture::extract_tb(&ev);
+
         _PyFuture {
             evloop: ev,
             sender: None,
@@ -663,7 +664,7 @@ py_class!(pub class PyFuture |py| {
     // Python GC support
     //
     def __traverse__(&self, visit) {
-        if let Some(callbacks) = self._fut(py).borrow_mut().callbacks.take() {
+        if let Some(ref callbacks) = self._fut(py).borrow_mut().callbacks {
             for callback in callbacks.iter() {
                 visit.call(callback)?;
             }

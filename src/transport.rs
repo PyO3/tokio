@@ -248,7 +248,7 @@ impl<T> Future for TcpTransport<T>
                         self.incoming_eof = true;
                     },
                     Ok(Async::NotReady) => (),
-                    Err(err) => return Err(err.into())
+                    Err(err) => return Err(err.into()),
                 }
                 break
             }
@@ -270,7 +270,9 @@ impl<T> Future for TcpTransport<T>
                         }
                     }
                     Ok(_) => None,
-                    Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "Closed")),
+                    Err(_) => {
+                        return Err(io::Error::new(io::ErrorKind::Other, "Closed"));
+                    }
                 }
             };
 
@@ -301,7 +303,10 @@ impl<T> Future for TcpTransport<T>
 
         // close
         if self.closing {
-            return self.framed.close()
+            if self.incoming_eof {
+                return Ok(Async::Ready(()))
+            }
+            return self.framed.close();
         }
 
         if self.flushed && self.incoming_eof {

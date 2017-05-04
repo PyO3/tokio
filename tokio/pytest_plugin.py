@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import re
+import socket
 import tempfile
 import warnings
 
@@ -191,3 +192,11 @@ def run_briefly():
         loop.run_until_complete(t)
 
     yield _run_briefly
+
+
+@pytest.fixture
+def port():
+    """Return a port that is unused on the current host."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
