@@ -144,6 +144,18 @@ pub struct AddrInfo {
 }
 
 impl AddrInfo {
+    pub fn new(flags: libc::c_int, family: Family,
+               socktype: SocketType, protocol: Protocol,
+               addr: SocketAddr, canonname: Option<String>) -> AddrInfo {
+        AddrInfo {
+            flags: flags,
+            family: family,
+            socktype: socktype,
+            protocol: protocol,
+            sockaddr: addr,
+            canonname: canonname }
+    }
+
     unsafe fn from_ptr<'a>(a: *mut libc::addrinfo) -> Result<Self, LookupError> {
         let addrinfo = *a;
 

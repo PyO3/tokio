@@ -256,7 +256,6 @@ def test_create_server_6(loop, port):
     loop.run_until_complete(runner())
 
 
-@pytest.mark.skip
 def test_create_connection_1(loop):
     CNT = 0
     TOTAL_CNT = 100
@@ -389,7 +388,6 @@ def test_create_connection_3(loop):
     run(client)
 
 
-@pytest.mark.skip
 def test_create_connection_4(loop):
     sock = socket.socket()
     sock.close()

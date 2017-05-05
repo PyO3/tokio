@@ -7,13 +7,18 @@ use std::error::Error;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 use std::fmt::Write;
+use std::str::FromStr;
+use std::os::unix::io::{RawFd, FromRawFd};
 
+use libc;
 use cpython::*;
 use futures::{future, unsync, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
 use native_tls::TlsConnector;
+use tokio_tls::TlsConnectorExt;
 use tokio_signal;
+use tokio_core::net::TcpStream;
 
 use ::{PyFuture, PyTask};
 use addrinfo;
@@ -21,9 +26,9 @@ use client;
 use handle::PyHandle;
 use http;
 use server;
-use transport;
 use utils::{self, with_py, ToPyErr, Classes};
 use pyunsafe::{GIL, Handle};
+use transport::{self, tcp_transport_factory};
 
 
 thread_local!(
@@ -627,74 +632,185 @@ py_class!(pub class TokioEventLoop |py| {
                 None
             };
 
-        match (&host, &port) {
-            (&None, &None) => {
-                if let Some(_) = sock {
-                    Err(PyErr::new::<exc::ValueError, _>(
-                        py, "sock is not supported yet"))
-                } else {
-                    Err(PyErr::new::<exc::ValueError, _>(
-                        py, "host and port was not specified and no sock specified"))
-                }
-            },
-            _ => {
-                if let Some(_) = sock {
+        if let (&None, &None) = (&host, &port) {
+            // Try to use supplied python connected socket object
+            if let Some(sock) = sock {
+                if ! self.is_stream_socket(py, &sock)? {
                     return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "host/port and sock can not be specified at the same time"))
+                        py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
 
-                // exctract hostname
-                let host = host.map(|s| String::from(s.to_string_lossy(py)));
-                let port = port.map(|p| p.to_string());
+                let fileno: libc::c_int = sock.call_method(
+                    py, "fileno", NoArgs, None)?.extract(py)?;
+                if fileno == -1 {
+                    return Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+                }
 
-                // server hostname for ssl validation
-                let server_hostname = match server_hostname {
-                    Some(s) => String::from(s.to_string(py)?),
-                    None => match host {
-                        Some(ref h) => h.clone(),
-                        None => String::new(),
-                    }
+                let family: i32 = sock.getattr(py, "family")?.extract(py)?;
+                let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
+                let proto: i32 = sock.getattr(py, "proto")?.extract(py)?;
+
+                let addr = PyTuple::downcast_from(
+                    py, sock.call_method(py, "getsockname", NoArgs, None)?)?;
+
+                let sockaddr = if addr.len(py) == 2 {
+                    // parse INET
+                    let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
+                    let ip = if let Ok(ip) = net::Ipv4Addr::from_str(
+                        s.to_string_lossy(py).as_ref()) {
+                        ip
+                    } else {
+                        return Err(PyErr::new::<exc::ValueError, _>(
+                            py, "Can not parse ip address"))
+                    };
+                    let port: u16 = addr.get_item(py, 1).extract(py)?;
+
+                    net::SocketAddr::V4(net::SocketAddrV4::new(ip, port))
+
+                } else if addr.len(py) == 6 {
+                    // parse INET6
+                    let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
+                    let ip = if let Ok(ip) = net::Ipv6Addr::from_str(
+                        s.to_string_lossy(py).as_ref()) {
+                        ip
+                    } else {
+                        return Err(PyErr::new::<exc::ValueError, _>(
+                            py, "Can not parse ip address"))
+                    };
+                    let port: u16 = addr.get_item(py, 1).extract(py)?;
+                    let flowinfo: u32 = addr.get_item(py, 2).extract(py)?;
+                    let scope_id: u32 = addr.get_item(py, 3).extract(py)?;
+
+                    net::SocketAddr::V6(
+                        net::SocketAddrV6::new(ip, port, flowinfo, scope_id))
+
+                } else {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, "Unknown address type"))
                 };
 
-                let fut = PyFuture::new(py, &self)?;
+                let sockaddr = addrinfo::AddrInfo::new(
+                    0, addrinfo::Family::from_int(family as libc::c_int),
+                    addrinfo::SocketType::from_int(socktype as libc::c_int),
+                    addrinfo::Protocol::from_int(proto as libc::c_int),
+                    sockaddr, None);
 
-                let evloop = self.clone_ref(py);
-                let handle = self.handle(py).clone();
+                // create TcpStream object
+                let stream = unsafe {
+                    net::TcpStream::from_raw_fd(fileno as RawFd)
+                };
+
+                // tokio stream
+                let stream = match TcpStream::from_stream(stream, self.href()) {
+                    Ok(stream) => stream,
+                    Err(err) => return Err(err.to_pyerr(py)),
+                };
+                let peer = stream.peer_addr().expect("should never happen");
+
+                let fut = PyFuture::new(py, &self)?;
                 let fut_err = fut.clone_ref(py);
                 let fut_conn = fut.clone_ref(py);
 
-                // resolve addresses and connect
-                let conn = addrinfo::lookup(&self._lookup(py),
-                                            host, port,
-                                            family, flags, addrinfo::SocketType::Stream)
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
-                    .and_then(move |addrs| match addrs {
-                        Err(err) => future::Either::A(
-                            future::err(
-                                io::Error::new(io::ErrorKind::Other, err.description()))),
-                        Ok(addrs) => {
-                            if addrs.is_empty() {
-                                future::Either::A(future::err(
-                                    io::Error::new(
-                                        io::ErrorKind::Other, "getaddrinfo() returned empty list")))
-                            } else {
-                                future::Either::B(
-                                    client::create_connection(
-                                        protocol_factory, evloop, addrs, ctx, server_hostname))
-                            }
-                        }
-                    })
-                    // set exception to future
-                    .map_err(move |e| with_py(|py| {
-                        fut_err.set(py, Err(e.to_pyerr(py)));}))
-                    // set transport and protocol
+                // create transport
+                let conn = match ctx {
+                    Some(ssl) => {
+                        let hostname = match server_hostname {
+                            Some(name) => String::from(name.to_string_lossy(py)),
+                            None => String::new(),
+                        };
+                        let evloop = self.clone_ref(py);
+
+                        // ssl handshake
+                        let transport = ssl.connect_async(hostname.as_str(), stream)
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                            .and_then(move |socket|
+                                      tcp_transport_factory(
+                                          &evloop, &protocol_factory,
+                                          socket, &sockaddr, peer));
+
+                        future::Either::A(transport)
+                    },
+                    None => {
+                        let fut = match tcp_transport_factory(
+                            &self, &protocol_factory, stream, &sockaddr, peer) {
+                            Ok(transport) => future::ok(transport),
+                            Err(err) => future::err(err)
+                        };
+                        future::Either::B(fut)
+                    }
+                }
+                // set exception to future
+                .map_err(move |e| with_py(|py| {
+                    fut_err.set(py, Err(e.to_pyerr(py)));}))
+                // set transport and protocol
                     .map(move |res| with_py(|py| {
                         fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}));
 
                 self.handle(py).spawn(conn);
 
                 Ok(fut)
+            } else {
+                Err(PyErr::new::<exc::ValueError, _>(
+                    py, "host and port was not specified and no sock specified"))
             }
+        } else {
+            // Resolve address and try to connect
+            if let Some(_) = sock {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "host/port and sock can not be specified at the same time"))
+            }
+
+            // exctract hostname
+            let host = host.map(|s| String::from(s.to_string_lossy(py)));
+            let port = port.map(|p| p.to_string());
+
+            // server hostname for ssl validation
+            let server_hostname = match server_hostname {
+                Some(s) => String::from(s.to_string(py)?),
+                None => match host {
+                    Some(ref h) => h.clone(),
+                    None => String::new(),
+                }
+            };
+
+            let fut = PyFuture::new(py, &self)?;
+
+            let evloop = self.clone_ref(py);
+            let handle = self.handle(py).clone();
+            let fut_err = fut.clone_ref(py);
+            let fut_conn = fut.clone_ref(py);
+
+            // resolve addresses and connect
+            let conn = addrinfo::lookup(&self._lookup(py),
+                                        host, port,
+                                        family, flags, addrinfo::SocketType::Stream)
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
+                .and_then(move |addrs| match addrs {
+                    Err(err) => future::Either::A(
+                        future::err(
+                            io::Error::new(io::ErrorKind::Other, err.description()))),
+                    Ok(addrs) => {
+                        if addrs.is_empty() {
+                            future::Either::A(future::err(
+                                io::Error::new(
+                                    io::ErrorKind::Other, "getaddrinfo() returned empty list")))
+                        } else {
+                            future::Either::B(
+                                client::create_connection(
+                                    protocol_factory, evloop, addrs, ctx, server_hostname))
+                        }
+                    }
+                })
+            // set exception to future
+                .map_err(move |e| with_py(|py| {
+                    fut_err.set(py, Err(e.to_pyerr(py)));}))
+            // set transport and protocol
+                .map(move |res| with_py(|py| {
+                    fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}));
+
+            self.handle(py).spawn(conn);
+
+            Ok(fut)
         }
     }
 
@@ -994,6 +1110,24 @@ impl TokioEventLoop {
                 None => false,
             }
         })
+    }
+
+    // Linux's socket.type is a bitmask that can include extra info
+    // about socket, therefore we can't do simple
+    // `sock_type == socket.SOCK_STREAM`.
+    fn is_stream_socket(&self, py: Python, sock: &PyObject) -> PyResult<bool> {
+        let stream = addrinfo::SocketType::Stream.to_int() as i32;
+        let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
+        Ok((socktype & stream) == stream)
+    }
+
+    // Linux's socket.type is a bitmask that can include extra info
+    // about socket, therefore we can't do simple
+    // `sock_type == socket.SOCK_DGRAM`.
+    fn is_dgram_socket(&self, py: Python, sock: &PyObject) -> PyResult<bool> {
+        let dgram = addrinfo::SocketType::DGram.to_int() as i32;
+        let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
+        Ok((socktype & dgram) == dgram)
     }
 
     pub fn create_server_helper(&self, py: Python, protocol_factory: PyObject,
