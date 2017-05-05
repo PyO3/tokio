@@ -28,6 +28,7 @@ pub mod pytask;
 pub mod pyunsafe;
 mod event_loop;
 mod transport;
+mod socket;
 mod server;
 mod client;
 

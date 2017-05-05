@@ -10,24 +10,29 @@ use tokio_io::codec::Framed;
 use tokio_core::net::TcpStream;
 
 use ::TokioEventLoop;
+use addrinfo::AddrInfo;
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
+use socket::Socket;
 use utils::PyLogger;
 use pyunsafe::Sender;
 use transport::InitializedTransport;
 
 
 pub fn http_transport_factory(evloop: &TokioEventLoop, factory: &PyObject,
-                              socket: TcpStream, _peer: Option<SocketAddr>)
+                              socket: TcpStream, addr: &AddrInfo, peer: SocketAddr)
                               -> io::Result<InitializedTransport> {
     let gil = Python::acquire_gil();
     let py = gil.python();
+
+    // connected socket
+    let sock = Socket::new_peer(py, addr, peer)?;
 
     // create protocol
     let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto)?;
+    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto, sock)?;
     let tr2 = tr.clone_ref(py);
     let tr3 = tr.clone_ref(py);
 

@@ -1,5 +1,5 @@
 use std::io;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use cpython::*;
 use futures::unsync::mpsc;
@@ -11,9 +11,11 @@ use tokio_core::net::TcpStream;
 
 use ::TokioEventLoop;
 use utils::{Classes, PyLogger, ToPyErr, with_py};
+use addrinfo::AddrInfo;
 use pybytes;
 use pyfuture::PyFuture;
 use pyunsafe::{GIL, Sender};
+use socket::Socket;
 
 #[derive(Debug)]
 pub struct InitializedTransport {
@@ -38,8 +40,10 @@ impl ToPyTuple for InitializedTransport {
 
 
 // Transport factory
-pub type TransportFactory = fn(&TokioEventLoop, &PyObject, TcpStream, Option<SocketAddr>)
-                               -> io::Result<InitializedTransport>;
+pub type TransportFactory = fn(
+    &TokioEventLoop, &PyObject, TcpStream, &AddrInfo, SocketAddr)
+    -> io::Result<InitializedTransport>;
+
 
 pub enum TcpTransportMessage {
     Bytes(PyBytes),
@@ -49,19 +53,21 @@ pub enum TcpTransportMessage {
 
 pub fn tcp_transport_factory<T>(
     evloop: &TokioEventLoop, factory: &PyObject,
-    socket: T, _peer: Option<SocketAddr>) -> io::Result<InitializedTransport>
+    socket: T, addr: &AddrInfo, peer: SocketAddr) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + 'static
 {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
+    let sock = Socket::new_peer(py, addr, peer)?;
+
     // create protocol
     let proto = factory.call(py, NoArgs, None)
         .log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto)?;
+    let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto, sock)?;
     let conn_lost = tr.clone_ref(py);
     let conn_err = tr.clone_ref(py);
 
@@ -84,17 +90,17 @@ py_class!(pub class PyTcpTransport |py| {
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _transport: Sender<TcpTransportMessage>;
+    data _socket: PyObject;
     data _drain: RefCell<Option<PyFuture>>;
+    data _closing: Cell<bool>;
+
+    def is_closing(&self) -> PyResult<bool> {
+        Ok(self._closing(py).get())
+    }
 
     def get_extra_info(&self, _name: PyString,
-                       default: Option<PyObject> = None ) -> PyResult<PyObject> {
-        Ok(
-            if let Some(ob) = default {
-                ob
-            } else {
-                py.None()
-            }
-        )
+                       default: Option<PyObject> = None) -> PyResult<PyObject> {
+        Ok(self._socket(py).clone_ref(py))
     }
 
     //
@@ -103,6 +109,13 @@ py_class!(pub class PyTcpTransport |py| {
     def write(&self, data: PyBytes) -> PyResult<PyObject> {
         let _ = self._transport(py).send(TcpTransportMessage::Bytes(data));
         Ok(py.None())
+    }
+
+    //
+    // write eof, close tx part of socket
+    //
+    def write_eof(&self) -> PyResult<()> {
+        Ok(())
     }
 
     //
@@ -122,7 +135,10 @@ py_class!(pub class PyTcpTransport |py| {
     // close transport
     //
     def close(&self) -> PyResult<PyObject> {
-        let _ = self._transport(py).send(TcpTransportMessage::Close);
+        if ! self._closing(py).get() {
+            self._closing(py).set(true);
+            let _ = self._transport(py).send(TcpTransportMessage::Close);
+        }
         Ok(py.None())
     }
 
@@ -132,7 +148,7 @@ impl PyTcpTransport {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
-               protocol: &PyObject) -> PyResult<PyTcpTransport> {
+               protocol: &PyObject, sock: Socket) -> PyResult<PyTcpTransport> {
 
         // get protocol callbacks
         let connection_made = protocol.getattr(py, "connection_made")?;
@@ -141,11 +157,16 @@ impl PyTcpTransport {
 
         let transport = PyTcpTransport::create_instance(
             py, evloop.clone_ref(py),
-            connection_lost, data_received, sender, RefCell::new(None))?;
+            connection_lost, data_received, sender, sock.into_object(),
+            RefCell::new(None), Cell::new(false))?;
 
         // connection made
-        connection_made.call(py, (transport.clone_ref(py),), None)
-            .map_err(|err| evloop.log_error(py, err, "Protocol.connection_made error"))?;
+        let _ = connection_made.call(py, (transport.clone_ref(py),), None)
+            .map_err(|err| {
+                transport._closing(py).set(true);
+                let _ = transport._transport(py).send(TcpTransportMessage::Close);
+                evloop.log_error(py, err, "Protocol.connection_made error")
+            });
 
         Ok(transport)
     }

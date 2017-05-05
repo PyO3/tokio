@@ -176,7 +176,6 @@ def test_create_server_2(loop):
     excinfo.match('nor sock were specified')
 
 
-@pytest.mark.skip
 def test_create_server_3(loop):
     ''' check ephemeral port can be used '''
 
@@ -406,7 +405,6 @@ def test_create_connection_4(loop):
     loop.run_until_complete(runner())
 
 
-@pytest.mark.skip
 def test_transport_shutdown(loop):
     CNT = 0           # number of clients that were successful
     TOTAL_CNT = 100   # total number of clients that test will create
@@ -466,7 +464,6 @@ def test_transport_shutdown(loop):
     assert CNT == TOTAL_CNT
 
 
-@pytest.mark.skip
 def test_tcp_handle_exception_in_connection_made(loop):
     # Test that if connection_made raises an exception,
     # 'create_connection' still returns.

@@ -12,6 +12,7 @@ use futures::{Async, Future, Poll};
 use ::{TokioEventLoop, PyFuture, PyTask, pybytes};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, StreamReader};
+use socket::Socket;
 use utils::{Classes, PyLogger, ToPyErr, with_py};
 use pyunsafe::{GIL, Sender};
 
@@ -28,6 +29,7 @@ py_class!(pub class PyHttpTransport |py| {
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _request_handler: PyObject;
+    data _socket: PyObject;
     data transport: Sender<PyHttpTransportMessage>;
     data req: RefCell<Option<pyreq::PyRequest>>;
     data req_count: Cell<usize>;
@@ -38,13 +40,7 @@ py_class!(pub class PyHttpTransport |py| {
 
     def get_extra_info(&self, _name: PyString,
                        default: Option<PyObject> = None ) -> PyResult<PyObject> {
-        Ok(
-            if let Some(ob) = default {
-                ob
-            } else {
-                py.None()
-            }
-        )
+        Ok(self._socket(py).clone_ref(py))
     }
 
     //
@@ -77,7 +73,7 @@ impl PyHttpTransport {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<PyHttpTransportMessage>,
-               proto: &PyObject) -> PyResult<PyHttpTransport> {
+               proto: &PyObject, sock: Socket) -> PyResult<PyHttpTransport> {
         // get protocol callbacks
         let connection_made = proto.getattr(py, "connection_made")?;
         let connection_lost = proto.getattr(py, "connection_lost")?;
@@ -87,7 +83,8 @@ impl PyHttpTransport {
 
         let transport = PyHttpTransport::create_instance(
             py, evloop.clone_ref(py),
-            connection_lost, data_received, request_handler, sender,
+            connection_lost, data_received, request_handler, sock.into_object(),
+            sender,
             RefCell::new(None), Cell::new(0), Cell::new(0),
             RefCell::new(VecDeque::with_capacity(12)),
             RefCell::new(VecDeque::with_capacity(CONCURENCY_LEVEL)))?;

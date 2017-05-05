@@ -8,15 +8,14 @@ use tokio_core::net::TcpStream;
 use tokio_tls::TlsConnectorExt;
 
 use ::TokioEventLoop;
-use addrinfo;
+use addrinfo::AddrInfo;
+use fut::{for_each, Until, UntilError};
 use pyunsafe::Handle;
 use transport::{InitializedTransport, tcp_transport_factory};
-use fut::{for_each, Until, UntilError};
 
 
 pub fn create_connection(factory: PyObject, evloop: TokioEventLoop,
-                         addrs: Vec<addrinfo::AddrInfo>, ssl: Option<TlsConnector>,
-                         hostname: String)
+                         addrs: Vec<AddrInfo>, ssl: Option<TlsConnector>, hostname: String)
                          -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
     let handle = evloop.get_handle();
@@ -25,24 +24,32 @@ pub fn create_connection(factory: PyObject, evloop: TokioEventLoop,
     match ssl {
         Some(ssl) => {
             // ssl handshake
-            let transport = conn.and_then(move |socket| {
+            let transport = conn.and_then(move |(socket, addr)| {
+                let peer = socket.peer_addr().expect("should never happen");
                 ssl.connect_async(hostname.as_str(), socket)
+                    .map(move |socket| (socket, addr, peer))
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-            }).and_then(move |socket| tcp_transport_factory(&evloop, &factory, socket, None));
+            }).and_then(move |(socket, addr, peer)|
+                        tcp_transport_factory(
+                            &evloop, &factory, socket, &addr, peer));
 
             Box::new(transport)
         },
         None => {
             let transport = conn.and_then(
-                move |socket| tcp_transport_factory(&evloop, &factory, socket, None));
+                move |(socket, addr)| {
+                    let peer = socket.peer_addr().expect("should never happen");
+                    tcp_transport_factory(
+                        &evloop, &factory, socket, &addr, peer)
+                });
             Box::new(transport)
         }
     }
 }
 
 
-fn connect(addrs: Vec<addrinfo::AddrInfo>, handle: Handle)
-           -> Box<Future<Item=TcpStream, Error=io::Error>>
+fn connect(addrs: Vec<AddrInfo>, handle: Handle)
+           -> Box<Future<Item=(TcpStream, AddrInfo), Error=io::Error>>
 {
     let fut = for_each(addrs).until::<_, _, _, ()>(move |info| {
         let builder = match info.sockaddr {
@@ -62,13 +69,15 @@ fn connect(addrs: Vec<addrinfo::AddrInfo>, handle: Handle)
             },
         };
 
+        let info: AddrInfo = info.clone();
+
         // convert to tokio TcpStream and connect
         match builder.to_tcp_stream() {
             Ok(stream) =>
                 future::Either::B(
                     TcpStream::connect_stream(stream, &info.sockaddr, &handle)
                         .then(|res| match res {
-                            Ok(conn) => future::ok(Some(conn)),
+                            Ok(conn) => future::ok(Some((conn, info))),
                             Err(_) => future::ok(None)
                         })
                 ),

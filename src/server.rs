@@ -10,6 +10,7 @@ use ::{PyFuture, TokioEventLoop};
 use addrinfo;
 use utils::ToPyErr;
 use pyunsafe;
+use socket::Socket;
 use transport::TransportFactory;
 
 
@@ -23,6 +24,7 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
 
     // configure sockets
     let mut listeners = Vec::new();
+    let mut sockets = Vec::new();
     for info in addrs {
         let builder = match info.family {
             addrinfo::Family::Inet =>
@@ -51,7 +53,11 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
                 match TcpListener::from_listener(listener, &info.sockaddr, &handle.h) {
                     Ok(lst) => {
                         info!("Started listening on {:?}", info.sockaddr);
-                        listeners.push(lst);
+                        let mut addr = info.clone();
+                        addr.sockaddr = lst.local_addr().expect("should not fail");
+                        let s = Socket::new(py, &addr)?;
+                        sockets.push(s.clone_ref(py).into_object());
+                        listeners.push((lst, addr));
                     },
                     Err(err) => return Err(err.to_pyerr(py)),
                 }
@@ -62,15 +68,15 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
 
     // create tokio listeners
     let mut handles = Vec::new();
-    for listener in listeners {
+    for (listener, addr) in listeners {
         let (tx, rx) = unsync::oneshot::channel::<()>();
         handles.push(pyunsafe::OneshotSender::new(tx));
-        Server::serve(evloop.clone_ref(py), listener.incoming(),
+        Server::serve(evloop.clone_ref(py), addr, listener.incoming(),
                       transport_factory, proto_factory.clone_ref(py), rx);
     }
 
     let srv = TokioServer::create_instance(
-        py, evloop.clone_ref(py), RefCell::new(Some(handles)))?;
+        py, evloop.clone_ref(py), PyTuple::new(py, &sockets[..]), RefCell::new(Some(handles)))?;
 
     Ok(srv.into_object())
 }
@@ -78,7 +84,14 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
 
 py_class!(pub class TokioServer |py| {
     data _loop: TokioEventLoop;
+    data sockets: PyTuple;
     data stop_handle: RefCell<Option<Vec<pyunsafe::OneshotSender<()>>>>;
+
+    property sockets {
+        get(&slf) -> PyResult<PyObject> {
+            Ok(slf.sockets(py).clone_ref(py).into_object())
+        }
+    }
 
     def close(&self) -> PyResult<PyObject> {
         let handles = self.stop_handle(py).borrow_mut().take();
@@ -101,6 +114,7 @@ py_class!(pub class TokioServer |py| {
 
 struct Server {
     evloop: TokioEventLoop,
+    addr: addrinfo::AddrInfo,
     stream: Incoming,
     stop: unsync::oneshot::Receiver<()>,
     transport: TransportFactory,
@@ -112,10 +126,11 @@ impl Server {
     //
     // Start accepting incoming connections
     //
-    fn serve(evloop: TokioEventLoop, stream: Incoming, transport: TransportFactory,
+    fn serve(evloop: TokioEventLoop, addr: addrinfo::AddrInfo,
+             stream: Incoming, transport: TransportFactory,
              factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
 
-        let srv = Server { evloop: evloop, stop: stop, stream: stream,
+        let srv = Server { evloop: evloop, addr: addr, stop: stop, stream: stream,
                            transport: transport, factory: factory };
 
         let handle = srv.evloop.get_handle();
@@ -143,7 +158,7 @@ impl Future for Server
         let option = self.stream.poll()?;
         match option {
             Async::Ready(Some((socket, peer))) => {
-                (self.transport)(&self.evloop, &self.factory, socket, Some(peer))?;
+                (self.transport)(&self.evloop, &self.factory, socket, &self.addr, peer)?;
 
                 // we can not just return Async::NotReady here,
                 // because self.stream is not registered within mio anymore

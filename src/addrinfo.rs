@@ -20,7 +20,7 @@ pub const AI_NUMERICHOST: libc::c_int = 0x0004;
 pub const AI_NUMERICSERV: libc::c_int = 0x0400;
 
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 /// Address family
 pub enum Family {
     /// Unspecified
@@ -55,7 +55,7 @@ impl Family {
 }
 
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 /// Types of Sockets
 pub enum SocketType {
     /// Sequenced, reliable, connection-based byte streams.
@@ -90,7 +90,7 @@ impl SocketType {
 }
 
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 /// Socket Protocol
 pub enum Protocol {
     /// Unspecificed.
@@ -133,7 +133,7 @@ impl Protocol {
 }
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AddrInfo {
     pub flags: libc::c_int,
     pub family: Family,

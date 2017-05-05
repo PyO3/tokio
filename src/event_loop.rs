@@ -66,7 +66,7 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
     let check = ID.with(|cell| {
         match *cell.borrow() {
             None => false,
-            Some(ref id) => return id == id,
+            Some(ref curr_id) => return curr_id == id,
         }
     });
 
