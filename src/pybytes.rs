@@ -3,6 +3,7 @@ use std::ptr;
 use libc::c_void;
 
 use twoway;
+use cpython::buffer::PyBuffer;
 use cpython::{self, exc, Python, PythonObject, PyClone,
               PyResult, PyObject, PySlice, PyErr, PythonObjectWithCheckedDowncast, ToPyObject};
 use cpython::_detail::ffi;
@@ -116,27 +117,33 @@ py_class!(pub class PyBytes |py| {
     }
 
     def __add__(lhs, rhs) -> PyResult<PyObject> {
-        let lhs = PyBytes::downcast_from(py, lhs.clone_ref(py).into_object())?;
+        let l = PyBuffer::get(py, lhs)?;
+        let r = PyBuffer::get(py, rhs)?;
 
-        if let Ok(rhs) = PyBytes::downcast_from(py, rhs.clone_ref(py).into_object()) {
-            let len = lhs._bytes(py).len() + rhs._bytes(py).len();
-            let mut buf = BytesMut::with_capacity(len);
-            buf.extend(lhs._bytes(py));
-            buf.extend(rhs._bytes(py));
-            Ok(PyBytes::new(py, buf.freeze())?.into_object())
-        }
-        else if let Ok(rhs) = cpython::PyBytes::downcast_from(
-                 py, rhs.clone_ref(py).into_object()) {
-            let data = rhs.data(py);
-            let len = lhs._bytes(py).len() + data.len();
-            let mut buf = BytesMut::with_capacity(len);
-            buf.extend(lhs._bytes(py));
-            buf.extend(data);
-            Ok(PyBytes::new(py, buf.freeze())?.into_object())
-        }
-        else {
-            Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("Can not add {:?} and {:?}", lhs.into_object(), rhs)))
+        match (l.as_slice::<u8>(py), r.as_slice::<u8>(py)) {
+            (Some(lbuf), Some(rbuf)) => {
+                if lbuf.len() == 0 {
+                    return Ok(rhs.clone_ref(py))
+                }
+                if rbuf.len() == 0 {
+                    return Ok(lhs.clone_ref(py))
+                }
+                let len = lbuf.len() + rbuf.len();
+                let mut buf = BytesMut::with_capacity(len);
+
+                {
+                    let mut slice = unsafe { buf.bytes_mut() };
+                    l.copy_to_slice(py, &mut slice[..lbuf.len()])?;
+                    r.copy_to_slice(py, &mut slice[lbuf.len()..rbuf.len()])?;
+                }
+                unsafe {
+                    buf.set_len(len)
+                };
+
+                Ok(PyBytes::new(py, buf.freeze())?.into_object())
+            },
+            _ => Err(PyErr::new::<exc::TypeError, _>(
+                py, format!("Can not sum {:?} and {:?}", lhs, rhs)))
         }
     }
 
