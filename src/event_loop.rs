@@ -646,54 +646,7 @@ py_class!(pub class TokioEventLoop |py| {
                     return Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
                 }
 
-                let family: i32 = sock.getattr(py, "family")?.extract(py)?;
-                let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
-                let proto: i32 = sock.getattr(py, "proto")?.extract(py)?;
-
-                let addr = PyTuple::downcast_from(
-                    py, sock.call_method(py, "getsockname", NoArgs, None)?)?;
-
-                let sockaddr = if addr.len(py) == 2 {
-                    // parse INET
-                    let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
-                    let ip = if let Ok(ip) = net::Ipv4Addr::from_str(
-                        s.to_string_lossy(py).as_ref()) {
-                        ip
-                    } else {
-                        return Err(PyErr::new::<exc::ValueError, _>(
-                            py, "Can not parse ip address"))
-                    };
-                    let port: u16 = addr.get_item(py, 1).extract(py)?;
-
-                    net::SocketAddr::V4(net::SocketAddrV4::new(ip, port))
-
-                } else if addr.len(py) == 6 {
-                    // parse INET6
-                    let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
-                    let ip = if let Ok(ip) = net::Ipv6Addr::from_str(
-                        s.to_string_lossy(py).as_ref()) {
-                        ip
-                    } else {
-                        return Err(PyErr::new::<exc::ValueError, _>(
-                            py, "Can not parse ip address"))
-                    };
-                    let port: u16 = addr.get_item(py, 1).extract(py)?;
-                    let flowinfo: u32 = addr.get_item(py, 2).extract(py)?;
-                    let scope_id: u32 = addr.get_item(py, 3).extract(py)?;
-
-                    net::SocketAddr::V6(
-                        net::SocketAddrV6::new(ip, port, flowinfo, scope_id))
-
-                } else {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "Unknown address type"))
-                };
-
-                let sockaddr = addrinfo::AddrInfo::new(
-                    0, addrinfo::Family::from_int(family as libc::c_int),
-                    addrinfo::SocketType::from_int(socktype as libc::c_int),
-                    addrinfo::Protocol::from_int(proto as libc::c_int),
-                    sockaddr, None);
+                let sockaddr = self.addr_from_socket(py, sock)?;
 
                 // create TcpStream object
                 let stream = unsafe {
@@ -1130,6 +1083,58 @@ impl TokioEventLoop {
         Ok((socktype & dgram) == dgram)
     }
 
+    /// Extract AddrInfo from python native socket object
+    fn addr_from_socket(&self, py: Python, sock: PyObject) -> PyResult<addrinfo::AddrInfo> {
+        let family: i32 = sock.getattr(py, "family")?.extract(py)?;
+        let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
+        let proto: i32 = sock.getattr(py, "proto")?.extract(py)?;
+
+        let addr = PyTuple::downcast_from(
+            py, sock.call_method(py, "getsockname", NoArgs, None)?)?;
+
+        let sockaddr = if addr.len(py) == 2 {
+            // parse INET
+            let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
+            let ip = if let Ok(ip) = net::Ipv4Addr::from_str(
+                s.to_string_lossy(py).as_ref()) {
+                ip
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "Can not parse ip address"))
+            };
+            let port: u16 = addr.get_item(py, 1).extract(py)?;
+
+            net::SocketAddr::V4(net::SocketAddrV4::new(ip, port))
+
+        } else if addr.len(py) == 6 {
+            // parse INET6
+            let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
+            let ip = if let Ok(ip) = net::Ipv6Addr::from_str(
+                s.to_string_lossy(py).as_ref()) {
+                ip
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "Can not parse ip address"))
+            };
+            let port: u16 = addr.get_item(py, 1).extract(py)?;
+            let flowinfo: u32 = addr.get_item(py, 2).extract(py)?;
+            let scope_id: u32 = addr.get_item(py, 3).extract(py)?;
+
+            net::SocketAddr::V6(
+                net::SocketAddrV6::new(ip, port, flowinfo, scope_id))
+
+        } else {
+            return Err(PyErr::new::<exc::ValueError, _>(
+                py, "Unknown address type"))
+        };
+
+        Ok(addrinfo::AddrInfo::new(
+            0, addrinfo::Family::from_int(family as libc::c_int),
+            addrinfo::SocketType::from_int(socktype as libc::c_int),
+            addrinfo::Protocol::from_int(proto as libc::c_int),
+            sockaddr, None))
+    }
+
     pub fn create_server_helper(&self, py: Python, protocol_factory: PyObject,
                                 host: Option<PyString>, port: Option<u16>,
                                 family: i32, flags: i32, sock: Option<PyObject>,
@@ -1138,22 +1143,49 @@ impl TokioEventLoop {
                                 transport_factory: transport::TransportFactory)
                                 -> PyResult<PyFuture> {
 
-        match (&host, &port) {
-            (&None, &None) => {
-                if let Some(_) = sock {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "sock is not supported yet"))
-                } else {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "Neither host/port nor sock were specified"))
-                }
-            },
-            _ => ()
-        }
-
         if let Some(ssl) = ssl {
             return Err(PyErr::new::<exc::TypeError, _>(
                 py, PyString::new(py, "ssl argument is not supported yet")));
+        }
+        let ssl = None;
+
+        if let (&None, &None) = (&host, &port) {
+            if let Some(sock) = sock {
+                // only stream sockets
+                if ! self.is_stream_socket(py, &sock)? {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, format!("A Stream Socket was expected, got {:?}", sock)))
+                }
+                // opened sockets only
+                let fileno: libc::c_int = sock.call_method(
+                    py, "fileno", NoArgs, None)?.extract(py)?;
+                if fileno == -1 {
+                    return Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+                }
+
+                let sockaddr = self.addr_from_socket(py, sock)?;
+
+                // waiter future
+                let fut = PyFuture::new(py, &self)?;
+                let evloop = self.clone_ref(py);
+
+                let res = server::create_server(
+                    py, self.clone_ref(py), vec![sockaddr],
+                    backlog, ssl, reuse_address, reuse_port,
+                    protocol_factory, transport_factory);
+                let _ = fut.set(py, res);
+
+                return Ok(fut)
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "Neither host/port nor sock were specified"))
+            }
+        }
+
+        // we have host or port, sock should be None
+        if let Some(_) = sock {
+            return Err(PyErr::new::<exc::ValueError, _>(
+                py, "host/port and sock can not be specified at the same time"))
         }
 
         // exctract hostname

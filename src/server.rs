@@ -4,6 +4,7 @@ use cpython::*;
 use futures::{unsync, Async, Stream, Future, Poll};
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
+use native_tls::TlsAcceptor;
 use tokio_core::net::{TcpListener, Incoming};
 
 use ::{PyFuture, TokioEventLoop};
@@ -15,7 +16,7 @@ use transport::TransportFactory;
 
 
 pub fn create_server(py: Python, evloop: TokioEventLoop,
-                     addrs: Vec<addrinfo::AddrInfo>, backlog: i32, _ssl: Option<PyObject>,
+                     addrs: Vec<addrinfo::AddrInfo>, backlog: i32, _ssl: Option<TlsAcceptor>,
                      reuse_address: bool, reuse_port: bool,
                      proto_factory: PyObject, transport_factory: TransportFactory)
                      -> PyResult<PyObject> {
