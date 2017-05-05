@@ -144,7 +144,7 @@ pub struct AddrInfo {
 }
 
 impl AddrInfo {
-    unsafe fn from_ptr<'a>(a: *mut libc::addrinfo, port: u16) -> Result<Self, LookupError> {
+    unsafe fn from_ptr<'a>(a: *mut libc::addrinfo) -> Result<Self, LookupError> {
         let addrinfo = *a;
 
         Ok(AddrInfo {
@@ -154,7 +154,7 @@ impl AddrInfo {
             protocol: Protocol::from_int(addrinfo.ai_protocol),
             sockaddr:
                 sockaddr_to_addr(
-                    mem::transmute(addrinfo.ai_addr), addrinfo.ai_addrlen as usize, port)?,
+                    mem::transmute(addrinfo.ai_addr), addrinfo.ai_addrlen as usize)?,
             canonname: if addrinfo.ai_canonname.is_null() { None } else {
                 Some(CStr::from_ptr(
                     addrinfo.ai_canonname).to_str().unwrap_or("unset").to_owned()) },
@@ -163,7 +163,7 @@ impl AddrInfo {
 }
 
 
-fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> io::Result<SocketAddr> {
+fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize) -> io::Result<SocketAddr> {
     match storage.ss_family as libc::c_int {
         libc::AF_INET => {
             assert!(len as usize >= mem::size_of::<libc::sockaddr_in>());
@@ -171,7 +171,7 @@ fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> 
                 unsafe {
                     let sock = *(storage as *const _ as *const libc::sockaddr_in);
                     let ip = &*(&sock.sin_addr as *const libc::in_addr as *const Ipv4Addr);
-                    SocketAddr::V4(SocketAddrV4::new(ip.clone(), port))
+                    SocketAddr::V4(SocketAddrV4::new(ip.clone(), u16::from_be(sock.sin_port)))
                 }
             )
         }
@@ -181,7 +181,9 @@ fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> 
                 unsafe {
                     let sock = *(storage as *const _ as *const libc::sockaddr_in6);
                     let ip = &*(&sock.sin6_addr as *const libc::in6_addr as *const Ipv6Addr);
-                    SocketAddr::V6(SocketAddrV6::new(ip.clone(), port, 0, 0))
+                    SocketAddr::V6(SocketAddrV6::new(
+                        ip.clone(), u16::from_be(sock.sin6_port),
+                        u32::from_be(sock.sin6_flowinfo), 0))
                 }
             )
         }
@@ -194,14 +196,14 @@ fn sockaddr_to_addr(storage: &libc::sockaddr_storage, len: usize, port: u16) -> 
 
 pub struct LookupParams {
     host: Option<String>,
-    port: u16,
+    port: Option<String>,
     family: libc::c_int,
     flags: libc::c_int,
     socktype: SocketType,
 }
 
 impl LookupParams {
-    pub fn new(host: Option<String>, port: u16,
+    pub fn new(host: Option<String>, port: Option<String>,
                family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> LookupParams {
         LookupParams {
             host: host,
@@ -215,7 +217,6 @@ impl LookupParams {
 
 
 pub struct LookupAddrInfo {
-    port: u16,
     orig: *mut libc::addrinfo,
     cur: *mut libc::addrinfo,
 }
@@ -223,7 +224,7 @@ pub struct LookupAddrInfo {
 
 /// Lookup a addr info via dns, return an iterator of addr infos.
 pub fn lookup_addrinfo(
-    host: Option<String>, port: u16,
+    host: Option<String>, port: Option<String>,
     family: libc::c_int, flags: libc::c_int, socktype: SocketType) -> Result<LookupAddrInfo, LookupError> {
     let mut res = ptr::null_mut();
     let hints = libc::addrinfo {
@@ -237,19 +238,26 @@ pub fn lookup_addrinfo(
         ai_next: ptr::null_mut(),
     };
 
-    let tmp;
-    let (c_host, c_srv) = if let Some(host) = host {
-        tmp = CString::new(host)?;
-        (tmp.as_ptr(), ptr::null())
+    let tmp_h;
+    let c_host = if let Some(host) = host {
+        tmp_h = CString::new(host)?;
+        tmp_h.as_ptr()
     } else {
-        tmp = CString::new(port.to_string())?;
-        (ptr::null(), tmp.as_ptr())
+        ptr::null()
+    };
+
+    let tmp_p;
+    let c_srv = if let Some(port) = port {
+        tmp_p = CString::new(port)?;
+        tmp_p.as_ptr()
+    } else {
+        ptr::null()
     };
 
     unsafe {
         let lres = libc::getaddrinfo(c_host, c_srv, &hints, &mut res);
         match lres {
-            0 => Ok(LookupAddrInfo { port: port, orig: res, cur: res }),
+            0 => Ok(LookupAddrInfo { orig: res, cur: res }),
             _ => Err(LookupError::Generic),
         }
     }
@@ -264,7 +272,7 @@ impl Iterator for LookupAddrInfo {
                 if self.cur.is_null() {
                     return None
                 } else {
-                    let ret = AddrInfo::from_ptr(self.cur, self.port);
+                    let ret = AddrInfo::from_ptr(self.cur);
                     self.cur = (*self.cur).ai_next as *mut libc::addrinfo;
                     if let Ok(ret) = ret {
                         return Some(ret)
@@ -384,7 +392,7 @@ pub fn start_workers(num: usize) -> LookupWorkerSender {
 }
 
 pub fn lookup(sender: &LookupWorkerSender,
-              host: Option<String>, port: u16,
+              host: Option<String>, port: Option<String>,
               family: libc::c_int, flags: libc::c_int, socktype: SocketType)
               -> LookupResultReceiver {
     // prepare work item

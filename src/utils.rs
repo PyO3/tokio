@@ -24,7 +24,10 @@ pub struct WorkingClasses {
     pub BaseException: PyType,
     pub StopIteration: PyType,
 
+    pub Socket: PyModule,
+    pub GaiError: PyType,
     pub SocketTimeout: PyType,
+    pub GetNameInfo: PyObject,
 
     pub BrokenPipeError: PyType,
     pub ConnectionAbortedError: PyType,
@@ -77,8 +80,13 @@ lazy_static! {
                 py, &builtins.get(py, "ConnectionResetError").unwrap()).unwrap(),
             InterruptedError: PyType::extract(
                 py, &builtins.get(py, "InterruptedError").unwrap()).unwrap(),
+
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),
+            GaiError: PyType::extract(
+                py, &socket.get(py, "gaierror").unwrap()).unwrap(),
+            GetNameInfo: socket.get(py, "getnameinfo").unwrap(),
+            Socket: socket,
 
             Sys: py.import("sys").unwrap(),
             Traceback: tb.clone_ref(py),
@@ -189,11 +197,11 @@ impl ToPyErr for LookupError {
         match self {
             &LookupError::IOError(ref err) => err.to_pyerr(py),
             &LookupError::Other(ref err_str) =>
-                PyErr::new::<exc::RuntimeError, _>(py, err_str),
+                PyErr::new_err(py, &Classes.GaiError, (err_str,)),
             &LookupError::NulError(_) =>
-                PyErr::new::<exc::RuntimeError, _>(py, "nil pointer"),
+                PyErr::new_err(py, &Classes.GaiError, ("nil pointer",)),
             &LookupError::Generic =>
-                PyErr::new::<exc::RuntimeError, _>(py, "generic error"),
+                PyErr::new_err(py, &Classes.GaiError, ("generic error",)),
         }
     }
 }

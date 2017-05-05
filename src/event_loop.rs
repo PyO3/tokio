@@ -399,35 +399,43 @@ py_class!(pub class TokioEventLoop |py| {
     // sockaddr(IPV4) = (address, port)
     // sockaddr(IPV6) = (address, port, flow info, scope id)
     def getaddrinfo(&self, *args, **kwargs) -> PyResult<PyFuture> {
-                    //host: PyString, port: u16,
-                    //family: i32 = 0, _type: i32 = 0,
-                    //proto: i32 = 0, flags: i32 = 0) -> PyResult<PyFuture> {
-
         // parse params
         let len = args.len(py);
         if len < 1 {
             return Err(PyErr::new::<exc::ValueError, _>(py, "host is required"))
         }
-        let host_arg = args.get_item(py, 0);
-        let host = if host_arg == py.None() {
-            None
-        } else if let Ok(host) = PyString::downcast_from(py, host_arg) {
-            Some(String::from(host.to_string(py)?))
-        } else {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, "string or none type is required as host"))
-        };
         if len < 2 {
             return Err(PyErr::new::<exc::ValueError, _>(py, "port is required"))
         }
-        let port_arg = args.get_item(py, 1);
-        let port: u16 = if port_arg == py.None() {
-            0
-        } else if let Ok(port) = port_arg.extract(py) {
-            port
+
+        // parse host (string, unicode, bytes, None)
+        let host_arg = args.get_item(py, 0);
+        let host = if host_arg == py.None() {
+            None
+        } else if let Ok(host) = PyString::downcast_from(py, host_arg.clone_ref(py)) {
+            Some(String::from(host.to_string_lossy(py)))
         } else {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, "int or none type is required as port"))
+            println!("host: {:?}", host_arg);
+            if let Ok(host) = PyString::from_object(py, &host_arg, "utf-8", "strict") {
+                Some(String::from(host.to_string_lossy(py)))
+            } else {
+                return Err(PyErr::new::<exc::TypeError, _>(
+                    py, "string or none type is required as host"))
+            }
+        };
+
+        // parse port (int, string, unicode or none)
+        let port_arg = args.get_item(py, 1);
+        let port = if port_arg == py.None() {
+            None
+        } else if let Ok(port) = PyString::downcast_from(py, port_arg.clone_ref(py)) {
+            Some(String::from(port.to_string_lossy(py)))
+        } else if let Ok(port) = port_arg.extract::<u16>(py) {
+            Some(port.to_string())
+        } else {
+            Some(String::from(
+                PyString::from_object(
+                    py, &port_arg, "utf-8", "strict")?.to_string_lossy(py)))
         };
 
         let mut family: i32 = 0;
@@ -493,7 +501,6 @@ py_class!(pub class TokioEventLoop |py| {
                                     cname, addr).to_py_tuple(py).into_object();
                         list.insert_item(py, list.len(py), item);
                     }
-                    println!("addrinfo: {}", list.clone_ref(py).into_object());
                     let _ = fut.set(py, Ok(list.into_object()));
                 },
             });
@@ -509,6 +516,13 @@ py_class!(pub class TokioEventLoop |py| {
         self.handle(py).spawn(process);
 
         Ok(res)
+    }
+
+    // TODO need rust version, use python code for now
+    def getnameinfo(&self, sockaddr: PyObject, flags: i32 = 0) -> PyResult<PyObject> {
+        self.run_in_executor(
+            py, &(py.None(), Classes.GetNameInfo.clone_ref(py),
+                  sockaddr, flags).to_py_tuple(py), None)
     }
 
     //
@@ -631,6 +645,7 @@ py_class!(pub class TokioEventLoop |py| {
 
                 // exctract hostname
                 let host = host.map(|s| String::from(s.to_string_lossy(py)));
+                let port = port.map(|p| p.to_string());
 
                 // server hostname for ssl validation
                 let server_hostname = match server_hostname {
@@ -650,7 +665,7 @@ py_class!(pub class TokioEventLoop |py| {
 
                 // resolve addresses and connect
                 let conn = addrinfo::lookup(&self._lookup(py),
-                                            host, port.unwrap_or(0),
+                                            host, port,
                                             family, flags, addrinfo::SocketType::Stream)
                     .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
                     .and_then(move |addrs| match addrs {
@@ -1017,7 +1032,7 @@ impl TokioEventLoop {
 
         // resolve addresses and start listening
         let conn = addrinfo::lookup(&self._lookup(py),
-                                    host, port.unwrap_or(0),
+                                    host, port.map(|p| p.to_string()),
                                     family, flags, addrinfo::SocketType::Stream)
             .map_err(|err| with_py(
                 |py| io::Error::new(io::ErrorKind::Other, err.description()).to_pyerr(py)))
