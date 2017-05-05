@@ -754,6 +754,11 @@ py_class!(pub class TokioEventLoop |py| {
     // Run until stop() is called
     //
     def run_forever(&self, stop_on_sigint: bool = true) -> PyResult<PyObject> {
+        if let Some(_) = *self._runner(py).borrow() {
+            return Err(PyErr::new::<exc::RuntimeError, _>(
+                py, "Event loop is running already"));
+        }
+
         let res = py.allow_threads(|| {
             CORE.with(|cell| {
                 match *cell.borrow_mut() {
@@ -823,6 +828,11 @@ py_class!(pub class TokioEventLoop |py| {
     // Return the Future's result, or raise its exception.
     //
     def run_until_complete(&self, fut: PyObject) -> PyResult<PyObject> {
+        if let Some(_) = *self._runner(py).borrow() {
+            return Err(PyErr::new::<exc::RuntimeError, _>(
+                py, "Event loop is running already"))
+        }
+
         let (completed, result) =
             // PyTask
             if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
