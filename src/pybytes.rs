@@ -202,16 +202,15 @@ py_class!(pub class PyBytes |py| {
             (Some(enc), Some(err)) =>
                 Ok(cpython::PyString::from_object(
                     py, bytes,
-                    enc.to_string_lossy(py).as_ref(), err.to_string_lossy(py).as_ref())),
+                    enc.to_string_lossy(py).as_ref(), err.to_string_lossy(py).as_ref())?),
             (Some(enc), None) =>
                 Ok(cpython::PyString::from_object(
-                    py, bytes, enc.to_string_lossy(py).as_ref(), "strict")),
+                    py, bytes, enc.to_string_lossy(py).as_ref(), "strict")?),
             (None, Some(err)) =>
                 Ok(cpython::PyString::from_object(
-                    py, bytes, "utf-8", err.to_string_lossy(py).as_ref())),
+                    py, bytes, "utf-8", err.to_string_lossy(py).as_ref())?),
             (None, None) =>
-                Ok(cpython::PyString::from_object(
-                    py, bytes, "utf-8", "strict")),
+                Ok(cpython::PyString::from_object(py, bytes, "utf-8", "strict")?),
         }
     }
 });
