@@ -6,8 +6,10 @@ use std::net;
 use std::error::Error;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::str::FromStr;
+use std::os::raw::c_int;
 use std::os::unix::io::{RawFd, FromRawFd};
 
 use libc;
@@ -24,10 +26,11 @@ use ::{PyFuture, PyTask};
 use addrinfo;
 use client;
 use handle::PyHandle;
+use fd;
 use http;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
-use pyunsafe::{GIL, Handle};
+use pyunsafe::{GIL, Handle, OneshotSender};
 use transport::{self, tcp_transport_factory};
 
 
@@ -59,6 +62,8 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             Cell::new(100),
             Cell::new(false),
             RefCell::new(None),
+            RefCell::new(HashMap::new()),
+            RefCell::new(HashMap::new()),
         );
 
         ID.with(|cell| { *cell.borrow_mut() = Some(core.id())});
@@ -106,6 +111,8 @@ py_class!(pub class TokioEventLoop |py| {
     data _slow_callback_duration: Cell<u64>;
     data _debug: Cell<bool>;
     data _current_task: RefCell<Option<PyObject>>;
+    data _readers: RefCell<HashMap<c_int, OneshotSender<()>>>;
+    data _writers: RefCell<HashMap<c_int, OneshotSender<()>>>;
 
     //
     // Return the currently running task in an event loop or None.
@@ -296,6 +303,86 @@ py_class!(pub class TokioEventLoop |py| {
             }
             Ok(h.into_object())
         }
+    }
+
+    def _add_reader(&self, *args, **kwargs) -> PyResult<()> {
+        if args.len(py) < 2 {
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 2 arguments"))
+        } else {
+            // get params
+            let fd: c_int = args.get_item(py, 0).extract(py)?;
+            let callback = args.get_item(py, 1);
+
+            // create handle
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[2..]))?;
+            match fd::PyFdHandle::reader(fd, self.href(), h) {
+                Ok(tx) => {
+                    self._readers(py).borrow_mut().insert(fd, OneshotSender::new(tx));
+                    Ok(())
+                },
+                Err(err) => Err(err.to_pyerr(py)),
+            }
+        }
+    }
+
+    def _remove_reader(&self, fd: c_int) -> PyResult<bool> {
+        if let Some(tx) = self._readers(py).borrow_mut().remove(&fd) {
+            let _ = tx.send(());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    def _add_writer(&self, *args, **kwargs) -> PyResult<()> {
+        if args.len(py) < 2 {
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 2 arguments"))
+        } else {
+            // get params
+            let fd: c_int = args.get_item(py, 0).extract(py)?;
+            let callback = args.get_item(py, 1);
+
+            // create handle
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[2..]))?;
+            match fd::PyFdHandle::writer(fd, self.href(), h) {
+                Ok(tx) => {
+                    self._writers(py).borrow_mut().insert(fd, OneshotSender::new(tx));
+                    Ok(())
+                },
+                Err(err) => Err(err.to_pyerr(py)),
+            }
+        }
+    }
+
+    def _remove_writer(&self, fd: c_int) -> PyResult<bool> {
+        if let Some(tx) = self._writers(py).borrow_mut().remove(&fd) {
+            let _ = tx.send(());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    // Add a reader callback
+    def add_reader(&self, *args, **kwargs) -> PyResult<()> {
+        return self._add_reader(py, args, kwargs)
+    }
+
+    // Remove a reader callback
+    def remove_reader(&self, fd:c_int) -> PyResult<bool> {
+        self._remove_reader(py, fd)
+    }
+
+    // Add a writer callback
+    def add_writer(&self, *args, **kwargs) -> PyResult<()> {
+        return self._add_writer(py, args, kwargs)
+    }
+
+    // Remove a writer callback
+    def remove_writer(&self, fd: c_int) -> PyResult<bool> {
+        return self._remove_writer(py, fd)
     }
 
     //

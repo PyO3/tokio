@@ -1,5 +1,6 @@
 #![recursion_limit="1024"]
 
+extern crate mio;
 extern crate chan;
 extern crate libc;
 extern crate net2;
@@ -26,6 +27,7 @@ pub mod pyfuture;
 pub mod pybytes;
 pub mod pytask;
 pub mod pyunsafe;
+mod fd;
 mod event_loop;
 mod transport;
 mod socket;

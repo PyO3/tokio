@@ -16,6 +16,7 @@ use addrinfo::LookupError;
 pub struct WorkingClasses {
     pub Future: PyType,
 
+    pub Asyncio: PyModule,
     pub CancelledError: PyType,
     pub InvalidStateError: PyType,
     pub TimeoutError: PyType,
@@ -36,7 +37,6 @@ pub struct WorkingClasses {
     pub InterruptedError: PyType,
 
     pub Sys: PyModule,
-    pub Asyncio: PyModule,
     pub Traceback: PyModule,
     pub ExtractStack: PyObject,
 }

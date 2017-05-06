@@ -85,7 +85,7 @@ impl PyHandle {
         self._loop(py).href().spawn(fut);
     }
 
-    fn run(&self) {
+    pub fn run(&self) {
         let _: PyResult<()> = with_py(|py| {
             // check if cancelled
             if self._cancelled(py).get() {
