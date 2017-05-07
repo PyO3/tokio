@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use cpython::*;
 use futures::unsync::mpsc;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
-use bytes::{Bytes, BytesMut};
+use bytes::{Bytes, BytesMut, BufMut};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
@@ -45,8 +45,13 @@ pub type TransportFactory = fn(
     -> io::Result<InitializedTransport>;
 
 
+pub struct BytesMsg {
+    pub buf: buffer::PyBuffer,
+    pub len: usize,
+}
+
 pub enum TcpTransportMessage {
-    Bytes(PyBytes),
+    Bytes(BytesMsg),
     Close,
 }
 
@@ -106,9 +111,31 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // write bytes to transport
     //
-    def write(&self, data: PyBytes) -> PyResult<PyObject> {
-        let _ = self._transport(py).send(TcpTransportMessage::Bytes(data));
-        Ok(py.None())
+    def write(&self, data: PyObject) -> PyResult<()> {
+        let data = buffer::PyBuffer::get(py, &data)?;
+        let len = if let Some(slice) = data.as_slice::<u8>(py) {
+            slice.len() as usize
+        } else {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "data argument must be a bytes-like object"))
+        };
+
+        let _ = self._transport(py).send(
+            TcpTransportMessage::Bytes(BytesMsg{buf:data, len:len}));
+        Ok(())
+    }
+
+    //
+    // write bytes to transport
+    //
+    def writelines(&self, data: PyObject) -> PyResult<()> {
+        let iter = data.iter(py)?;
+
+        for item in iter {
+            let _ = self.write(py, item?)?;
+        }
+
+        Ok(())
     }
 
     //
@@ -129,6 +156,14 @@ py_class!(pub class PyTcpTransport |py| {
             *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
             Ok(fut)
         }
+    }
+
+    def pause_reading(&self) -> PyResult<()> {
+        Ok(())
+    }
+
+    def resume_reading(&self) -> PyResult<()> {
+        Ok(())
     }
 
     //
@@ -225,7 +260,7 @@ struct TcpTransport<T> {
     intake: unsync::mpsc::UnboundedReceiver<TcpTransportMessage>,
     transport: PyTcpTransport,
 
-    buf: Option<PyBytes>,
+    buf: Option<BytesMsg>,
     incoming_eof: bool,
     flushed: bool,
     closing: bool,
@@ -358,11 +393,20 @@ impl Decoder for TcpTransportCodec {
 }
 
 impl Encoder for TcpTransportCodec {
-    type Item = PyBytes;
+    type Item = BytesMsg;
     type Error = io::Error;
 
-    fn encode(&mut self, msg: PyBytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.extend(msg.data(GIL::python()));
+    fn encode(&mut self, msg: BytesMsg, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.reserve(msg.len);
+        {
+            let mut slice = unsafe { dst.bytes_mut() };
+            msg.buf.copy_to_slice(GIL::python(), &mut slice[..msg.len])?;
+        }
+        unsafe {
+            let new_len = dst.len() + msg.len;
+            dst.set_len(new_len);
+        }
+
         Ok(())
     }
 

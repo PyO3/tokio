@@ -27,6 +27,7 @@ use addrinfo;
 use client;
 use handle::PyHandle;
 use fd;
+use fut::{Until, UntilError};
 use http;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
@@ -385,6 +386,339 @@ py_class!(pub class TokioEventLoop |py| {
         return self._remove_writer(py, fd)
     }
 
+    // Receive data from the socket.
+    //
+    // The return value is a bytes object representing the data received.
+    // The maximum amount of data to be received at once is specified by
+    // nbytes.
+    //
+    // This method is a coroutine.
+    def sock_recv(&self, sock: PyObject, n: PyObject) -> PyResult<PyFuture> {
+        let _ = self.is_socket_nonblocking(py, &sock)?;
+
+        // create readiness stream
+        let fd = {
+            let fd = self.get_socket_fd(py, &sock)?;
+            match fd::PyFdReadable::new(fd, self.href()) {
+                Ok(fd) => fd,
+                Err(err) => return Ok(
+                    PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
+            }
+        };
+
+        // wait until sock get ready
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_ready = fut.clone_ref(py);
+
+        let f = fd.until(move |_| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            // fut cancelled
+            if fut_ready.is_cancelled(py) {
+                return future::ok(Some(()));
+            }
+
+            let res = sock.call_method(py, "recv", (n.clone_ref(py),), None);
+
+            match res {
+                Err(err) => {
+                    if err.matches(
+                        py, (py.get_type::<exc::BlockingIOError>(),
+                             py.get_type::<exc::InterruptedError>())) {
+                        // skill blocking, continue
+                        future::ok(None)
+                    } else {
+                        future::err(err)
+                    }
+                }
+                Ok(result) => {
+                    let _ = fut_ready.set(py, Ok(result));
+                    future::ok(Some(()))
+                }
+            }
+        }).map_err(move |err| {
+            match err {
+                UntilError::Error(err) => {
+                    // actual python exception
+                    with_py(|py| {
+                        let _ = fut_err.set(py, Err(err));
+                    });
+                },
+                _ => unreachable!(),
+            };
+        });
+
+        self.href().spawn(f);
+
+        Ok(fut)
+    }
+
+    // Send data to the socket.
+    //
+    // The socket must be connected to a remote socket. This method continues
+    // to send data from data until either all data has been sent or an
+    // error occurs. None is returned on success. On error, an exception is
+    // raised, and there is no way to determine how much data, if any, was
+    // successfully processed by the receiving end of the connection.
+    //
+    // This method is a coroutine.
+    def sock_sendall(&self, sock: PyObject, data: PyObject) -> PyResult<PyFuture> {
+        let _ = self.is_socket_nonblocking(py, &sock)?;
+
+        // data is empty, nothing to do
+        if ! data.is_true(py).unwrap() {
+            return Ok(PyFuture::done_res(py, &self, Ok(py.None()))?)
+        }
+
+        // create readyness stream for write operation
+        let fd = {
+            let fd = self.get_socket_fd(py, &sock)?;
+            match fd::PyFdWriteable::new(fd, self.href()) {
+                Ok(fd) => fd,
+                Err(err) => return Ok(
+                    PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
+            }
+        };
+
+        // wait until sock get ready
+        let fut = PyFuture::new(py, &self)?;
+        let fut_ready = fut.clone_ref(py);
+        let fut_err = fut.clone_ref(py);
+        let wrp = PyList::new(py, &[data]);
+
+        let f = fd.until(move |_| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            if fut_ready.is_cancelled(py) {
+                return future::ok(Some(()));
+            }
+
+            let data = wrp.get_item(py, 0);
+            let res = sock.call_method(py, "send", (data.clone_ref(py),), None);
+
+            match res {
+                Err(err) => {
+                    if err.matches(
+                        py, (py.get_type::<exc::BlockingIOError>(),
+                             py.get_type::<exc::InterruptedError>())) {
+                        // skill blocking, continue
+                        future::ok(None)
+                    } else {
+                        future::err(err)
+                    }
+                }
+                Ok(result) => {
+                    if let Ok(n) = result.extract::<c_int>(py) {
+                        let len = data.len(py).unwrap() as c_int;
+                        if n == len {
+                            // all data is sent
+                            let _ = fut_ready.set(py, Ok(py.None()));
+                            future::ok(Some(()))
+                        } else {
+                            // some data got send
+                            let slice = PySlice::new(py, n as isize, len as isize, 1);
+                            match data.call_method(py, "__getitem__", (slice,), None) {
+                                Ok(data) => {
+                                    wrp.set_item(py, 0, data);
+                                    future::ok(None)
+                                },
+                                Err(err) =>
+                                    future::err(err)
+                            }
+                        }
+                    } else {
+                        // exception
+                        future::err(PyErr::new::<exc::OSError, _>(
+                            py, format!("sendall call failed {}", sock)))
+                    }
+                }
+            }
+        }).map_err(move |err| {
+            match err {
+                UntilError::Error(err) => {
+                    // actual python exception
+                    with_py(|py| {
+                        let _ = fut_err.set(py, Err(err));
+                    });
+                },
+                _ => unreachable!(),
+            };
+        });
+
+        self.href().spawn(f);
+        Ok(fut)
+    }
+
+    // Connect to a remote socket at address.
+    //
+    // This method is a coroutine.
+    def sock_connect(&self, sock: PyObject, address: PyObject) -> PyResult<PyFuture> {
+        let _ = self.is_socket_nonblocking(py, &sock)?;
+
+        //if not hasattr(socket, 'AF_UNIX') or sock.family != socket.AF_UNIX:
+        //resolved = base_events._ensure_resolved(
+        //    address, family=sock.family, proto=sock.proto, loop=self)
+        //    if not resolved.done():
+        //yield from resolved
+        //    _, _, _, _, address = resolved.result()[0]
+
+        // try to connect
+        let res = sock.call_method(py, "connect", (address.clone_ref(py),), None);
+
+        // if connect is blocking, create readiness stream
+        let fd = match res {
+            Ok(_) => {
+                return Ok(PyFuture::done_fut(py, &self, py.None())?);
+            },
+            Err(err) => {
+                if ! err.matches(py, (py.get_type::<exc::BlockingIOError>(),
+                                      py.get_type::<exc::InterruptedError>())) {
+                    return Ok(PyFuture::done_res(py, &self, Err(err))?);
+                }
+                let fd = self.get_socket_fd(py, &sock)?;
+                match fd::PyFdWriteable::new(fd, self.href()) {
+                    Err(err) => return Ok(
+                        PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
+                    Ok(fd) => fd
+                }
+            }
+        };
+
+
+        // wait until sock get connected
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_ready = fut.clone_ref(py);
+
+        let f = fd.until(move |_| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            if fut_ready.is_cancelled(py) {
+                return future::ok(Some(()))
+            }
+
+            let res = sock.call_method(
+                py, "getsockopt", (libc::SOL_SOCKET, libc::SO_ERROR), None);
+
+            match res {
+                Err(err) => {
+                    if err.matches(
+                        py, (py.get_type::<exc::BlockingIOError>(),
+                             py.get_type::<exc::InterruptedError>())) {
+                        // skill blocking, continue
+                        future::ok(None)
+                    } else {
+                        // actual python exception
+                        future::err(err)
+                    }
+                }
+                Ok(result) => {
+                    if let Ok(err) = result.extract::<i32>(py) {
+                        if err == 0 {
+                            let _ = fut_ready.set(py, Ok(py.None()));
+                            return future::ok(Some(()))
+                        }
+                    }
+
+                    // Jump to any except clause below.
+                    future::err(PyErr::new::<exc::OSError, _>(
+                        py, (result, format!("Connect call failed {}", address))))
+                }
+            }
+        }).map_err(move |err| {
+            match err {
+                UntilError::Error(err) => {
+                    // actual python exception
+                    with_py(|py| {
+                        let _ = fut_err.set(py, Err(err));
+                    });
+                },
+                _ => unreachable!(),
+            };
+        });
+
+        self.href().spawn(f);
+        Ok(fut)
+    }
+
+    // Accept a connection.
+    //
+    // The socket must be bound to an address and listening for connections.
+    // The return value is a pair (conn, address) where conn is a new socket
+    // object usable to send and receive data on the connection, and address
+    // is the address bound to the socket on the other end of the connection.
+    //
+    // This method is a coroutine.
+    def sock_accept(&self, sock: PyObject) -> PyResult<PyFuture> {
+        let _ = self.is_socket_nonblocking(py, &sock)?;
+
+        // create readiness stream
+        let fd = {
+            let fd = self.get_socket_fd(py, &sock)?;
+            match fd::PyFdReadable::new(fd, self.href()) {
+                Ok(fd) => fd,
+                Err(err) => return Ok(
+                    PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
+            }
+        };
+
+        // wait until sock get ready
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_ready = fut.clone_ref(py);
+
+        let f = fd.until(move |_| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            // fut cancelled
+            if fut_ready.is_cancelled(py) {
+                return future::ok(Some(()));
+            }
+
+            let res = sock.call_method(py, "accept", NoArgs, None);
+
+            match res {
+                Err(err) => {
+                    if err.matches(
+                        py, (py.get_type::<exc::BlockingIOError>(),
+                             py.get_type::<exc::InterruptedError>())) {
+                        // skill blocking, continue
+                        future::ok(None)
+                    } else {
+                        future::err(err)
+                    }
+                }
+                Ok(result) => {
+                    if let Ok(result) = PyTuple::downcast_from(py, result.clone_ref(py)) {
+                        let _ = result.get_item(py, 0).call_method(
+                            py, "setblocking", (false,), None);
+                    }
+                    
+                    let _ = fut_ready.set(py, Ok(result));
+                    future::ok(Some(()))
+                }
+            }
+        }).map_err(move |err| {
+            match err {
+                UntilError::Error(err) => {
+                    // actual python exception
+                    with_py(|py| {
+                        let _ = fut_err.set(py, Err(err));
+                    });
+                },
+                _ => unreachable!(),
+            };
+        });
+
+        self.href().spawn(f);
+        Ok(fut)
+    }
+
     //
     // Stop running the event loop.
     //
@@ -507,7 +841,6 @@ py_class!(pub class TokioEventLoop |py| {
         } else if let Ok(host) = PyString::downcast_from(py, host_arg.clone_ref(py)) {
             Some(String::from(host.to_string_lossy(py)))
         } else {
-            println!("host: {:?}", host_arg);
             if let Ok(host) = PyString::from_object(py, &host_arg, "utf-8", "strict") {
                 Some(String::from(host.to_string_lossy(py)))
             } else {
@@ -727,12 +1060,7 @@ py_class!(pub class TokioEventLoop |py| {
                         py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
 
-                let fileno: libc::c_int = sock.call_method(
-                    py, "fileno", NoArgs, None)?.extract(py)?;
-                if fileno == -1 {
-                    return Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
-                }
-
+                let fileno = self.get_socket_fd(py, &sock)?;
                 let sockaddr = self.addr_from_socket(py, sock)?;
 
                 // create TcpStream object
@@ -1170,6 +1498,31 @@ impl TokioEventLoop {
         Ok((socktype & dgram) == dgram)
     }
 
+    // opened sockets only
+    fn get_socket_fd(&self, py: Python, sock: &PyObject) -> PyResult<c_int> {
+        let fileno: c_int = sock.call_method(py, "fileno", NoArgs, None)?.extract(py)?;
+        if fileno == -1 {
+            Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+        } else {
+            Ok(fileno)
+        }
+    }
+
+    // check if socket is blocked
+    fn is_socket_nonblocking(&self, py: Python, sock: &PyObject) -> PyResult<()> {
+        if self._debug(py).get() {
+            let timeout = sock.call_method(py, "gettimeout", NoArgs, None)?;
+            if let Ok(timeout) = timeout.extract::<c_int>(py) {
+                if timeout == 0 {
+                    return Ok(())
+                }
+            }
+            Err(PyErr::new::<exc::ValueError, _>(py, "the socket must be non-blocking"))
+        } else {
+            return Ok(())
+        }
+    }
+
     /// Extract AddrInfo from python native socket object
     fn addr_from_socket(&self, py: Python, sock: PyObject) -> PyResult<addrinfo::AddrInfo> {
         let family: i32 = sock.getattr(py, "family")?.extract(py)?;
@@ -1244,12 +1597,7 @@ impl TokioEventLoop {
                         py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
                 // opened sockets only
-                let fileno: libc::c_int = sock.call_method(
-                    py, "fileno", NoArgs, None)?.extract(py)?;
-                if fileno == -1 {
-                    return Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
-                }
-
+                let fileno = self.get_socket_fd(py, &sock)?;
                 let sockaddr = self.addr_from_socket(py, sock)?;
 
                 // waiter future

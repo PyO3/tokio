@@ -46,7 +46,6 @@ class MyBaseProto(asyncio.Protocol):
 # reason='See https://github.com/python/asyncio/pull/366 for details')
 
 
-@pytest.mark.skip
 def test_create_server_1(loop):
     CNT = 0           # number of clients that were successful
     TOTAL_CNT = 25    # total number of clients that test will create
@@ -98,7 +97,7 @@ def test_create_server_1(loop):
         nonlocal CNT
         CNT = 0
 
-        addrs = ('127.0.0.1', 'localhost')
+        addrs = ('127.0.0.1',  'localhost')
         if not isinstance(loop, uvloop.Loop):
             # Hack to let tests run on Python 3.5.0
             # (asyncio doesn't support multiple hosts in 3.5.0)
@@ -120,8 +119,7 @@ def test_create_server_1(loop):
             tasks.append(test_client(addr))
 
         await asyncio.wait_for(
-            asyncio.gather(*tasks, loop=loop),
-            TIMEOUT, loop=loop)
+            asyncio.gather(*tasks, loop=loop), TIMEOUT, loop=loop)
 
         loop.call_soon(srv.close)
         await srv.wait_closed()

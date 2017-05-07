@@ -821,6 +821,14 @@ impl PyFuture {
     pub fn is_same_loop(&self, py: Python, evloop: &TokioEventLoop) -> bool {
         &self._fut(py).borrow().evloop == evloop
     }
+
+    pub fn is_done(&self, py: Python) -> bool {
+        self._fut(py).borrow().done()
+    }
+
+    pub fn is_cancelled(&self, py: Python) -> bool {
+        self._fut(py).borrow().cancelled()
+    }
 }
 
 impl future::Future for PyFuture {

@@ -5,9 +5,10 @@ use mio::event::Evented;
 use mio::unix::EventedFd;
 use mio::{self, Ready, PollOpt, Token};
 use futures::unsync::oneshot;
-use futures::{Async, Future, Poll};
+use futures::{stream, Async, Future, Poll};
 use tokio_core::reactor::{Handle, PollEvented};
 
+use fut::Until;
 use handle::PyHandle;
 
 
@@ -92,7 +93,8 @@ impl Future for PyFdHandle {
             match result {
                 Some(Async::Ready(_)) => {
                     if let Some(ref reader) = self.reader {
-                        reader.run()
+                        reader.run();
+                        self.ev.need_read();
                     }
                     poll = true;
                 },
@@ -111,16 +113,14 @@ impl Future for PyFdHandle {
             match result {
                 Some(Async::Ready(_)) => {
                     if let Some(ref writer) = self.writer {
-                        writer.run()
+                        writer.run();
+                        self.ev.need_write();
                     }
                     poll = true;
                 },
                 Some(Async::NotReady) => {
                     poll = false;
                 },
-                //Some(Err(_)) => {
-                //    let _ = self.writer.take();
-                //},
                 None => (),
             }
 
@@ -142,43 +142,80 @@ impl Future for PyFdHandle {
     }
 }
 
-/*
-"""
-    def _add_reader(self, fd, callback, *args):
-        self._check_closed()
-        handle = events.Handle(callback, args, self)
-        try:
-            key = self._selector.get_key(fd)
-        except KeyError:
-            self._selector.register(fd, selectors.EVENT_READ,
-                                    (handle, None))
-        else:
-            mask, (reader, writer) = key.events, key.data
-            self._selector.modify(fd, mask | selectors.EVENT_READ,
-                                  (handle, writer))
-            if reader is not None:
-                reader.cancel()
 
-    def _remove_reader(self, fd):
-        if self.is_closed():
-            return False
-        try:
-            key = self._selector.get_key(fd)
-        except KeyError:
-            return False
-        else:
-            mask, (reader, writer) = key.events, key.data
-            mask &= ~selectors.EVENT_READ
-            if not mask:
-                self._selector.unregister(fd)
-            else:
-                self._selector.modify(fd, mask, (None, writer))
+/// Stream of read readyness for file descriptor
+pub struct PyFdReadable {
+    io: PollEvented<PyFd>,
+    marked_ready: bool,
+}
 
-            if reader is not None:
-                reader.cancel()
-                return True
-            else:
-                return False
+impl PyFdReadable {
+    pub fn new(fd: c_int, handle: &Handle) -> io::Result<PyFdReadable> {
+        Ok(PyFdReadable{
+            io: PollEvented::new(PyFd::new(fd), handle)?,
+            marked_ready: false
+        })
+    }
+}
 
-"""
-*/
+impl stream::Stream for PyFdReadable {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.marked_ready {
+            self.io.need_read();
+            self.marked_ready = false;
+        }
+
+        match self.io.poll_read() {
+            Async::Ready(_) => {
+                self.marked_ready = true;
+                Ok(Async::Ready(Some(())))
+            },
+            Async::NotReady =>
+                Ok(Async::NotReady)
+        }
+    }
+}
+
+impl Until for PyFdReadable {}
+
+
+/// Stream of write readyness for file descriptor
+pub struct PyFdWriteable {
+    io: PollEvented<PyFd>,
+    marked_ready: bool,
+}
+
+impl PyFdWriteable {
+    pub fn new(fd: c_int, handle: &Handle) -> io::Result<PyFdWriteable> {
+        Ok(PyFdWriteable{
+            io: PollEvented::new(PyFd::new(fd), handle)?,
+            marked_ready: false,
+        })
+    }
+}
+
+impl stream::Stream for PyFdWriteable {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.marked_ready {
+            self.io.need_write();
+            self.marked_ready = false;
+        }
+
+        match self.io.poll_write() {
+            Async::Ready(_) => {
+                self.marked_ready = true;
+                Ok(Async::Ready(Some(())))
+            },
+            Async::NotReady =>
+                Ok(Async::NotReady)
+        }
+    }
+}
+
+impl Until for PyFdWriteable {}
