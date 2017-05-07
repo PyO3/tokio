@@ -20,6 +20,7 @@ pub struct WorkingClasses {
     pub CancelledError: PyType,
     pub InvalidStateError: PyType,
     pub TimeoutError: PyType,
+    pub SSLProto: PyType,
 
     pub Exception: PyType,
     pub BaseException: PyType,
@@ -49,6 +50,7 @@ lazy_static! {
         let socket = py.import("socket").unwrap();
         let tb = py.import("traceback").unwrap();
         let asyncio = py.import("asyncio").unwrap();
+        let sslproto = py.import("asyncio.sslproto").unwrap();
 
         WorkingClasses {
             // asyncio types
@@ -61,6 +63,8 @@ lazy_static! {
                 py, &asyncio.get(py, "InvalidStateError").unwrap()).unwrap(),
             TimeoutError: PyType::extract(
                 py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap(),
+            SSLProto: PyType::extract(
+                py, &sslproto.get(py, "SSLProtocol").unwrap()).unwrap(),
 
             // general purpose types
             StopIteration: PyType::extract(

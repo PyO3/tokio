@@ -4,7 +4,6 @@ use cpython::*;
 use futures::{unsync, Async, Stream, Future, Poll};
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
-use native_tls::TlsAcceptor;
 use tokio_core::net::{TcpListener, Incoming};
 
 use ::{PyFuture, TokioEventLoop};
@@ -16,8 +15,8 @@ use transport::TransportFactory;
 
 
 pub fn create_server(py: Python, evloop: TokioEventLoop,
-                     addrs: Vec<addrinfo::AddrInfo>, backlog: i32, _ssl: Option<TlsAcceptor>,
-                     reuse_address: bool, reuse_port: bool,
+                     addrs: Vec<addrinfo::AddrInfo>, backlog: i32,
+                     ssl: Option<PyObject>, reuse_address: bool, reuse_port: bool,
                      proto_factory: PyObject, transport_factory: TransportFactory)
                      -> PyResult<PyObject> {
 
@@ -70,10 +69,19 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
     // create tokio listeners
     let mut handles = Vec::new();
     for (listener, addr) in listeners {
+
+        // copy sslcontext for each server
+        let s = if let Some(ref ssl) = ssl {
+            Some(ssl.clone_ref(py))
+        } else {
+            None
+        };
+
         let (tx, rx) = unsync::oneshot::channel::<()>();
         handles.push(pyunsafe::OneshotSender::new(tx));
+
         Server::serve(evloop.clone_ref(py), addr, listener.incoming(),
-                      transport_factory, proto_factory.clone_ref(py), rx);
+                      transport_factory, proto_factory.clone_ref(py), s, rx);
     }
 
     let srv = TokioServer::create_instance(
@@ -120,6 +128,7 @@ struct Server {
     stop: unsync::oneshot::Receiver<()>,
     transport: TransportFactory,
     factory: PyObject,
+    ssl: Option<PyObject>,
 }
 
 impl Server {
@@ -129,10 +138,10 @@ impl Server {
     //
     fn serve(evloop: TokioEventLoop, addr: addrinfo::AddrInfo,
              stream: Incoming, transport: TransportFactory,
-             factory: PyObject, stop: unsync::oneshot::Receiver<()>) {
+             factory: PyObject, ssl: Option<PyObject>, stop: unsync::oneshot::Receiver<()>) {
 
         let srv = Server { evloop: evloop, addr: addr, stop: stop, stream: stream,
-                           transport: transport, factory: factory };
+                           transport: transport, factory: factory, ssl: ssl };
 
         let handle = srv.evloop.get_handle();
         handle.spawn(
@@ -159,7 +168,8 @@ impl Future for Server
         let option = self.stream.poll()?;
         match option {
             Async::Ready(Some((socket, peer))) => {
-                (self.transport)(&self.evloop, &self.factory, socket, &self.addr, peer)?;
+                (self.transport)(&self.evloop, true, &self.factory,
+                                 &self.ssl, None, socket, &self.addr, peer, None)?;
 
                 // we can not just return Async::NotReady here,
                 // because self.stream is not registered within mio anymore

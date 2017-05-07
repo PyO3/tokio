@@ -1,6 +1,9 @@
 use std::io;
 use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::os::raw::c_int;
+use std::os::unix::io::AsRawFd;
 use cpython::*;
 use futures::unsync::mpsc;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
@@ -41,8 +44,8 @@ impl ToPyTuple for InitializedTransport {
 
 // Transport factory
 pub type TransportFactory = fn(
-    &TokioEventLoop, &PyObject, TcpStream, &AddrInfo, SocketAddr)
-    -> io::Result<InitializedTransport>;
+    &TokioEventLoop, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
+    TcpStream, &AddrInfo, SocketAddr, Option<PyFuture>) -> io::Result<InitializedTransport>;
 
 
 pub struct BytesMsg {
@@ -57,27 +60,60 @@ pub enum TcpTransportMessage {
 
 
 pub fn tcp_transport_factory<T>(
-    evloop: &TokioEventLoop, factory: &PyObject,
-    socket: T, addr: &AddrInfo, peer: SocketAddr) -> io::Result<InitializedTransport>
+    evloop: &TokioEventLoop, server: bool,
+    factory: &PyObject, ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
+    socket: T, addr: &AddrInfo,
+    peer: SocketAddr, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
 
-    where T: AsyncRead + AsyncWrite + 'static
+    where T: AsyncRead + AsyncWrite + AsRawFd + 'static
 {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
+    let mut info: HashMap<&'static str, PyObject> = HashMap::new();
     let sock = Socket::new_peer(py, addr, peer)?;
+    info.insert("sockname", sock.getsockname(py)?.into_object());
+    info.insert("peername", sock.getpeername(py)?.into_object());
+    info.insert("socket", sock.clone_ref(py).into_object());
 
     // create protocol
     let proto = factory.call(py, NoArgs, None)
         .log_error(py, "Protocol factory failure")?;
 
+    // create py transport
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto, sock)?;
-    let conn_lost = tr.clone_ref(py);
-    let conn_err = tr.clone_ref(py);
+
+    let (tr, wrp_tr) = if let Some(ref ssl) = *ssl {
+        // create SSLProtocol and wrpped transport
+        let kwargs = PyDict::new(py);
+        info.insert("sslcontext", ssl.clone_ref(py));
+        let _ = kwargs.set_item(py, "server_side", server);
+        if let Some(hostname) = server_hostname {
+            let _ = kwargs.set_item(py, "server_hostname", hostname);
+        }
+        let ssl_proto = Classes.SSLProto.call(py, (
+            evloop.clone_ref(py),
+            proto.clone_ref(py), ssl.clone_ref(py), waiter), Some(&kwargs))?;
+
+        let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &ssl_proto, info)?;
+        let wrp_tr = ssl_proto.getattr(py, "_app_transport")?;
+        (tr, wrp_tr)
+    } else {
+        // normal transport
+        if let Some(waiter) = waiter {
+            waiter.set(py, Ok(py.None()));
+        }
+        let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto, info)?;
+        let wrp_tr = tr.clone_ref(py).into_object();
+        (tr, wrp_tr)
+    };
 
     // create transport and then call connection_made on protocol
     let transport = TcpTransport::new(socket, rx, tr.clone_ref(py));
+
+    // handle connection lost
+    let conn_err = tr.clone_ref(py);
+    let conn_lost = tr.clone_ref(py);
 
     evloop.href().spawn(
         transport.map(move |_| {
@@ -86,7 +122,8 @@ pub fn tcp_transport_factory<T>(
             conn_err.connection_error(err)
         })
     );
-    Ok(InitializedTransport::new(tr.into_object(), proto))
+
+    Ok(InitializedTransport::new(wrp_tr.into_object(), proto))
 }
 
 
@@ -95,17 +132,24 @@ py_class!(pub class PyTcpTransport |py| {
     data _connection_lost: PyObject;
     data _data_received: PyObject;
     data _transport: Sender<TcpTransportMessage>;
-    data _socket: PyObject;
     data _drain: RefCell<Option<PyFuture>>;
     data _closing: Cell<bool>;
+    data _info: HashMap<&'static str, PyObject>;
 
     def is_closing(&self) -> PyResult<bool> {
         Ok(self._closing(py).get())
     }
 
-    def get_extra_info(&self, _name: PyString,
+    def get_extra_info(&self, name: PyString,
                        default: Option<PyObject> = None) -> PyResult<PyObject> {
-        Ok(self._socket(py).clone_ref(py))
+        if let Some(val) = self._info(py).get(name.to_string(py)?.as_ref()) {
+            Ok(val.clone_ref(py))
+        } else {
+            match default {
+                Some(val) => Ok(val),
+                None => Ok(py.None())
+            }
+        }
     }
 
     //
@@ -183,7 +227,7 @@ impl PyTcpTransport {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
-               protocol: &PyObject, sock: Socket) -> PyResult<PyTcpTransport> {
+               protocol: &PyObject, info: HashMap<&'static str, PyObject>) -> PyResult<PyTcpTransport> {
 
         // get protocol callbacks
         let connection_made = protocol.getattr(py, "connection_made")?;
@@ -192,8 +236,8 @@ impl PyTcpTransport {
 
         let transport = PyTcpTransport::create_instance(
             py, evloop.clone_ref(py),
-            connection_lost, data_received, sender, sock.into_object(),
-            RefCell::new(None), Cell::new(false))?;
+            connection_lost, data_received, sender,
+            RefCell::new(None), Cell::new(false), info)?;
 
         // connection made
         let _ = connection_made.call(py, (transport.clone_ref(py),), None)

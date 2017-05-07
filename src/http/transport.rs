@@ -9,7 +9,7 @@ use tokio_io::AsyncRead;
 use tokio_io::codec::Framed;
 use tokio_core::net::TcpStream;
 
-use ::TokioEventLoop;
+use ::{PyFuture, TokioEventLoop};
 use addrinfo::AddrInfo;
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
@@ -19,9 +19,12 @@ use pyunsafe::Sender;
 use transport::InitializedTransport;
 
 
-pub fn http_transport_factory(evloop: &TokioEventLoop, factory: &PyObject,
-                              socket: TcpStream, addr: &AddrInfo, peer: SocketAddr)
-                              -> io::Result<InitializedTransport> {
+pub fn http_transport_factory(
+    evloop: &TokioEventLoop, server: bool, factory: &PyObject,
+    ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
+    socket: TcpStream, addr: &AddrInfo,
+    peer: SocketAddr, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+{
     let gil = Python::acquire_gil();
     let py = gil.python();
 

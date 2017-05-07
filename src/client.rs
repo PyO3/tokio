@@ -3,50 +3,56 @@ use std::net;
 use cpython::*;
 use futures::{future, Future};
 use net2::TcpBuilder;
-use native_tls::TlsConnector;
 use tokio_core::net::TcpStream;
-use tokio_tls::TlsConnectorExt;
 
-use ::TokioEventLoop;
+use ::{PyFuture, TokioEventLoop};
 use addrinfo::AddrInfo;
 use fut::{for_each, Until, UntilError};
-use pyunsafe::Handle;
+use pyunsafe::{GIL, Handle};
 use transport::{InitializedTransport, tcp_transport_factory};
 
 
-pub fn create_connection(factory: PyObject, evloop: TokioEventLoop,
-                         addrs: Vec<AddrInfo>, ssl: Option<TlsConnector>, hostname: String)
+pub fn create_sock_connection(
+    factory: PyObject, evloop: &TokioEventLoop,
+    stream: TcpStream, addr: AddrInfo,
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuture)
+    -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
+
+    let peer = stream.peer_addr().expect("should never happen");
+
+    let result = tcp_transport_factory(
+        evloop, false, &factory, &ssl,
+        hostname, stream, &addr, peer, Some(waiter.clone_ref(GIL::python())));
+
+    Box::new(
+        waiter.then(move |_| match result {
+            Ok(transport) => future::ok(transport),
+            Err(err) => future::err(err)
+        }))
+}
+
+pub fn create_connection(
+    factory: PyObject, evloop: TokioEventLoop, addrs: Vec<AddrInfo>,
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuture)
                          -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
     let handle = evloop.get_handle();
     let conn = connect(addrs, handle.clone());
 
-    match ssl {
-        Some(ssl) => {
-            // ssl handshake
-            let transport = conn.and_then(move |(socket, addr)| {
-                let peer = socket.peer_addr().expect("should never happen");
-                ssl.connect_async(hostname.as_str(), socket)
-                    .map(move |socket| (socket, addr, peer))
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-            }).and_then(move |(socket, addr, peer)|
-                        tcp_transport_factory(
-                            &evloop, &factory, socket, &addr, peer));
+    let transport = conn.and_then(
+        move |(socket, addr)| {
+            let peer = socket.peer_addr().expect("should never happen");
+            let result = tcp_transport_factory(
+                &evloop, false, &factory, &ssl, hostname,
+                socket, &addr, peer, Some(waiter.clone_ref(GIL::python())));
 
-            Box::new(transport)
-        },
-        None => {
-            let transport = conn.and_then(
-                move |(socket, addr)| {
-                    let peer = socket.peer_addr().expect("should never happen");
-                    tcp_transport_factory(
-                        &evloop, &factory, socket, &addr, peer)
-                });
-            Box::new(transport)
-        }
-    }
+            waiter.then(move |_| match result {
+                Ok(transport) => future::ok(transport),
+                Err(err) => future::err(err)
+            })
+        });
+    Box::new(transport)
 }
-
 
 fn connect(addrs: Vec<AddrInfo>, handle: Handle)
            -> Box<Future<Item=(TcpStream, AddrInfo), Error=io::Error>>

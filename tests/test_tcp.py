@@ -41,11 +41,9 @@ class MyBaseProto(asyncio.Protocol):
             self.done.set_result(None)
 
 
-# @pytest.mark.skipif(
-# sys.version_info[:3] == (3, 5, 2),
-# reason='See https://github.com/python/asyncio/pull/366 for details')
-
-
+@pytest.mark.skipif(
+    sys.version_info[:3] == (3, 5, 2),
+    reason='See https://github.com/python/asyncio/pull/366 for details')
 def test_create_server_1(loop):
     CNT = 0           # number of clients that were successful
     TOTAL_CNT = 25    # total number of clients that test will create

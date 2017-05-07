@@ -17,8 +17,6 @@ use cpython::*;
 use futures::{future, unsync, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
-use native_tls::TlsConnector;
-use tokio_tls::TlsConnectorExt;
 use tokio_signal;
 use tokio_core::net::TcpStream;
 
@@ -32,7 +30,7 @@ use http;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
 use pyunsafe::{GIL, Handle, OneshotSender};
-use transport::{self, tcp_transport_factory};
+use transport;
 
 
 thread_local!(
@@ -1012,7 +1010,7 @@ py_class!(pub class TokioEventLoop |py| {
                           flags: i32 = addrinfo::AI_PASSIVE,
                           sock: Option<PyObject> = None,
                           local_addr: Option<PyObject> = None,
-                          server_hostname: Option<PyString> = None) -> PyResult<PyFuture> {
+                          server_hostname: Option<PyObject> = None) -> PyResult<PyFuture> {
         match (&server_hostname, &ssl) {
             (&Some(_), &None) =>
                 return Err(PyErr::new::<exc::ValueError, _>(
@@ -1037,92 +1035,48 @@ py_class!(pub class TokioEventLoop |py| {
             _ => (),
         }
 
-        // create_ssl context
-        let ctx =
-            if let Some(ssl) = ssl {
-                match TlsConnector::builder() {
-                    Err(err) => return Err(PyErr::new::<exc::OSError, _>(py, err.description())),
-                    Ok(builder) => match builder.build() {
-                        Err(err) => return Err(
-                            PyErr::new::<exc::OSError, _>(py, err.description())),
-                        Ok(ctx) => Some(ctx)
-                    },
-                }
-            } else {
-                None
-            };
+        // server hostname for ssl validation
+        let server_hostname = match server_hostname {
+            Some(s) => Some(s),
+            None => match host {
+                Some(ref h) => Some(h.clone_ref(py).into_object()),
+                None => None,
+            }
+        };
 
-        if let (&None, &None) = (&host, &port) {
-            // Try to use supplied python connected socket object
-            if let Some(sock) = sock {
-                if ! self.is_stream_socket(py, &sock)? {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, format!("A Stream Socket was expected, got {:?}", sock)))
-                }
-
-                let fileno = self.get_socket_fd(py, &sock)?;
-                let sockaddr = self.addr_from_socket(py, sock)?;
-
-                // create TcpStream object
-                let stream = unsafe {
-                    net::TcpStream::from_raw_fd(fileno as RawFd)
-                };
-
-                // tokio stream
-                let stream = match TcpStream::from_stream(stream, self.href()) {
-                    Ok(stream) => stream,
-                    Err(err) => return Err(err.to_pyerr(py)),
-                };
-                let peer = stream.peer_addr().expect("should never happen");
-
-                let fut = PyFuture::new(py, &self)?;
-                let fut_err = fut.clone_ref(py);
-                let fut_conn = fut.clone_ref(py);
-
-                // create transport
-                let conn = match ctx {
-                    Some(ssl) => {
-                        let hostname = match server_hostname {
-                            Some(name) => String::from(name.to_string_lossy(py)),
-                            None => String::new(),
-                        };
-                        let evloop = self.clone_ref(py);
-
-                        // ssl handshake
-                        let transport = ssl.connect_async(hostname.as_str(), stream)
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                            .and_then(move |socket|
-                                      tcp_transport_factory(
-                                          &evloop, &protocol_factory,
-                                          socket, &sockaddr, peer));
-
-                        future::Either::A(transport)
-                    },
-                    None => {
-                        let fut = match tcp_transport_factory(
-                            &self, &protocol_factory, stream, &sockaddr, peer) {
-                            Ok(transport) => future::ok(transport),
-                            Err(err) => future::err(err)
-                        };
-                        future::Either::B(fut)
+        let conn = if let (&None, &None) = (&host, &port) {
+            match sock {
+                None => return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "host and port was not specified and no sock specified")),
+                Some(sock) => {
+                    // Try to use supplied python connected socket object
+                    if ! self.is_stream_socket(py, &sock)? {
+                        return Err(PyErr::new::<exc::ValueError, _>(
+                            py, format!("A Stream Socket was expected, got {:?}", sock)))
                     }
+
+                    let fileno = self.get_socket_fd(py, &sock)?;
+                    let sockaddr = self.addr_from_socket(py, sock)?;
+
+                    // create TcpStream object
+                    let stream = unsafe {
+                        net::TcpStream::from_raw_fd(fileno as RawFd)
+                    };
+
+                    // tokio stream
+                    let stream = match TcpStream::from_stream(stream, self.href()) {
+                        Ok(stream) => stream,
+                        Err(err) => return Err(err.to_pyerr(py)),
+                    };
+
+                    let waiter = PyFuture::new(py, &self)?;
+                    future::Either::A(
+                        client::create_sock_connection(
+                            protocol_factory, &self,
+                            stream, sockaddr, ssl, server_hostname, waiter))
                 }
-                // set exception to future
-                .map_err(move |e| with_py(|py| {
-                    fut_err.set(py, Err(e.to_pyerr(py)));}))
-                // set transport and protocol
-                    .map(move |res| with_py(|py| {
-                        fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}));
-
-                self.handle(py).spawn(conn);
-
-                Ok(fut)
-            } else {
-                Err(PyErr::new::<exc::ValueError, _>(
-                    py, "host and port was not specified and no sock specified"))
             }
         } else {
-            // Resolve address and try to connect
             if let Some(_) = sock {
                 return Err(PyErr::new::<exc::ValueError, _>(
                     py, "host/port and sock can not be specified at the same time"))
@@ -1132,26 +1086,14 @@ py_class!(pub class TokioEventLoop |py| {
             let host = host.map(|s| String::from(s.to_string_lossy(py)));
             let port = port.map(|p| p.to_string());
 
-            // server hostname for ssl validation
-            let server_hostname = match server_hostname {
-                Some(s) => String::from(s.to_string(py)?),
-                None => match host {
-                    Some(ref h) => h.clone(),
-                    None => String::new(),
-                }
-            };
-
-            let fut = PyFuture::new(py, &self)?;
-
             let evloop = self.clone_ref(py);
             let handle = self.handle(py).clone();
-            let fut_err = fut.clone_ref(py);
-            let fut_conn = fut.clone_ref(py);
+            let waiter = PyFuture::new(py, &self)?;
 
             // resolve addresses and connect
-            let conn = addrinfo::lookup(&self._lookup(py),
-                                        host, port,
-                                        family, flags, addrinfo::SocketType::Stream)
+            let fut = addrinfo::lookup(&self._lookup(py),
+                             host, port,
+                             family, flags, addrinfo::SocketType::Stream)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
                 .and_then(move |addrs| match addrs {
                     Err(err) => future::Either::A(
@@ -1165,21 +1107,29 @@ py_class!(pub class TokioEventLoop |py| {
                         } else {
                             future::Either::B(
                                 client::create_connection(
-                                    protocol_factory, evloop, addrs, ctx, server_hostname))
+                                    protocol_factory, evloop, addrs,
+                                    ssl, server_hostname, waiter))
                         }
                     }
-                })
-            // set exception to future
-                .map_err(move |e| with_py(|py| {
-                    fut_err.set(py, Err(e.to_pyerr(py)));}))
-            // set transport and protocol
+                });
+
+            future::Either::B(fut)
+        };
+
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_conn = fut.clone_ref(py);
+
+        self.handle(py).spawn(
+            conn
+                // set exception to future
+                .map_err(move |e| with_py(|py| {fut_err.set(py, Err(e.to_pyerr(py)));}))
+                // set transport and protocol
                 .map(move |res| with_py(|py| {
-                    fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}));
+                    fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}))
+        );
 
-            self.handle(py).spawn(conn);
-
-            Ok(fut)
-        }
+        Ok(fut)
     }
 
     // Return an exception handler, or None if the default one is in use.
@@ -1582,12 +1532,6 @@ impl TokioEventLoop {
                                 reuse_address: bool, reuse_port: bool,
                                 transport_factory: transport::TransportFactory)
                                 -> PyResult<PyFuture> {
-
-        if let Some(ssl) = ssl {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, PyString::new(py, "ssl argument is not supported yet")));
-        }
-        let ssl = None;
 
         if let (&None, &None) = (&host, &port) {
             if let Some(sock) = sock {
