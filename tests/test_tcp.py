@@ -164,8 +164,8 @@ def test_create_server_1(loop):
     loop.run_until_complete(start_server())
     assert CNT == TOTAL_CNT
 
-    loop.run_until_complete(start_server_sock())
-    assert CNT == TOTAL_CNT
+    # loop.run_until_complete(start_server_sock())
+    # assert CNT == TOTAL_CNT
 
 
 def test_create_server_2(loop):
