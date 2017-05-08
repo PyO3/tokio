@@ -1,6 +1,7 @@
 #![allow(unused_variables)]
 
 use std::cell;
+use std::mem;
 use cpython::*;
 use futures::{future, unsync, Poll};
 use futures::unsync::oneshot;
@@ -665,7 +666,7 @@ py_class!(pub class PyFuture |py| {
     // Python GC support
     //
     def __traverse__(&self, visit) {
-        if let Some(ref callbacks) = self._fut(py).borrow_mut().callbacks {
+        if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
             for callback in callbacks.iter() {
                 visit.call(callback)?;
             }
@@ -674,7 +675,12 @@ py_class!(pub class PyFuture |py| {
     }
 
     def __clear__(&self) {
-        let _ = self._fut(py).borrow_mut().callbacks.take();
+        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
+        if let Some(callbacks) = callbacks {
+            for cb in callbacks {
+                cb.release_ref(py);
+            }
+        }
     }
 
     // handler for asyncio.Future completion

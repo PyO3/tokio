@@ -201,4 +201,4 @@ def test_create_connection_ssl_1(loop):
         assert CNT == TOTAL_CNT
 
     run(client)
-    # run(client_sock)
+    run(client_sock)
