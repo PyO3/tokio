@@ -473,7 +473,7 @@ py_class!(pub class TokioEventLoop |py| {
         // create readyness stream for write operation
         let fd = {
             let fd = self.get_socket_fd(py, &sock)?;
-            match fd::PyFdWriteable::new(fd, self.href()) {
+            match fd::PyFdWritable::new(fd, self.href()) {
                 Ok(fd) => fd,
                 Err(err) => return Ok(
                     PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
@@ -577,7 +577,7 @@ py_class!(pub class TokioEventLoop |py| {
                     return Ok(PyFuture::done_res(py, &self, Err(err))?);
                 }
                 let fd = self.get_socket_fd(py, &sock)?;
-                match fd::PyFdWriteable::new(fd, self.href()) {
+                match fd::PyFdWritable::new(fd, self.href()) {
                     Err(err) => return Ok(
                         PyFuture::done_res(py, &self, Err(err.to_pyerr(py)))?),
                     Ok(fd) => fd

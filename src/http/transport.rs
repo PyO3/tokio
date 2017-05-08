@@ -20,10 +20,10 @@ use transport::InitializedTransport;
 
 
 pub fn http_transport_factory(
-    evloop: &TokioEventLoop, server: bool, factory: &PyObject,
-    ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
+    evloop: &TokioEventLoop, _server: bool, factory: &PyObject,
+    _ssl: &Option<PyObject>, _server_hostname: Option<PyObject>,
     socket: TcpStream, addr: &AddrInfo,
-    peer: SocketAddr, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+    peer: SocketAddr, _waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
 {
     let gil = Python::acquire_gil();
     let py = gil.python();

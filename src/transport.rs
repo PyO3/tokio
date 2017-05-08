@@ -1,8 +1,9 @@
+#![allow(unused_variables)]
+
 use std::io;
 use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::os::raw::c_int;
 use std::os::unix::io::AsRawFd;
 use cpython::*;
 use futures::unsync::mpsc;

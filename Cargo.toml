@@ -19,7 +19,7 @@ twoway = "0.1"
 bytes = "0.4"
 mio = "0.6"
 futures = "0.1"
-tokio-core = "0.1"
+#tokio-core = "0.1"
 tokio-io = "0.1"
 
 # native-tls = "0.1"
@@ -30,9 +30,11 @@ tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 #tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
 #tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
 
+tokio-core = { git = "https://github.com/fafhrd91/tokio-core.git" }
+
 [dependencies.cpython]
-#path = "../tokio/rust-cpython"
-git = "https://github.com/PyO3/rust-cpython.git"
+path = "../tokio/rust-cpython"
+#git = "https://github.com/PyO3/rust-cpython.git"
 default-features = false
 
 [dev-dependencies]
@@ -43,3 +45,6 @@ httparse = "*"
 lto = true
 codegen-units = 1
 opt-level = 3
+
+[replace]
+"tokio-core:0.1.6" = { git = "https://github.com/fafhrd91/tokio-core.git" }

@@ -145,16 +145,26 @@ impl Future for PyFdHandle {
 
 /// Stream of read readyness for file descriptor
 pub struct PyFdReadable {
-    io: PollEvented<PyFd>,
+    io: Option<PollEvented<PyFd>>,
     marked_ready: bool,
+    h: Handle,
 }
 
 impl PyFdReadable {
     pub fn new(fd: c_int, handle: &Handle) -> io::Result<PyFdReadable> {
         Ok(PyFdReadable{
-            io: PollEvented::new(PyFd::new(fd), handle)?,
-            marked_ready: false
+            io: Some(PollEvented::new(PyFd::new(fd), handle)?),
+            marked_ready: false,
+            h: handle.clone(),
         })
+    }
+}
+
+impl Drop for PyFdReadable {
+    fn drop(&mut self) {
+        if let Some(io) = self.io.take() {
+            let _ = io.deregister(&self.h);
+        }
     }
 }
 
@@ -163,18 +173,22 @@ impl stream::Stream for PyFdReadable {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.marked_ready {
-            self.io.need_read();
-            self.marked_ready = false;
-        }
+        if let Some(ref io) = self.io {
+            if self.marked_ready {
+                io.need_read();
+                self.marked_ready = false;
+            }
 
-        match self.io.poll_read() {
-            Async::Ready(_) => {
-                self.marked_ready = true;
-                Ok(Async::Ready(Some(())))
-            },
-            Async::NotReady =>
-                Ok(Async::NotReady)
+            match io.poll_read() {
+                Async::Ready(_) => {
+                    self.marked_ready = true;
+                    Ok(Async::Ready(Some(())))
+                },
+                Async::NotReady =>
+                    Ok(Async::NotReady)
+            }
+        } else {
+            Ok(Async::Ready(Some(())))
         }
     }
 }
@@ -183,39 +197,53 @@ impl Until for PyFdReadable {}
 
 
 /// Stream of write readyness for file descriptor
-pub struct PyFdWriteable {
-    io: PollEvented<PyFd>,
+pub struct PyFdWritable {
+    io: Option<PollEvented<PyFd>>,
     marked_ready: bool,
+    h: Handle,
 }
 
-impl PyFdWriteable {
-    pub fn new(fd: c_int, handle: &Handle) -> io::Result<PyFdWriteable> {
-        Ok(PyFdWriteable{
-            io: PollEvented::new(PyFd::new(fd), handle)?,
+impl PyFdWritable {
+    pub fn new(fd: c_int, handle: &Handle) -> io::Result<PyFdWritable> {
+        Ok(PyFdWritable{
+            io: Some(PollEvented::new(PyFd::new(fd), handle)?),
             marked_ready: false,
+            h: handle.clone(),
         })
     }
 }
 
-impl stream::Stream for PyFdWriteable {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.marked_ready {
-            self.io.need_write();
-            self.marked_ready = false;
-        }
-
-        match self.io.poll_write() {
-            Async::Ready(_) => {
-                self.marked_ready = true;
-                Ok(Async::Ready(Some(())))
-            },
-            Async::NotReady =>
-                Ok(Async::NotReady)
+impl Drop for PyFdWritable {
+    fn drop(&mut self) {
+        if let Some(io) = self.io.take() {
+            let _ = io.deregister(&self.h);
         }
     }
 }
 
-impl Until for PyFdWriteable {}
+impl stream::Stream for PyFdWritable {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if let Some(ref io) = self.io {
+            if self.marked_ready {
+                io.need_write();
+                self.marked_ready = false;
+            }
+
+            match io.poll_write() {
+                Async::Ready(_) => {
+                    self.marked_ready = true;
+                    Ok(Async::Ready(Some(())))
+                },
+                Async::NotReady =>
+                    Ok(Async::NotReady)
+            }
+        } else {
+            Ok(Async::Ready(Some(())))
+        }
+    }
+}
+
+impl Until for PyFdWritable {}

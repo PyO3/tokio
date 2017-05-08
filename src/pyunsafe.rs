@@ -37,10 +37,12 @@ impl Handle {
     pub fn new(h: reactor::Handle) -> Handle {
         Handle{h: h}
     }
+    pub fn into(self) -> reactor::Handle {
+        self.h
+    }
 }
 
 impl Clone for Handle {
-
     fn clone(&self) -> Handle {
         Handle {h: self.h.clone()}
     }
