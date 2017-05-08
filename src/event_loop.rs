@@ -1548,10 +1548,15 @@ impl TokioEventLoop {
                 let fut = PyFuture::new(py, &self)?;
                 let evloop = self.clone_ref(py);
 
-                let res = server::create_server(
-                    py, self.clone_ref(py), vec![sockaddr],
-                    backlog, ssl, reuse_address, reuse_port,
-                    protocol_factory, transport_factory);
+                // create TcpListener object
+                let listener = unsafe {
+                    net::TcpListener::from_raw_fd(fileno as RawFd)
+                };
+                let _ = listener.set_nonblocking(true);
+
+                let res = server::create_sock_server(
+                    py, self.clone_ref(py), listener, sockaddr,
+                    ssl, protocol_factory, transport_factory);
                 let _ = fut.set(py, res);
 
                 return Ok(fut)

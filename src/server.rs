@@ -1,4 +1,5 @@
 use std::io;
+use std::net;
 use std::cell::RefCell;
 use cpython::*;
 use futures::{unsync, Async, Stream, Future, Poll};
@@ -91,6 +92,34 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
 }
 
 
+pub fn create_sock_server(py: Python, evloop: TokioEventLoop,
+                          listener: net::TcpListener, info: addrinfo::AddrInfo,
+                          ssl: Option<PyObject>, proto_factory: PyObject,
+                          transport_factory: TransportFactory) -> PyResult<PyObject> {
+
+    match TcpListener::from_listener(listener, &info.sockaddr, evloop.href()) {
+        Ok(lst) => {
+            info!("Started listening on {:?}", info.sockaddr);
+            let mut addr = info.clone();
+            addr.sockaddr = lst.local_addr().expect("should not fail");
+            let sock = Socket::new(py, &addr)?.into_object();
+
+            let (tx, rx) = unsync::oneshot::channel::<()>();
+            let handles = vec![pyunsafe::OneshotSender::new(tx)];
+
+            Server::serve(evloop.clone_ref(py), addr, lst.incoming(),
+                          transport_factory, proto_factory, ssl, rx);
+
+            let srv = TokioServer::create_instance(
+                py, evloop, PyTuple::new(py, &[sock]), RefCell::new(Some(handles)))?;
+
+            Ok(srv.into_object())
+        },
+        Err(err) => Err(err.to_pyerr(py)),
+    }
+}
+
+
 py_class!(pub class TokioServer |py| {
     data _loop: TokioEventLoop;
     data sockets: PyTuple;
@@ -141,7 +170,7 @@ impl Server {
              factory: PyObject, ssl: Option<PyObject>, stop: unsync::oneshot::Receiver<()>) {
 
         let srv = Server { evloop: evloop, addr: addr, stop: stop, stream: stream,
-                           transport: transport, factory: factory, ssl: ssl };
+                           transport: transport, factory: factory, ssl: ssl};
 
         let handle = srv.evloop.get_handle();
         handle.spawn(
@@ -173,11 +202,13 @@ impl Future for Server
 
                 // we can not just return Async::NotReady here,
                 // because self.stream is not registered within mio anymore
-                // next stream.poll() will re-arm future
+                // next stream.poll() will re-register io object
                 self.poll()
             },
-            Async::Ready(None) => Ok(Async::Ready(())),
-            Async::NotReady => Ok(Async::NotReady),
+            Async::Ready(None) =>
+                Ok(Async::Ready(())),
+            Async::NotReady =>
+                Ok(Async::NotReady),
         }
     }
 }
