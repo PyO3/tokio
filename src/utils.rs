@@ -21,6 +21,7 @@ pub struct WorkingClasses {
     pub InvalidStateError: PyType,
     pub TimeoutError: PyType,
     pub SSLProto: PyType,
+    pub Coroutines: PyModule,
 
     pub Exception: PyType,
     pub BaseException: PyType,
@@ -65,6 +66,7 @@ lazy_static! {
                 py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap(),
             SSLProto: PyType::extract(
                 py, &sslproto.get(py, "SSLProtocol").unwrap()).unwrap(),
+            Coroutines: py.import("asyncio.coroutines").unwrap(),
 
             // general purpose types
             StopIteration: PyType::extract(

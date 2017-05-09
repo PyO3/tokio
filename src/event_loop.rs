@@ -14,10 +14,11 @@ use std::os::unix::io::{RawFd, FromRawFd};
 
 use libc;
 use cpython::*;
-use futures::{future, unsync, Future, Stream};
+use futures::{future, sync, unsync, Async, Future, Stream};
 use futures::sync::{oneshot};
 use tokio_core::reactor::{Core, CoreId, Remote};
 use tokio_signal;
+use tokio_signal::unix::Signal;
 use tokio_core::net::TcpStream;
 
 use ::{PyFuture, PyTask};
@@ -27,6 +28,7 @@ use handle::PyHandle;
 use fd;
 use fut::{Until, UntilError};
 use http;
+use signals;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
 use pyunsafe::{GIL, Handle, OneshotSender};
@@ -48,10 +50,12 @@ pub fn no_loop_exc(py: Python) -> PyErr {
 pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
     CORE.with(|cell| {
         let core = Core::new().unwrap();
+        let handle = core.handle();
+        let signals = signals::Signals::new(&handle);
 
         let evloop = TokioEventLoop::create_instance(
             py, core.id(),
-            Handle::new(core.handle()),
+            Handle::new(handle),
             core.remote(),
             Instant::now(),
             addrinfo::start_workers(3),
@@ -61,6 +65,7 @@ pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
             Cell::new(100),
             Cell::new(false),
             RefCell::new(None),
+            signals,
             RefCell::new(HashMap::new()),
             RefCell::new(HashMap::new()),
         );
@@ -110,6 +115,7 @@ py_class!(pub class TokioEventLoop |py| {
     data _slow_callback_duration: Cell<u64>;
     data _debug: Cell<bool>;
     data _current_task: RefCell<Option<PyObject>>;
+    data _signals: sync::mpsc::UnboundedSender<signals::SignalsMessage>;
     data _readers: RefCell<HashMap<c_int, OneshotSender<()>>>;
     data _writers: RefCell<HashMap<c_int, OneshotSender<()>>>;
 
@@ -302,6 +308,69 @@ py_class!(pub class TokioEventLoop |py| {
             }
             Ok(h.into_object())
         }
+    }
+
+    //
+    // def add_signal_handler(self, sig, callback, *args)
+    //
+    // Add a handler for a signal.  UNIX only.
+    //
+    // Raise ValueError if the signal number is invalid or uncatchable.
+    // Raise RuntimeError if there is a problem setting up the handler.
+    def add_signal_handler(&self, *args, **kwargs) -> PyResult<()> {
+        if self._debug(py).get() {
+            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+                return Err(err)
+            }
+        }
+
+        if args.len(py) < 2 {
+            Err(PyErr::new::<exc::TypeError, _>(py, "function takes at least 2 arguments"))
+        } else {
+            // get params
+            let sig = args.get_item(py, 0).extract::<c_int>(py)?;
+            let callback = args.get_item(py, 1);
+
+            // coroutines are not allowed as handlers
+            let iscoro: bool = Classes.Coroutines.call(
+                py, "iscoroutine", (&callback,), None)?.extract(py)?;
+            let iscorof: bool = Classes.Coroutines.call(
+                py, "iscoroutinefunction", (&callback,), None)?.extract(py)?;
+            if iscoro || iscorof {
+                return Err(PyErr::new::<exc::TypeError, _>(
+                    py, "coroutines cannot be used with add_signal_handler()"))
+            }
+
+            // create signal
+            let signal = match Signal::new(sig, self.href()).poll() {
+                Ok(Async::Ready(signal)) => signal,
+                Ok(Async::NotReady) => unreachable!(),
+                Err(err) =>
+                    return Err(PyErr::new::<exc::RuntimeError, _>(
+                        py, format!("sig {} cannot be caught", sig)))
+            };
+            println!("add signal: {:?}", sig);
+
+            // create handle and schedule work
+            let h = PyHandle::new(
+                py, &self, callback, PyTuple::new(py, &args.as_slice(py)[2..]))?;
+
+            // register signal handler
+            let _ = self._signals(py).send(signals::SignalsMessage::Add(sig, signal, h));
+
+            Ok(())
+        }
+    }
+
+    //
+    // Remove a handler for a signal.  UNIX only.
+    //
+    // Return True if a signal handler was removed, False if not.
+    def remove_signal_handler(&self, sig: c_int) -> PyResult<bool> {
+        // un-register signal handler
+        let _ = self._signals(py).send(signals::SignalsMessage::Remove(sig));
+
+        Ok(true)
     }
 
     def _add_reader(&self, *args, **kwargs) -> PyResult<()> {

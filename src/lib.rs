@@ -31,6 +31,7 @@ mod transport;
 mod socket;
 mod server;
 mod client;
+mod signals;
 
 pub use utils::{Classes, PyLogger, ToPyErr, with_py};
 pub use pybytes::PyBytes;
