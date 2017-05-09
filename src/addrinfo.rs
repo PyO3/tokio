@@ -391,7 +391,10 @@ pub fn start_workers(num: usize) -> LookupWorkerSender {
                                 let _ = tx.send(Err(err));
                             },
                             Ok(lookup) => {
-                                let _ = tx.send(Ok(lookup.collect()));
+                                if let Err(_) = tx.send(Ok(lookup.collect())) {
+                                    // event loop is gone
+                                    return
+                                }
                             },
                         };
                     }
