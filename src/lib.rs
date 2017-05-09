@@ -57,10 +57,21 @@ py_module_initializer!(tokio, init__tokio, PyInit__tokio, |py, m| {
 pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<pytask::PyTask>(py)?;
+    m.add_class::<pytask::PyTaskIter>(py)?;
     m.add_class::<pyfuture::PyFuture>(py)?;
+    m.add_class::<pyfuture::PyFutureIter>(py)?;
+    m.add_class::<pybytes::PyBytes>(py)?;
     m.add_class::<handle::PyHandle>(py)?;
     m.add_class::<server::TokioServer>(py)?;
+    m.add_class::<socket::Socket>(py)?;
     m.add_class::<transport::PyTcpTransport>(py)?;
+
+    m.add_class::<http::PyRequest>(py)?;
+    m.add_class::<http::StreamReader>(py)?;
+    m.add_class::<http::RawHeaders>(py)?;
+    m.add_class::<http::Url>(py)?;
+    m.add_class::<http::PayloadWriter>(py)?;
+    m.add_class::<http::pytransport::PyHttpTransport>(py)?;
 
     // touch classes
     let _ = Classes.Exception;
