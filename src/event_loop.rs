@@ -99,7 +99,7 @@ enum RunStatus {
     CtrlC,
     NoEventLoop,
     Error,
-    PyError(PyErr),
+    PyRes(PyResult<PyObject>),
 }
 
 
@@ -349,7 +349,6 @@ py_class!(pub class TokioEventLoop |py| {
                     return Err(PyErr::new::<exc::RuntimeError, _>(
                         py, format!("sig {} cannot be caught", sig)))
             };
-            println!("add signal: {:?}", sig);
 
             // create handle and schedule work
             let h = PyHandle::new(
@@ -1300,7 +1299,7 @@ py_class!(pub class TokioEventLoop |py| {
                                 match res {
                                     Ok(future::Either::A((res, _))) => match res {
                                         Ok(_) => future::ok(RunStatus::Stopped),
-                                        Err(err) => future::ok(RunStatus::PyError(err)),
+                                        Err(err) => future::ok(RunStatus::PyRes(Err(err))),
                                     },
                                     Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
                                     Err(_) => future::err(()),
@@ -1327,7 +1326,7 @@ py_class!(pub class TokioEventLoop |py| {
         match res {
             RunStatus::Stopped => Ok(py.None()),
             RunStatus::CtrlC => Ok(py.None()),
-            RunStatus::PyError(err) => Err(err),
+            RunStatus::PyRes(res) => res,
             RunStatus::Error => Err(
                 PyErr::new::<exc::RuntimeError, _>(py, "Unknown runtime error")),
             RunStatus::NoEventLoop => Err(no_loop_exc(py)),
@@ -1351,52 +1350,42 @@ py_class!(pub class TokioEventLoop |py| {
                 py, "Event loop is running already"))
         }
 
-        let (completed, result) =
-            // PyTask
-            if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
-                if !fut.is_same_loop(py, &self) {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "loop argument must agree with Future"))
-                }
-                let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
-            // PyFuture
-            } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
-                if !fut.is_same_loop(py, &self) {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "loop argument must agree with Future"))
-                }
-                let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
-            // asyncio.Future
-            } else if fut.hasattr(py, "_asyncio_future_blocking")? {
-                let l = fut.getattr(py, "_loop")?;
-                if l != self.to_py_object(py).into_object() {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, "loop argument must agree with Future"))
-                }
+        // PyTask
+        if let Ok(fut) = PyTask::downcast_from(py, fut.clone_ref(py)) {
+            if !fut.is_same_loop(py, &self) {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "loop argument must agree with Future"))
+            }
+            let fut2 = fut.clone_ref(py);
+            py.allow_threads(|| self.run_future(Box::new(fut2)))
+        // PyFuture
+        } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
+            if !fut.is_same_loop(py, &self) {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "loop argument must agree with Future"))
+            }
+            let fut2 = fut.clone_ref(py);
+            py.allow_threads(|| self.run_future(Box::new(fut2)))
+        // asyncio.Future
+        } else if fut.hasattr(py, "_asyncio_future_blocking")? {
+            let l = fut.getattr(py, "_loop")?;
+            if l != self.to_py_object(py).into_object() {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "loop argument must agree with Future"))
+            }
 
-                let fut = PyFuture::from_fut(py, &self, fut)?;
-                let fut2 = fut.clone_ref(py);
-                (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
-            } else {
-                if utils::iscoroutine(&fut) {
-                    let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
-                    let fut2 = fut.clone_ref(py);
-                    (py.allow_threads(|| self.run_future(Box::new(fut2))), fut.get(py))
-                } else {
-                    return Err(PyErr::new::<exc::TypeError, _>(
-                        py, "Future or Generator object is required"))
-                }
-            };
-
-        if completed {
-            // cleanup running state
-            let _ = self.stop(py);
-
-            result
+            let fut = PyFuture::from_fut(py, &self, fut)?;
+            let fut2 = fut.clone_ref(py);
+            py.allow_threads(|| self.run_future(Box::new(fut2)))
         } else {
-            Err(no_loop_exc(py))
+            if utils::iscoroutine(&fut) {
+                let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
+                let fut2 = fut.clone_ref(py);
+                py.allow_threads(|| self.run_future(Box::new(fut2)))
+            } else {
+                return Err(PyErr::new::<exc::TypeError, _>(
+                    py, "Future or Generator object is required"))
+            }
         }
     }
 
@@ -1469,9 +1458,10 @@ impl TokioEventLoop {
     }
 
     /// Run future to completion
-    pub fn run_future(&self, fut: Box<Future<Item=PyResult<PyObject>,
-                                             Error=unsync::oneshot::Canceled>>) -> bool {
-        CORE.with(|cell| {
+    pub fn run_future(&self,
+                      fut: Box<Future<Item=PyResult<PyObject>,
+                                      Error=unsync::oneshot::Canceled>>) -> PyResult<PyObject> {
+        let res = CORE.with(|cell| {
             match *cell.borrow_mut() {
                 Some(ref mut core) => {
                     let rx = {
@@ -1489,14 +1479,44 @@ impl TokioEventLoop {
                     let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
                     let ctrlc = core.run(ctrlc_f).unwrap().into_future();
 
-                    // wait for completion
-                    let _ = core.run(rx.select2(fut).select2(ctrlc));
+                    let sel = rx.select2(ctrlc).then(|res| {
+                        match res {
+                            Ok(future::Either::A((res, _))) => match res {
+                                Ok(_) => future::ok(RunStatus::Stopped),
+                                Err(err) => future::ok(RunStatus::PyRes(Err(err))),
+                            },
+                            Ok(_) => future::ok(RunStatus::Stopped),
+                            Err(err) => future::err(err),
+                        }
+                    });
 
-                    true
+                    // wait for completion
+                    core.run(
+                        fut.select2(sel).then(|res| {
+                            match res {
+                                Ok(future::Either::A((res, _))) => future::ok(
+                                    RunStatus::PyRes(res)),
+                                Ok(future::Either::B((res, _))) =>
+                                    future::ok(res),
+                                Err(err) => future::err(err),
+                            }
+                        }))
                 }
-                None => false,
+                None => Ok(RunStatus::NoEventLoop),
             }
-        })
+        });
+
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        let _ = self.stop(py);
+
+        match res {
+            Ok(RunStatus::PyRes(res)) => res,
+            Ok(RunStatus::NoEventLoop) => Err(PyErr::new::<exc::RuntimeError, _>(
+                py, "There is no current event loop.")),
+            _ => Ok(py.None())
+        }
     }
 
     // Linux's socket.type is a bitmask that can include extra info
