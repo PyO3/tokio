@@ -13,7 +13,7 @@ use ::{PyFuture, TokioEventLoop};
 use addrinfo::AddrInfo;
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
-use socket::Socket;
+// use socket::Socket;
 use utils::PyLogger;
 use pyunsafe::Sender;
 use transport::InitializedTransport;
@@ -22,20 +22,20 @@ use transport::InitializedTransport;
 pub fn http_transport_factory(
     evloop: &TokioEventLoop, _server: bool, factory: &PyObject,
     _ssl: &Option<PyObject>, _server_hostname: Option<PyObject>,
-    socket: TcpStream, addr: &AddrInfo,
-    peer: SocketAddr, _waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+    socket: TcpStream, _addr: Option<&AddrInfo>,
+    _peer: Option<SocketAddr>, _waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
 {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
     // connected socket
-    let sock = Socket::new_peer(py, addr, peer)?;
+    // let sock = Socket::new_peer(py, addr, peer)?;
 
     // create protocol
     let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto, sock)?;
+    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto, py.None())?;
     let tr2 = tr.clone_ref(py);
     let tr3 = tr.clone_ref(py);
 

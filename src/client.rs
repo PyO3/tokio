@@ -22,7 +22,7 @@ pub fn create_sock_connection(
 
     let result = tcp_transport_factory(
         evloop, false, &factory, &ssl,
-        hostname, stream, &addr, peer, Some(waiter.clone_ref(GIL::python())));
+        hostname, stream, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
 
     Box::new(
         waiter.then(move |_| match result {
@@ -44,7 +44,7 @@ pub fn create_connection(
             let peer = socket.peer_addr().expect("should never happen");
             let result = tcp_transport_factory(
                 &evloop, false, &factory, &ssl, hostname,
-                socket, &addr, peer, Some(waiter.clone_ref(GIL::python())));
+                socket, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
 
             waiter.then(move |_| match result {
                 Ok(transport) => future::ok(transport),

@@ -46,7 +46,8 @@ impl ToPyTuple for InitializedTransport {
 // Transport factory
 pub type TransportFactory = fn(
     &TokioEventLoop, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
-    TcpStream, &AddrInfo, SocketAddr, Option<PyFuture>) -> io::Result<InitializedTransport>;
+    TcpStream, Option<&AddrInfo>, Option<SocketAddr>,
+    Option<PyFuture>) -> io::Result<InitializedTransport>;
 
 
 pub struct BytesMsg {
@@ -63,8 +64,8 @@ pub enum TcpTransportMessage {
 pub fn tcp_transport_factory<T>(
     evloop: &TokioEventLoop, server: bool,
     factory: &PyObject, ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
-    socket: T, addr: &AddrInfo,
-    peer: SocketAddr, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+    socket: T, addr: Option<&AddrInfo>,
+    peer: Option<SocketAddr>, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + AsRawFd + 'static
 {
@@ -72,10 +73,13 @@ pub fn tcp_transport_factory<T>(
     let py = gil.python();
 
     let mut info: HashMap<&'static str, PyObject> = HashMap::new();
-    let sock = Socket::new_peer(py, addr, peer)?;
-    info.insert("sockname", sock.getsockname(py)?.into_object());
-    info.insert("peername", sock.getpeername(py)?.into_object());
-    info.insert("socket", sock.clone_ref(py).into_object());
+
+    if let (Some(ref addr), Some(peer)) = (addr, peer) {
+        let sock = Socket::new_peer(py, addr, peer)?;
+        info.insert("sockname", sock.getsockname(py)?.into_object());
+        info.insert("peername", sock.getpeername(py)?.into_object());
+        info.insert("socket", sock.clone_ref(py).into_object());
+    }
 
     // create protocol
     let proto = factory.call(py, NoArgs, None)
@@ -287,7 +291,6 @@ impl PyTcpTransport {
                 .map(|bytes| self._loop(py).with(
                     py, "data_received error", |py|
                     self._data_received(py).call(py, (bytes,), None)));
-                //.into_log(py, "data_received error"));
         });
     }
 

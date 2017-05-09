@@ -32,12 +32,6 @@ pub struct WorkingClasses {
     pub SocketTimeout: PyType,
     pub GetNameInfo: PyObject,
 
-    pub BrokenPipeError: PyType,
-    pub ConnectionAbortedError: PyType,
-    pub ConnectionRefusedError: PyType,
-    pub ConnectionResetError: PyType,
-    pub InterruptedError: PyType,
-
     pub Sys: PyModule,
     pub Traceback: PyModule,
     pub ExtractStack: PyObject,
@@ -75,17 +69,6 @@ lazy_static! {
                 py, &builtins.get(py, "Exception").unwrap()).unwrap(),
             BaseException: PyType::extract(
                 py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
-
-            BrokenPipeError: PyType::extract(
-                py, &builtins.get(py, "BrokenPipeError").unwrap()).unwrap(),
-            ConnectionAbortedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionAbortedError").unwrap()).unwrap(),
-            ConnectionRefusedError: PyType::extract(
-                py, &builtins.get(py, "ConnectionRefusedError").unwrap()).unwrap(),
-            ConnectionResetError: PyType::extract(
-                py, &builtins.get(py, "ConnectionResetError").unwrap()).unwrap(),
-            InterruptedError: PyType::extract(
-                py, &builtins.get(py, "InterruptedError").unwrap()).unwrap(),
 
             SocketTimeout: PyType::extract(
                 py, &socket.get(py, "timeout").unwrap()).unwrap(),
@@ -176,23 +159,22 @@ pub trait ToPyErr {
 impl ToPyErr for io::Error {
 
     fn to_pyerr(&self, py: Python) -> PyErr {
-        let tp;
-        let exc_type = match self.kind() {
-            io::ErrorKind::BrokenPipe => &Classes.BrokenPipeError,
-            io::ErrorKind::ConnectionRefused => &Classes.ConnectionRefusedError,
-            io::ErrorKind::ConnectionAborted => &Classes.ConnectionAbortedError,
-            io::ErrorKind::ConnectionReset => &Classes.ConnectionResetError,
-            io::ErrorKind::Interrupted => &Classes.InterruptedError,
-            _ => {
-                tp = py.get_type::<exc::OSError>();
-                &tp
-            }
+        let tp = match self.kind() {
+            io::ErrorKind::BrokenPipe => py.get_type::<exc::BrokenPipeError>(),
+            io::ErrorKind::ConnectionRefused => py.get_type::<exc::ConnectionRefusedError>(),
+            io::ErrorKind::ConnectionAborted => py.get_type::<exc::ConnectionAbortedError>(),
+            io::ErrorKind::ConnectionReset => py.get_type::<exc::ConnectionResetError>(),
+            io::ErrorKind::Interrupted => py.get_type::<exc::InterruptedError>(),
+            io::ErrorKind::NotFound => py.get_type::<exc::FileNotFoundError>(),
+            io::ErrorKind::WouldBlock => py.get_type::<exc::BlockingIOError>(),
+            io::ErrorKind::TimedOut => py.get_type::<exc::TimeoutError>(),
+            _ => py.get_type::<exc::OSError>(),
         };
 
         let errno = self.raw_os_error().unwrap_or(0);
         let errdesc = self.description();
 
-        PyErr::new_err(py, exc_type, (errno, errdesc))
+        PyErr::new_err(py, &tp, (errno, errdesc))
     }
 }
 

@@ -198,7 +198,8 @@ impl Future for Server
         match option {
             Async::Ready(Some((socket, peer))) => {
                 (self.transport)(&self.evloop, true, &self.factory,
-                                 &self.ssl, None, socket, &self.addr, peer, None)?;
+                                 &self.ssl, None, socket,
+                                 Some(&self.addr), Some(peer), None)?;
 
                 // we can not just return Async::NotReady here,
                 // because self.stream is not registered within mio anymore

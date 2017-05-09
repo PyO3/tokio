@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::str::FromStr;
+use std::path::Path;
 use std::os::raw::c_int;
+use std::os::unix;
 use std::os::unix::io::{RawFd, FromRawFd};
 
 use libc;
@@ -20,6 +22,7 @@ use tokio_core::reactor::{Core, CoreId, Remote};
 use tokio_signal;
 use tokio_signal::unix::Signal;
 use tokio_core::net::TcpStream;
+use tokio_uds::{UnixStream, UnixListener};
 
 use ::{PyFuture, PyTask};
 use addrinfo;
@@ -1113,37 +1116,44 @@ py_class!(pub class TokioEventLoop |py| {
         };
 
         let conn = if let (&None, &None) = (&host, &port) {
-            match sock {
-                None => return Err(PyErr::new::<exc::ValueError, _>(
-                    py, "host and port was not specified and no sock specified")),
-                Some(sock) => {
-                    // Try to use supplied python connected socket object
-                    if ! self.is_stream_socket(py, &sock)? {
-                        return Err(PyErr::new::<exc::ValueError, _>(
-                            py, format!("A Stream Socket was expected, got {:?}", sock)))
-                    }
-
-                    let fileno = self.get_socket_fd(py, &sock)?;
-                    let sockaddr = self.addr_from_socket(py, sock)?;
-
-                    // create TcpStream object
-                    let stream = unsafe {
-                        net::TcpStream::from_raw_fd(fileno as RawFd)
-                    };
-
-                    // tokio stream
-                    let stream = match TcpStream::from_stream(stream, self.href()) {
-                        Ok(stream) => stream,
-                        Err(err) => return Err(err.to_pyerr(py)),
-                    };
-
-                    let waiter = PyFuture::new(py, &self)?;
-                    future::Either::A(
-                        client::create_sock_connection(
-                            protocol_factory, &self,
-                            stream, sockaddr, ssl, server_hostname, waiter))
+            let sock = if let Some(sock) = sock {
+                // Try to use supplied python connected socket object
+                if ! self.is_stream_socket(py, &sock)? {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
-            }
+
+                // check if socket is UNIX domain socket
+                if self.is_uds_socket(py, &sock)? {
+                    return self.create_unix_connection(
+                        py, protocol_factory, None, ssl, Some(sock), server_hostname);
+                }
+
+                sock
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "host and port was not specified and no sock specified"));
+            };
+
+            let fileno = self.get_socket_fd(py, &sock)?;
+            let sockaddr = self.addr_from_socket(py, sock)?;
+
+            // create TcpStream object
+            let stream = unsafe {
+                net::TcpStream::from_raw_fd(fileno as RawFd)
+            };
+
+            // tokio stream
+            let stream = match TcpStream::from_stream(stream, self.href()) {
+                Ok(stream) => stream,
+                Err(err) => return Err(err.to_pyerr(py)),
+            };
+
+            let waiter = PyFuture::new(py, &self)?;
+            future::Either::A(
+                client::create_sock_connection(
+                    protocol_factory, &self,
+                    stream, sockaddr, ssl, server_hostname, waiter))
         } else {
             if let Some(_) = sock {
                 return Err(PyErr::new::<exc::ValueError, _>(
@@ -1195,6 +1205,86 @@ py_class!(pub class TokioEventLoop |py| {
                 // set transport and protocol
                 .map(move |res| with_py(|py| {
                     fut_conn.set(py, Ok(res.to_py_tuple(py).into_object()));}))
+        );
+
+        Ok(fut)
+    }
+
+    // Connect to a UDS server.
+    //
+    def create_unix_connection(&self, protocol_factory: PyObject,
+                               path: Option<PyObject> = None,
+                               ssl: Option<PyObject> = None,
+                               sock: Option<PyObject> = None,
+                               server_hostname: Option<PyObject> = None) -> PyResult<PyFuture> {
+        match (&server_hostname, &ssl) {
+            (&Some(_), &None) =>
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "server_hostname is only meaningful with ssl")),
+            (&None, &Some(_)) => {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "you have to pass server_hostname when using ssl"));
+            }
+            _ => (),
+        }
+
+        let path = path.unwrap_or(py.None());
+
+        let stream = if path != py.None() {
+            if let Some(_) = sock {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "path and sock can not be specified at the same time"))
+            }
+
+            let s = PyString::downcast_from(py, path)?;
+            let str = s.to_string(py)?;
+            let path = Path::new(str.as_ref());
+
+            UnixStream::connect(path, self.href()).map_err(|e| e.to_pyerr(py))?
+        } else {
+            let sock = if let Some(sock) = sock {
+                if ! self.is_uds_socket(py, &sock)? {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, format!("A UNIX Domain Stream Socket was expected, got {:?}", sock)))
+                }
+                sock
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "no path and sock were specified"))
+            };
+
+            let fileno = self.get_socket_fd(py, &sock)?;
+
+            // create UnixStream object
+            let stream = unsafe {
+                unix::net::UnixStream::from_raw_fd(fileno as RawFd)
+            };
+
+            UnixStream::from_stream(stream, self.href()).map_err(|e| e.to_pyerr(py))?
+        };
+
+        // result future
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_conn = fut.clone_ref(py);
+
+        // create transport
+        let waiter = PyFuture::new(py, &self)?;
+        let result = transport::tcp_transport_factory(
+            &self, false, &protocol_factory, &ssl, server_hostname,
+            stream, None, None, Some(waiter.clone_ref(py)))
+            .map_err(|e| e.to_pyerr(py))?;
+
+        // wait waiter completion
+        self.handle(py).spawn(
+            waiter
+            // set exception to future
+                .map_err(move |e| with_py(|py| {
+                    fut_err.set(
+                        py, Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)));}))
+            // set transport and protocol
+                .map(move |res| with_py(|py| {
+                    fut_conn.set(py, Ok(result.to_py_tuple(py).into_object()));}))
         );
 
         Ok(fut)
@@ -1522,6 +1612,16 @@ impl TokioEventLoop {
         let stream = addrinfo::SocketType::Stream.to_int() as i32;
         let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
         Ok((socktype & stream) == stream)
+    }
+
+    fn is_uds_socket(&self, py: Python, sock: &PyObject) -> PyResult<bool> {
+        if self.is_stream_socket(py, sock)? {
+            let unix = addrinfo::Family::Unix.to_int() as i32;
+            let family: i32 = sock.getattr(py, "family")?.extract(py)?;
+            Ok((family & unix) == unix)
+        } else {
+            Ok(false)
+        }
     }
 
     // Linux's socket.type is a bitmask that can include extra info

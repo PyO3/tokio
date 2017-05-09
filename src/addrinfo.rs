@@ -29,6 +29,8 @@ pub enum Family {
     Inet,
     /// Ipv6
     Inet6,
+    /// Unix domain soxket
+    Unix,
     /// Some other
     Other(libc::c_int),
 }
@@ -40,6 +42,7 @@ impl Family {
             0 => Family::Unspec,
             libc::AF_INET => Family::Inet,
             libc::AF_INET6 => Family::Inet6,
+            libc::AF_UNIX => Family::Unix,
             v => Family::Other(v),
         }
     }
@@ -49,6 +52,7 @@ impl Family {
             Family::Unspec => 0,
             Family::Inet => libc::AF_INET,
             Family::Inet6 => libc::AF_INET6,
+            Family::Unix => libc::AF_UNIX,
             Family::Other(v) => v,
         }
     }

@@ -10,6 +10,7 @@ extern crate futures;
 extern crate tokio_io;
 extern crate tokio_core;
 extern crate tokio_signal;
+extern crate tokio_uds;
 extern crate boxfnonce;
 extern crate env_logger;
 #[macro_use] extern crate log;
