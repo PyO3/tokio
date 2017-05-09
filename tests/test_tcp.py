@@ -501,3 +501,99 @@ def test_tcp_handle_exception_in_connection_made(loop):
     loop.run_until_complete(fut)
 
     assert loop.run_until_complete(connection_lost_called) is None
+
+
+def test_many_small_writes(loop):
+    N = 10000
+    TOTAL = 0
+
+    fut = loop.create_future()
+
+    async def server(reader, writer):
+        nonlocal TOTAL
+        while True:
+            d = await reader.read(10000)
+            if not d:
+                break
+            TOTAL += len(d)
+        fut.set_result(True)
+        writer.close()
+
+    async def run():
+        srv = await asyncio.start_server(
+            server,
+            '127.0.0.1', 0,
+            family=socket.AF_INET,
+            loop=loop)
+
+        addr = srv.sockets[0].getsockname()
+        r, w = await asyncio.open_connection(*addr, loop=loop)
+
+        DATA = b'x' * 102400
+
+        # Test _StreamWriteContext with short sequences of writes
+        w.write(DATA)
+        await w.drain()
+        for _ in range(3):
+            w.write(DATA)
+            await w.drain()
+        for _ in range(10):
+            w.write(DATA)
+            await w.drain()
+
+        for _ in range(N):
+            w.write(DATA)
+
+            try:
+                w.write('a')
+            except TypeError:
+                pass
+
+        await w.drain()
+        for _ in range(N):
+            w.write(DATA)
+            await w.drain()
+
+        w.close()
+        await fut
+
+        srv.close()
+        await srv.wait_closed()
+
+        assert TOTAL == N * 2 * len(DATA) + 14 * len(DATA)
+
+    loop.run_until_complete(run())
+
+
+@pytest.mark.skipif(not hasattr(socket, 'AF_UNIX'), reason='no Unix sockets')
+def _test_create_connection_wrong_sock(loop):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    with sock:
+        coro = loop.create_connection(MyBaseProto, sock=sock)
+        with pytest.raises(ValueError) as excinfo:
+            loop.run_until_complete(coro)
+
+        excinfo.match('A Stream Socket was expected')
+
+
+@pytest.mark.skipif(not hasattr(socket, 'AF_UNIX'), reason='no Unix sockets')
+def test_create_server_wrong_sock(loop):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    with sock:
+        with pytest.raises(ValueError) as excinfo:
+            coro = loop.create_server(MyBaseProto, sock=sock)
+            loop.run_until_complete(coro)
+
+        excinfo.match('A Stream Socket was expected')
+
+
+@pytest.mark.skipif(not hasattr(socket, 'SOCK_NONBLOCK'),
+                    reason='no socket.SOCK_NONBLOCK (linux only)')
+def test_create_server_stream_bittype(loop):
+    sock = socket.socket(
+        socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_NONBLOCK)
+    with sock:
+        coro = loop.create_server(lambda: None, sock=sock)
+        srv = loop.run_until_complete(coro)
+        srv.close()
+        loop.run_until_complete(srv.wait_closed())
