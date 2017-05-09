@@ -1,11 +1,10 @@
 #![allow(unused_variables)]
 
 use std::cell;
-use std::mem;
+// use std::mem;
 use cpython::*;
-use futures::{future, unsync, Poll};
+use futures::{future, unsync, Async, Poll};
 use futures::unsync::oneshot;
-// use futures::task::{Task, park};
 use boxfnonce::SendBoxFnOnce;
 
 use ::TokioEventLoop;
@@ -497,7 +496,14 @@ impl future::Future for _PyFuture {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if let Some(ref mut rx) = self.receiver {
-            rx.poll()
+            match rx.poll() {
+                Ok(Async::Ready(result)) => {
+                    self.log_exc_tb.set(false);
+                    Ok(Async::Ready(result))
+                },
+                Ok(Async::NotReady) => Ok(Async::NotReady),
+                Err(err) => Err(err),
+            }
         } else {
             Err(unsync::oneshot::Canceled)
         }
@@ -665,23 +671,23 @@ py_class!(pub class PyFuture |py| {
     //
     // Python GC support
     //
-    def __traverse__(&self, visit) {
-        if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
-            for callback in callbacks.iter() {
-                visit.call(callback)?;
-            }
-        }
-        Ok(())
-    }
+    //def __traverse__(&self, visit) {
+    //    if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
+    //        for callback in callbacks.iter() {
+    //            visit.call(callback)?;
+    //        }
+    //    }
+    //    Ok(())
+    //}
 
-    def __clear__(&self) {
-        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
-        if let Some(callbacks) = callbacks {
-            for cb in callbacks {
-                cb.release_ref(py);
-            }
-        }
-    }
+    //def __clear__(&self) {
+    //    let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
+    //    if let Some(callbacks) = callbacks {
+    //        for cb in callbacks {
+    //            cb.release_ref(py);
+    //        }
+    //    }
+    //}
 
     // handler for asyncio.Future completion
     def _fut_done(&self, fut: PyObject) -> PyResult<PyObject> {

@@ -1356,16 +1356,14 @@ py_class!(pub class TokioEventLoop |py| {
                 return Err(PyErr::new::<exc::ValueError, _>(
                     py, "loop argument must agree with Future"))
             }
-            let fut2 = fut.clone_ref(py);
-            py.allow_threads(|| self.run_future(Box::new(fut2)))
+            py.allow_threads(|| self.run_future(Box::new(fut)))
         // PyFuture
         } else if let Ok(fut) = PyFuture::downcast_from(py, fut.clone_ref(py)) {
             if !fut.is_same_loop(py, &self) {
                 return Err(PyErr::new::<exc::ValueError, _>(
                     py, "loop argument must agree with Future"))
             }
-            let fut2 = fut.clone_ref(py);
-            py.allow_threads(|| self.run_future(Box::new(fut2)))
+            py.allow_threads(|| self.run_future(Box::new(fut)))
         // asyncio.Future
         } else if fut.hasattr(py, "_asyncio_future_blocking")? {
             let l = fut.getattr(py, "_loop")?;
@@ -1375,13 +1373,11 @@ py_class!(pub class TokioEventLoop |py| {
             }
 
             let fut = PyFuture::from_fut(py, &self, fut)?;
-            let fut2 = fut.clone_ref(py);
-            py.allow_threads(|| self.run_future(Box::new(fut2)))
+            py.allow_threads(|| self.run_future(Box::new(fut)))
         } else {
             if utils::iscoroutine(&fut) {
                 let fut = PyTask::new(py, fut.clone_ref(py), &self)?;
-                let fut2 = fut.clone_ref(py);
-                py.allow_threads(|| self.run_future(Box::new(fut2)))
+                py.allow_threads(|| self.run_future(Box::new(fut)))
             } else {
                 return Err(PyErr::new::<exc::TypeError, _>(
                     py, "Future or Generator object is required"))
@@ -1505,7 +1501,6 @@ impl TokioEventLoop {
                 None => Ok(RunStatus::NoEventLoop),
             }
         });
-
         let gil = Python::acquire_gil();
         let py = gil.python();
 
@@ -1514,7 +1509,8 @@ impl TokioEventLoop {
         match res {
             Ok(RunStatus::PyRes(res)) => res,
             Ok(RunStatus::NoEventLoop) => Err(PyErr::new::<exc::RuntimeError, _>(
-                py, "There is no current event loop.")),
+                py, "There is event loop in current thread.")),
+            Err(_) => Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             _ => Ok(py.None())
         }
     }
@@ -1531,7 +1527,7 @@ impl TokioEventLoop {
     // Linux's socket.type is a bitmask that can include extra info
     // about socket, therefore we can't do simple
     // `sock_type == socket.SOCK_DGRAM`.
-    fn is_dgram_socket(&self, py: Python, sock: &PyObject) -> PyResult<bool> {
+    fn _is_dgram_socket(&self, py: Python, sock: &PyObject) -> PyResult<bool> {
         let dgram = addrinfo::SocketType::DGram.to_int() as i32;
         let socktype: i32 = sock.getattr(py, "type")?.extract(py)?;
         Ok((socktype & dgram) == dgram)
