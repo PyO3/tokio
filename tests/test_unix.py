@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import tempfile
 
@@ -7,6 +8,152 @@ import _testbase as tb
 
 from test_ssl import (ONLYCERT, ONLYKEY, create_client_ssl_context,
                       create_server_ssl_context)
+
+
+def test_create_unix_server_1(loop):
+    CNT = 0           # number of clients that were successful
+    TOTAL_CNT = 100   # total number of clients that test will create
+    TIMEOUT = 5.0     # timeout for this test
+
+    async def handle_client(reader, writer):
+        nonlocal CNT
+
+        data = await reader.readexactly(4)
+        assert data == b'AAAA'
+        writer.write(b'OK')
+
+        data = await reader.readexactly(4)
+        assert data == b'BBBB'
+        writer.write(b'SPAM')
+
+        await writer.drain()
+        writer.close()
+
+        CNT += 1
+
+    async def test_client(addr):
+        sock = socket.socket(socket.AF_UNIX)
+        with sock:
+            sock.setblocking(False)
+            await loop.sock_connect(sock, addr)
+
+            await loop.sock_sendall(sock, b'AAAA')
+
+            buf = b''
+            while len(buf) != 2:
+                buf += await loop.sock_recv(sock, 1)
+            assert buf == b'OK'
+
+            await loop.sock_sendall(sock, b'BBBB')
+
+            buf = b''
+            while len(buf) != 4:
+                buf += await loop.sock_recv(sock, 1)
+            assert buf == b'SPAM'
+
+    async def start_server():
+        nonlocal CNT
+        CNT = 0
+
+        with tempfile.TemporaryDirectory() as td:
+            sock_name = os.path.join(td, 'sock')
+            srv = await asyncio.start_unix_server(
+                handle_client,
+                sock_name,
+                loop=loop)
+
+            try:
+                # srv_socks = srv.sockets
+                # assert srv_socks
+
+                tasks = []
+                for _ in range(TOTAL_CNT):
+                    tasks.append(test_client(sock_name))
+
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, loop=loop),
+                    TIMEOUT, loop=loop)
+
+            finally:
+                loop.call_soon(srv.close)
+                await srv.wait_closed()
+
+                # Check that the server cleaned-up proxy-sockets
+                # for srv_sock in srv_socks:
+                #    assert srv_sock.fileno() == -1
+
+            # asyncio doesn't cleanup the sock file
+            assert os.path.exists(sock_name)
+
+    async def start_server_sock(start_server):
+        nonlocal CNT
+        CNT = 0
+
+        with tempfile.TemporaryDirectory() as td:
+            sock_name = os.path.join(td, 'sock')
+            sock = socket.socket(socket.AF_UNIX)
+            sock.bind(sock_name)
+
+            srv = await start_server(sock)
+            await asyncio.sleep(0.1, loop=loop)
+
+            try:
+                # srv_socks = srv.sockets
+                # self.assertTrue(srv_socks)
+
+                tasks = []
+                for _ in range(TOTAL_CNT):
+                    tasks.append(test_client(sock_name))
+
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, loop=loop),
+                    TIMEOUT, loop=loop)
+
+            finally:
+                loop.call_soon(srv.close)
+                await srv.wait_closed()
+
+                # Check that the server cleaned-up proxy-sockets
+                # for srv_sock in srv_socks:
+                #    self.assertEqual(srv_sock.fileno(), -1)
+
+            # asyncio doesn't cleanup the sock file
+            assert os.path.exists(sock_name)
+
+    # with self.subTest(func='start_unix_server(host, port)'):
+    loop.run_until_complete(start_server())
+    assert CNT == TOTAL_CNT
+
+    # with self.subTest(func='start_unix_server(sock)'):
+    loop.run_until_complete(start_server_sock(
+        lambda sock: asyncio.start_unix_server(
+            handle_client,
+            None,
+            loop=loop,
+            sock=sock)))
+    assert CNT == TOTAL_CNT
+
+    # with self.subTest(func='start_server(sock)'):
+    loop.run_until_complete(start_server_sock(
+        lambda sock: asyncio.start_server(
+            handle_client,
+            None, None,
+            loop=loop,
+            sock=sock)))
+    assert CNT == TOTAL_CNT
+
+
+def test_create_unix_server_2(loop):
+    with tempfile.TemporaryDirectory() as td:
+        sock_name = os.path.join(td, 'sock')
+        with open(sock_name, 'wt') as f:
+            f.write('x')
+
+        with pytest.raises(OSError) as excinfo:
+            loop.run_until_complete(
+                loop.create_unix_server(object, sock_name))
+
+        excinfo.match('in use')
 
 
 def test_create_unix_connection_1(loop):

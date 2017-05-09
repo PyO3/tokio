@@ -1210,7 +1210,60 @@ py_class!(pub class TokioEventLoop |py| {
         Ok(fut)
     }
 
-    // Connect to a UDS server.
+    //
+    // Connect to a UDS client.
+    //
+    def create_unix_server(&self, protocol_factory: PyObject,
+                           path: Option<PyObject> = None,
+                           sock: Option<PyObject> = None,
+                           backlog: i32 = 100,
+                           ssl: Option<PyObject> = None) -> PyResult<PyFuture> {
+        let path = path.unwrap_or(py.None());
+
+        let lst = if path != py.None() {
+            if let Some(_) = sock {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "path and sock can not be specified at the same time"))
+            }
+
+            let s = PyString::downcast_from(py, path)?;
+            let str = s.to_string(py)?;
+            let path = Path::new(str.as_ref());
+
+            UnixListener::bind(path, self.href()).map_err(|e| e.to_pyerr(py))?
+        } else {
+            let sock = if let Some(sock) = sock {
+                if ! self.is_uds_socket(py, &sock)? {
+                    return Err(PyErr::new::<exc::ValueError, _>(
+                        py, format!("A UNIX Domain Stream Socket was expected, got {:?}", sock)))
+                }
+                sock
+            } else {
+                return Err(PyErr::new::<exc::ValueError, _>(
+                    py, "no path and sock were specified"))
+            };
+
+            // listen
+            sock.call_method(py, "listen", (backlog,), None)?;
+
+            let fileno = self.get_socket_fd(py, &sock)?;
+
+            // create UnixListener object
+            let lst = unsafe {
+                unix::net::UnixListener::from_raw_fd(fileno as RawFd)
+            };
+
+            UnixListener::from_listener(lst, self.href()).map_err(|e| e.to_pyerr(py))?
+        };
+
+        let res = server::create_uds_server(
+            py, self.clone_ref(py), lst, ssl, protocol_factory)?;
+
+        return Ok(PyFuture::done_fut(py, &self, res)?)
+    }
+
+    //
+    // Connect to a UDS client.
     //
     def create_unix_connection(&self, protocol_factory: PyObject,
                                path: Option<PyObject> = None,
@@ -1725,6 +1778,16 @@ impl TokioEventLoop {
                     return Err(PyErr::new::<exc::ValueError, _>(
                         py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
+
+                // check if socket is UNIX domain socket
+                if self.is_uds_socket(py, &sock)? {
+                    return self.create_unix_server(
+                        py, protocol_factory, None, Some(sock), backlog, ssl);
+                }
+
+                // listen
+                sock.call_method(py, "listen", (backlog,), None)?;
+
                 // opened sockets only
                 let fileno = self.get_socket_fd(py, &sock)?;
                 let sockaddr = self.addr_from_socket(py, sock)?;
@@ -1737,7 +1800,6 @@ impl TokioEventLoop {
                 let listener = unsafe {
                     net::TcpListener::from_raw_fd(fileno as RawFd)
                 };
-                let _ = listener.set_nonblocking(true);
 
                 let res = server::create_sock_server(
                     py, self.clone_ref(py), listener, sockaddr,
