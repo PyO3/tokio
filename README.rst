@@ -13,17 +13,15 @@ You can create an instance of the loop manually, using:
 
     import tokio
     
-    loop = tokio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    policy = tokio.TokioLoopPolicy()
+    asyncio.set_event_loop_policy(policy)
+    asyncio.set_event_loop(tokio.new_event_loop())
 
 
-.. note:: At leaset rust 0.15.1 is required.
-
-    
 Development of tokio loop
 -------------------------
 
-To build tokio loop, you'll need rust 1.15 and Python 3.5.  The best way
+To build tokio loop, you'll need rust 1.15.1+ and Python 3.6.  The best way
 is to create a virtual env, so that you'll have ``python`` commands pointing to the correct tools.
 
 1. ``git clone git@github.com:PyO3/tokio.git``
