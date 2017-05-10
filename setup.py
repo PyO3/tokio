@@ -48,18 +48,27 @@ if sys.version_info < (3, 6, 0):
     raise RuntimeError("tokio requires Python 3.6+")
 
 
+def read(f):
+    return open(os.path.join(os.path.dirname(__file__), f)).read().strip()
+
+
 setup(name='tokio',
       version=version,
+      description='Asyncio event loop written in Rust language',
+      long_description=read('README.rst'),
+      license='Apache 2',
       classifiers=[
           'License :: OSI Approved :: Apache Software License',
+          'Development Status :: 3 - Alpha',
+          'Framework :: AsyncIO',
           'Intended Audience :: Developers',
           'Programming Language :: Python',
           'Programming Language :: Python :: 3 :: Only',
           'Programming Language :: Python :: 3.6',
+          'Programming Language :: Rust',
           'Operating System :: POSIX',
           'Operating System :: MacOS :: MacOS X',
           'Topic :: Internet :: WWW/HTTP',
-          'Framework :: AsyncIO',
       ],
       author='Nikolay Kim',
       author_email='fafhrd91@gmail.com',
