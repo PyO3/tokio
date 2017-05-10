@@ -2,7 +2,9 @@ import os
 os.environ['RUST_LOG'] = 'async_tokio=debug'  # noqa
 
 import gc
-from asyncio.events import AbstractEventLoop, BaseDefaultEventLoopPolicy
+from asyncio.events import AbstractEventLoop
+from asyncio.unix_events import DefaultEventLoopPolicy
+
 
 gc.disable()  # noqa
 
@@ -17,7 +19,7 @@ def new_event_loop():
     return _tokio.new_event_loop()
 
 
-class TokioLoopPolicy(BaseDefaultEventLoopPolicy):
+class TokioLoopPolicy(DefaultEventLoopPolicy):
     """Event loop policy."""
 
     def _loop_factory(self):

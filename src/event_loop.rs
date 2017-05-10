@@ -1100,7 +1100,280 @@ py_class!(pub class TokioEventLoop |py| {
 
         Ok(fut)
     }
-    
+
+    //
+    // subprocess_shell
+    //
+    def _socketpair(&self) -> PyResult<PyObject> {
+        Classes.Socket.call(py, "socketpair", NoArgs, None)
+    }
+
+    def _child_watcher_callback(&self, pid: PyObject, returncode: PyObject, transp: PyObject)
+                                -> PyResult<PyObject> {
+        let process_exited = transp.getattr(py, "_process_exited")?;
+        self.call_soon_threadsafe(
+            py, &(process_exited, returncode).to_py_tuple(py), None)
+    }
+
+    def subprocess_shell(&self, *args, **kwargs) -> PyResult<PyFuture> {
+        if args.len(py) < 2 {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "function takes at least 2 arguments"))
+        }
+
+        let protocol_factory = args.get_item(py, 0);
+        let cmd = args.get_item(py, 1);
+        let empty;
+        let kwargs = if let Some(kw) = kwargs {
+            kw
+        } else {
+            empty = PyDict::new(py);
+            &empty
+        };
+
+        let stdin: i32 = if let Some(val) = kwargs.get_item(py, "stdin") {
+            let _ = kwargs.del_item(py, "stdin")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let stdout: i32 = if let Some(val) = kwargs.get_item(py, "stdout") {
+            let _ = kwargs.del_item(py, "stdout")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let stderr: i32 = if let Some(val) = kwargs.get_item(py, "stderr") {
+            let _ = kwargs.del_item(py, "stderr")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let newlines = if let Some(val) = kwargs.get_item(py, "universal_newlines") {
+            let _ = kwargs.del_item(py, "universal_newlines")?;
+            if val == py.None() {
+                false
+            } else {
+                val.extract::<bool>(py)?
+            }
+        } else {
+            false
+        };
+        let shell = if let Some(val) = kwargs.get_item(py, "shell") {
+            let _ = kwargs.del_item(py, "shell")?;
+            if val == py.None() {
+                true
+            } else {
+                val.extract::<bool>(py)?
+            }
+        } else {
+            true
+        };
+        let bufsize = if let Some(val) = kwargs.get_item(py, "bufsize") {
+            let _ = kwargs.del_item(py, "bufsize")?;
+            if val == py.None() {
+                0
+            } else {
+                val.extract::<i32>(py)?
+            }
+        } else {
+            0
+        };
+
+        //if not isinstance(cmd, (bytes, str)):
+        //raise ValueError("cmd must be a string")
+
+        if newlines {
+            return Err(PyErr::new::<exc::ValueError, _>(
+                py, "universal_newlines must be False"))
+        }
+        if ! shell {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "shell must be True"))
+        }
+        if bufsize != 0 {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "bufsize must be 0"))
+        }
+
+        let protocol = protocol_factory.call(py, NoArgs, None)?;
+
+        let ev = Classes.UnixEvents.get(py, "_UnixSelectorEventLoop")?;
+        let coro = ev.call_method(
+            py, "_make_subprocess_transport",
+            (&self, protocol.clone_ref(py), cmd, true,
+             stdin, stdout, stderr, bufsize), Some(kwargs))?;
+
+        let fut = PyFuture::new(py, &self)?;
+        let fut_ready = fut.clone_ref(py);
+
+        let task = PyTask::new(py, coro, &self)?;
+
+        self.href().spawn(task.then(move |res| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            match res {
+                Ok(res) => match res {
+                    Ok(transport) => {
+                        let result = (transport, protocol).to_py_object(py).into_object();
+
+                        let _ = fut_ready.set(py, Ok(result));
+                    },
+                    Err(err) => {
+                        let _ = fut_ready.set(py, Err(err));
+                    }
+                },
+                Err(_) => {
+                    let _ = fut_ready.cancel(py);
+                }
+            }
+            Ok(())
+        }));
+
+        Ok(fut)
+    }
+
+    //
+    // subprocess_exec
+    //
+    def subprocess_exec(&self, *args, **kwargs) -> PyResult<PyFuture> {
+        if args.len(py) < 2 {
+            return Err(PyErr::new::<exc::TypeError, _>(
+                py, "function takes at least 2 arguments"))
+        }
+
+        let protocol_factory = args.get_item(py, 0);
+        let empty;
+        let kwargs = if let Some(kw) = kwargs {
+            kw
+        } else {
+            empty = PyDict::new(py);
+            &empty
+        };
+
+        let stdin: i32 = if let Some(val) = kwargs.get_item(py, "stdin") {
+            let _ = kwargs.del_item(py, "stdin")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let stdout: i32 = if let Some(val) = kwargs.get_item(py, "stdout") {
+            let _ = kwargs.del_item(py, "stdout")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let stderr: i32 = if let Some(val) = kwargs.get_item(py, "stderr") {
+            let _ = kwargs.del_item(py, "stderr")?;
+            if val == py.None() {
+                -1
+            } else {
+                val.extract(py)?
+            }
+        } else {
+            -1
+        };
+        let newlines = if let Some(val) = kwargs.get_item(py, "universal_newlines") {
+            let _ = kwargs.del_item(py, "universal_newlines")?;
+            if val == py.None() {
+                false
+            } else {
+                val.extract::<bool>(py)?
+            }
+        } else {
+            false
+        };
+        let shell = if let Some(val) = kwargs.get_item(py, "shell") {
+            let _ = kwargs.del_item(py, "shell")?;
+            if val == py.None() {
+                false
+            } else {
+                val.extract::<bool>(py)?
+            }
+        } else {
+            false
+        };
+        let bufsize = if let Some(val) = kwargs.get_item(py, "bufsize") {
+            let _ = kwargs.del_item(py, "bufsize")?;
+            if val == py.None() {
+                0
+            } else {
+                val.extract::<i32>(py)?
+            }
+        } else {
+            0
+        };
+
+        if newlines {
+            return Err(PyErr::new::<exc::ValueError, _>(
+                py, "universal_newlines must be False"))
+        }
+        if shell {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "shell must be False"))
+        }
+        if bufsize != 0 {
+            return Err(PyErr::new::<exc::ValueError, _>(py, "bufsize must be 0"))
+        }
+
+        let popen_args = PyTuple::new(py, &args.as_slice(py)[1..]);
+
+        let protocol = protocol_factory.call(py, NoArgs, None)?;
+
+        let ev = Classes.UnixEvents.get(py, "_UnixSelectorEventLoop")?;
+        let coro = ev.call_method(
+            py, "_make_subprocess_transport",
+            (&self, protocol.clone_ref(py), popen_args, false,
+             stdin, stdout, stderr, bufsize), Some(kwargs))?;
+
+        let fut = PyFuture::new(py, &self)?;
+        let fut_ready = fut.clone_ref(py);
+
+        let task = PyTask::new(py, coro, &self)?;
+
+        self.href().spawn(task.then(move |res| {
+            let gil = Python::acquire_gil();
+            let py = gil.python();
+
+            match res {
+                Ok(res) => match res {
+                    Ok(transport) => {
+                        let result = (transport, protocol).to_py_object(py).into_object();
+
+                        let _ = fut_ready.set(py, Ok(result));
+                    },
+                    Err(err) => {
+                        let _ = fut_ready.set(py, Err(err));
+                    }
+                },
+                Err(_) => {
+                    let _ = fut_ready.cancel(py);
+                }
+            }
+            Ok(())
+        }));
+
+        Ok(fut)
+    }
+
     //
     // Create a TCP server.
     //

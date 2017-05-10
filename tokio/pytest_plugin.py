@@ -84,16 +84,21 @@ def pytest_configure(config):
     LOOP_FACTORIES.clear()
     LOOP_FACTORY_IDS.clear()
 
-    LOOP_FACTORIES.append(asyncio.new_event_loop)
+    LOOP_FACTORIES.append(asyncio.DefaultEventLoopPolicy)
     LOOP_FACTORY_IDS.append('pyloop')
 
+    LOOP_FACTORIES2.append(asyncio.DefaultEventLoopPolicy)
+    LOOP_FACTORY_IDS2.append('pyloop')
+
     if uvloop is not None:  # pragma: no cover
-        LOOP_FACTORIES.append(uvloop.new_event_loop)
+        LOOP_FACTORIES.append(uvloop.EventLoopPolicy)
         LOOP_FACTORY_IDS.append('uvloop')
 
     if tokio is not None:
-        LOOP_FACTORIES.append(tokio.new_event_loop)
+        LOOP_FACTORIES.append(tokio.TokioLoopPolicy)
         LOOP_FACTORY_IDS.append('tokio')
+        LOOP_FACTORIES2.append(tokio.TokioLoopPolicy)
+        LOOP_FACTORY_IDS2.append('tokio')
 
     asyncio.set_event_loop(None)
 
@@ -101,9 +106,19 @@ def pytest_configure(config):
 LOOP_FACTORIES = []
 LOOP_FACTORY_IDS = []
 
+LOOP_FACTORIES2 = []
+LOOP_FACTORY_IDS2 = []
+
 
 @pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
 def loop(request):
+    """Return an instance of the event loop."""
+    with loop_context(request.param, fast=False) as _loop:
+        yield _loop
+
+
+@pytest.fixture(params=LOOP_FACTORIES2, ids=LOOP_FACTORY_IDS2)
+def loop2(request):
     """Return an instance of the event loop."""
     with loop_context(request.param, fast=False) as _loop:
         yield _loop

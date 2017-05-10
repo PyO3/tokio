@@ -40,11 +40,12 @@ def unittest_run_loop(func, *args, **kwargs):
 
 
 @contextlib.contextmanager
-def loop_context(loop_factory=asyncio.new_event_loop, fast=False):
+def loop_context(loop_factory, fast=False):
     """A contextmanager that creates an event_loop, for test purposes.
 
     Handles the creation and cleanup of a test loop.
     """
+    asyncio.set_event_loop_policy(loop_factory())
     loop = setup_test_loop(loop_factory)
     yield loop
     teardown_test_loop(loop, fast=fast)
@@ -57,8 +58,9 @@ def setup_test_loop(loop_factory=asyncio.new_event_loop):
     The caller should also call teardown_test_loop,
     once they are done with the loop.
     """
-    loop = loop_factory()
-    asyncio.set_event_loop(None)
+    # loop = loop_factory()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     return loop
 
 

@@ -433,7 +433,7 @@ def test_set_exc_handler_broken(loop, mock_pattern):
             exc_info=mock.ANY)
 
 
-@pytest.mark.skip(reason='need port')
+@pytest.mark.skip(reason='need impl')
 def test_default_exc_handler_broken(loop, mock_pattern):
     logger = logging.getLogger('asyncio')
     _context = None
@@ -485,7 +485,7 @@ def test_default_exc_handler_broken(loop, mock_pattern):
                 ZeroDivisionError)
 
 
-@pytest.mark.skip(reason='need port')
+@pytest.mark.skip(reason='need impl')
 def test_set_task_factory_invalid(loop):
     with pytest.raises(
             TypeError, message='task factory must be a callable or None'):
@@ -494,7 +494,7 @@ def test_set_task_factory_invalid(loop):
     assert loop.get_task_factory() is None
 
 
-@pytest.mark.skip(reason='need port')
+@pytest.mark.skip(reason='need impl')
 def test_set_task_factory(loop):
     # loop._process_events = mock.Mock()
 
