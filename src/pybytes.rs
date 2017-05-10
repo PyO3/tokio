@@ -195,6 +195,90 @@ py_class!(pub class PyBytes |py| {
         }
     }
 
+    def split(&self,
+              sep: Option<PyObject> = None,
+              maxsplit: i32 = -1) -> PyResult<cpython::PyList> {
+        let remove_empty;
+        let sep = if let Some(sep) = sep {
+            remove_empty = false;
+            PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
+        } else {
+            remove_empty = true;
+            vec![b' ']
+        };
+
+        let bytes = self._bytes(py);
+        let length = bytes.len();
+        let sep_len = sep.len();
+
+        let mut start = 0;
+        let mut result = Vec::new();
+
+        loop {
+            if maxsplit >= 0 && result.len() == maxsplit as usize {
+                result.push(
+                    PyBytes::create_instance(py, bytes.slice_from(start))?.into_object());
+                break
+            }
+
+            if let Some(pos) = twoway::find_bytes(&bytes[start..length], sep.as_ref()) {
+                let pos = start + pos;
+                if ! (start == pos && remove_empty) {
+                    result.push(
+                        PyBytes::create_instance(py, bytes.slice(start, pos))?.into_object());
+                }
+
+                start = pos + sep_len;
+                if start > length {
+                    break
+                }
+            } else {
+                if ! (start == length && remove_empty) {
+                    result.push(
+                        PyBytes::create_instance(py, bytes.slice_from(start))?.into_object());
+                }
+                break
+            }
+        }
+
+        Ok(cpython::PyList::new(py, result.as_slice()))
+    }
+
+    def strip(&self, sep: Option<PyObject> = None) -> PyResult<PyBytes> {
+        let sep = if let Some(sep) = sep {
+            PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
+        } else {
+            vec![b' ']
+        };
+
+        let bytes = self._bytes(py);
+        let mut start = 0;
+        let mut end = bytes.len();
+
+        loop {
+            if start == end {
+                break
+            }
+            if sep.contains(&bytes[start]) {
+                start += 1;
+            } else {
+                break
+            }
+        }
+        loop {
+            if end == start {
+                break
+            }
+
+            if sep.contains(&bytes[end - 1]) {
+                end -= 1;
+            } else {
+                break
+            }
+        }
+        Ok(PyBytes::create_instance(py, bytes.slice(start, end))?)
+    }
+
     def decode(&self, encoding: Option<cpython::PyString> = None,
                errors: Option<cpython::PyString> = None) -> PyResult<cpython::PyUnicode> {
         let bytes = self.as_object();

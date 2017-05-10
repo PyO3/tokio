@@ -61,4 +61,37 @@ fn test_pybytes() {
 
     py.run("b=bytearray(); b.extend(pb); assert b == b'{\"test\": \"value\"}'",
            None, Some(&d)).unwrap();
+
+    // split
+    let bytes = Bytes::from("1,2,,3,");
+    let pb = PyBytes::new(py, bytes).unwrap();
+    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+
+    py.run("assert [bytes(i) for i in pb.split(b',')] == [b'1', b'2', b'', b'3', b'']",
+           None, Some(&d)).unwrap();
+    py.run("assert [bytes(i) for i in pb.split(b',', 0)] == [b'1,2,,3,']",
+           None, Some(&d)).unwrap();
+    py.run("assert [bytes(i) for i in pb.split(b',', 1)] == [b'1', b'2,,3,']",
+           None, Some(&d)).unwrap();
+    py.run("assert [bytes(i) for i in pb.split(b',', 2)] == [b'1', b'2', b',3,']",
+           None, Some(&d)).unwrap();
+
+    let bytes = Bytes::from("1 2 3");
+    let pb = PyBytes::new(py, bytes).unwrap();
+    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+
+    py.run("assert [bytes(i) for i in pb.split()] == [b'1', b'2', b'3']",
+           None, Some(&d)).unwrap();
+    py.run("assert [bytes(i) for i in pb.split(maxsplit=1)] == [b'1', b'2 3']",
+           None, Some(&d)).unwrap();
+
+    let bytes = Bytes::from("   1   2   3   ");
+    let pb = PyBytes::new(py, bytes).unwrap();
+    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+
+    py.run("assert [bytes(i) for i in pb.split()] == [b'1', b'2', b'3']",
+           None, Some(&d)).unwrap();
+
+    py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).unwrap();
+    py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
 }
