@@ -134,7 +134,7 @@ py_class!(pub class PyBytes |py| {
                 {
                     let mut slice = unsafe { buf.bytes_mut() };
                     l.copy_to_slice(py, &mut slice[..lbuf.len()])?;
-                    r.copy_to_slice(py, &mut slice[lbuf.len()..rbuf.len()])?;
+                    r.copy_to_slice(py, &mut slice[lbuf.len()..lbuf.len()+rbuf.len()])?;
                 }
                 unsafe {
                     buf.set_len(len)
