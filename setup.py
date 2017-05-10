@@ -1,3 +1,7 @@
+import codecs
+import re
+import os
+import sys
 from setuptools import setup
 from setuptools.command.test import test as TestCommand
 
@@ -26,19 +30,31 @@ class PyTest(TestCommand):
         raise SystemExit(errno)
 
 
+with codecs.open(os.path.join(os.path.abspath(os.path.dirname(
+        __file__)), 'tokio', '__init__.py'), 'r', 'latin1') as fp:
+    try:
+        version = re.findall(r"^__version__ = '([^']+)'\r?$",
+                             fp.read(), re.M)[0]
+    except IndexError:
+        raise RuntimeError('Unable to determine version.')
+
+
 setup_requires = ['setuptools-rust>=0.5.1']
 install_requires = []
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
 
+if sys.version_info < (3, 6, 0):
+    raise RuntimeError("tokio requires Python 3.6+")
+
+
 setup(name='tokio',
-      version='0.0.1',
+      version=version,
       classifiers=[
           'License :: OSI Approved :: Apache Software License',
           'Intended Audience :: Developers',
           'Programming Language :: Python',
           'Programming Language :: Python :: 3 :: Only',
-          'Programming Language :: Python :: 3.5',
           'Programming Language :: Python :: 3.6',
           'Operating System :: POSIX',
           'Operating System :: MacOS :: MacOS X',

@@ -1,3 +1,5 @@
+__version__ = '0.1.0'
+
 import os
 os.environ['RUST_LOG'] = 'async_tokio=debug'  # noqa
 
