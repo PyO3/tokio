@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 
 use std::cell;
-// use std::mem;
+use std::mem;
 use cpython::*;
 use futures::{future, unsync, Async, Poll};
 use futures::unsync::oneshot;
@@ -517,6 +517,11 @@ py_class!(pub class PyFuture |py| {
     // reference to asyncio.Future if any
     data _pyfut: cell::RefCell<Option<PyObject>>;
 
+    def __repr__(&self) -> PyResult<PyString> {
+        let repr = Classes.Helpers.call(py, "future_repr", ("Future", &self,), None)?;
+        Ok(PyString::downcast_from(py, repr)?)
+    }
+
     //
     // Cancel the future and schedule callbacks.
     //
@@ -671,23 +676,23 @@ py_class!(pub class PyFuture |py| {
     //
     // Python GC support
     //
-    //def __traverse__(&self, visit) {
-    //    if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
-    //        for callback in callbacks.iter() {
-    //            visit.call(callback)?;
-    //        }
-    //    }
-    //    Ok(())
-    //}
+    def __traverse__(&self, visit) {
+        if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
+            for callback in callbacks.iter() {
+                visit.call(callback)?;
+            }
+        }
+        Ok(())
+    }
 
-    //def __clear__(&self) {
-    //    let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
-    //    if let Some(callbacks) = callbacks {
-    //        for cb in callbacks {
-    //            cb.release_ref(py);
-    //        }
-    //    }
-    //}
+    def __clear__(&self) {
+        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
+        if let Some(callbacks) = callbacks {
+            for cb in callbacks {
+                cb.release_ref(py);
+            }
+        }
+    }
 
     // handler for asyncio.Future completion
     def _fut_done(&self, fut: PyObject) -> PyResult<PyObject> {
@@ -732,12 +737,21 @@ py_class!(pub class PyFuture |py| {
         }
     }
 
+    property _callbacks {
+        get(&slf) -> PyResult<PyObject> {
+            if let Some(ref cb) = slf._fut(py).borrow().callbacks {
+                Ok(PyTuple::new(py, cb.as_slice()).into_object())
+            } else {
+                Ok(py.None())
+            }
+        }
+    }
+
     property _source_traceback {
         get(&slf) -> PyResult<PyObject> {
             slf._fut(py).borrow().extract_traceback(py)
         }
     }
-
 });
 
 impl PyFuture {

@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 
 use std::cell;
-// use std::mem;
+use std::mem;
 use cpython::*;
 use futures::{future, unsync, Poll};
 use boxfnonce::SendBoxFnOnce;
@@ -17,6 +17,11 @@ py_class!(pub class PyTask |py| {
     data _waiter: cell::RefCell<Option<PyObject>>;
     data _must_cancel: cell::Cell<bool>;
     data _blocking: cell::Cell<bool>;
+
+    def __repr__(&self) -> PyResult<PyString> {
+        let repr = Classes.Helpers.call(py, "future_repr", ("Task", &self,), None)?;
+        Ok(PyString::downcast_from(py, repr)?)
+    }
 
     //
     // Cancel the future and schedule callbacks.
@@ -152,23 +157,23 @@ py_class!(pub class PyTask |py| {
     //
     // Python GC support
     //
-    //def __traverse__(&self, visit) {
-    //    if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
-    //        for callback in callbacks.iter() {
-    //            visit.call(callback)?;
-    //        }
-    //    }
-    //    Ok(())
-    //}
+    def __traverse__(&self, visit) {
+        if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
+            for callback in callbacks.iter() {
+                visit.call(callback)?;
+            }
+        }
+        Ok(())
+    }
 
-    //def __clear__(&self) {
-    //    let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
-    //    if let Some(callbacks) = callbacks {
-    //        for cb in callbacks {
-    //            cb.release_ref(py);
-    //        }
-    //    }
-    //}
+    def __clear__(&self) {
+        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
+        if let Some(callbacks) = callbacks {
+            for cb in callbacks {
+                cb.release_ref(py);
+            }
+        }
+    }
 
     // compatibility
     property _loop {
@@ -189,6 +194,16 @@ py_class!(pub class PyTask |py| {
     property _must_cancel {
         get(&slf) -> PyResult<bool> {
             Ok(slf._must_cancel(py).get())
+        }
+    }
+
+    property _callbacks {
+        get(&slf) -> PyResult<PyObject> {
+            if let Some(ref cb) = slf._fut(py).borrow().callbacks {
+                Ok(PyTuple::new(py, cb.as_slice()).into_object())
+            } else {
+                Ok(py.None())
+            }
         }
     }
 
