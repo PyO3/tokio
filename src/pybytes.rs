@@ -198,18 +198,21 @@ py_class!(pub class PyBytes |py| {
     def split(&self,
               sep: Option<PyObject> = None,
               maxsplit: i32 = -1) -> PyResult<cpython::PyList> {
+        let sep_len;
         let remove_empty;
         let sep = if let Some(sep) = sep {
             remove_empty = false;
-            PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
+            let v = PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?;
+            sep_len = v.len();
+            v
         } else {
             remove_empty = true;
-            vec![b' ']
+            sep_len = 1;
+            vec![b' ', b'\t', b'\n', b'\r', b'\x0b', b'\x0c']
         };
 
         let bytes = self._bytes(py);
         let length = bytes.len();
-        let sep_len = sep.len();
 
         let mut start = 0;
         let mut result = Vec::new();
@@ -221,7 +224,22 @@ py_class!(pub class PyBytes |py| {
                 break
             }
 
-            if let Some(pos) = twoway::find_bytes(&bytes[start..length], sep.as_ref()) {
+            let pos = {
+                if remove_empty {
+                    let mut p = None;
+                    for idx in 0..length-start {
+                        if sep.contains(&bytes[start+idx]) {
+                            p = Some(idx);
+                            break
+                        }
+                    }
+                    p
+                } else {
+                    twoway::find_bytes(&bytes[start..length], sep.as_ref())
+                }
+            };
+
+            if let Some(pos) = pos {
                 let pos = start + pos;
                 if ! (start == pos && remove_empty) {
                     result.push(
@@ -248,7 +266,7 @@ py_class!(pub class PyBytes |py| {
         let sep = if let Some(sep) = sep {
             PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
         } else {
-            vec![b' ']
+            vec![b' ', b'\t', b'\n', b'\r', b'\x0b', b'\x0c']
         };
 
         let bytes = self._bytes(py);

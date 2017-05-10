@@ -61,10 +61,17 @@ fn test_pybytes() {
 
     py.run("b=bytearray(); b.extend(pb); assert b == b'{\"test\": \"value\"}'",
            None, Some(&d)).unwrap();
+}
+
+#[test]
+fn test_pybytes_split() {
+    let gil = Python::acquire_gil();
+    let py = gil.python();
 
     // split
     let bytes = Bytes::from("1,2,,3,");
     let pb = PyBytes::new(py, bytes).unwrap();
+    let d = PyDict::new(py);
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert [bytes(i) for i in pb.split(b',')] == [b'1', b'2', b'', b'3', b'']",
@@ -85,12 +92,23 @@ fn test_pybytes() {
     py.run("assert [bytes(i) for i in pb.split(maxsplit=1)] == [b'1', b'2 3']",
            None, Some(&d)).unwrap();
 
-    let bytes = Bytes::from("   1   2   3   ");
+    let bytes = Bytes::from("   1  \t 2  \r 3   ");
     let pb = PyBytes::new(py, bytes).unwrap();
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert [bytes(i) for i in pb.split()] == [b'1', b'2', b'3']",
            None, Some(&d)).unwrap();
+}
+
+#[test]
+fn test_pybytes_strip() {
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+
+    let bytes = Bytes::from("   1   2   3   ");
+    let pb = PyBytes::new(py, bytes).unwrap();
+    let d = PyDict::new(py);
+    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).unwrap();
     py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
