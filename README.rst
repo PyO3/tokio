@@ -1,7 +1,7 @@
 Asyncio event loop based on tokio-rs (WIP)
 ==========================================
 
-tokio is asyncio event loop written in rust.
+async-tokio is a drop-in replacement of the built-in asyncio event loop. async-tokio is implemented in rust and uses tokio-rs under the hood.
 
 
 Using tokio loop
@@ -15,7 +15,10 @@ You can create an instance of the loop manually, using:
     
     loop = tokio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
+
+.. note:: At leaset rust 0.15.1 is required.
+
     
 Development of tokio loop
 -------------------------
@@ -35,4 +38,4 @@ is to create a virtual env, so that you'll have ``python`` commands pointing to 
 License
 -------
 
-async-tokio is licensed Apache 2.0 licenses.
+``async-tokio`` is offered under the Apache 2.0 licenses.
