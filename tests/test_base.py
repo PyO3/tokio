@@ -125,9 +125,9 @@ def test_call_later_1(loop):
 
     # canceled right away
     h = loop.call_later(0.05, cb, 100, True)
-    # self.assertIn('.cb', repr(h))
+    # assert '.cb' in repr(h)
     h.cancel()
-    # self.assertIn('cancelled', repr(h))
+    # assert 'cancelled' in repr(h)
 
     loop.call_later(0.05, cb, 1, True)
     loop.call_later(1000, cb, 1000)  # shouldn't be called

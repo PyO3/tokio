@@ -26,6 +26,12 @@ py_class!(pub class PyHandle |py| {
 
         Ok(py.None())
     }
+
+    property _cancelled {
+        get(&slf) -> PyResult<bool> {
+            Ok(slf._cancelled(py).get())
+        }
+    }
 });
 
 

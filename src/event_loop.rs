@@ -1019,6 +1019,88 @@ py_class!(pub class TokioEventLoop |py| {
                   sockaddr, flags).to_py_tuple(py), None)
     }
 
+    def connect_read_pipe(&self, protocol_factory: PyObject, pipe: PyObject)
+                          -> PyResult<PyFuture> {
+        let protocol = protocol_factory.call(py, NoArgs, None)?;
+        let waiter = PyFuture::new(py, &self)?;
+
+        // create unix transport
+        let cls = Classes.UnixEvents.get(py, "_UnixReadPipeTransport")?;
+        let transport = cls.call(
+            py, (&self, pipe, protocol.clone_ref(py),
+                 waiter.clone_ref(py), py.None()), None)?;
+
+        // wait for transport get ready
+        let fut = PyFuture::new(py, &self)?;
+        let fut_ready = fut.clone_ref(py);
+
+        self.href().spawn(
+            waiter.then(move |res| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                match res {
+                    Ok(res) => match res {
+                        Ok(res) => {
+                            let _ = fut_ready.set(
+                                py, Ok((transport, protocol).to_py_tuple(py).into_object()));
+                        },
+                        Err(err) => {
+                            let _ = transport.call_method(py, "close", NoArgs, None);
+                            let _ = fut_ready.set(py, Err(err));
+                        }
+                    },
+                    Err(_) => {
+                        let _ = fut_ready.cancel(py);
+                    }
+                }
+                Ok(())
+            }));
+
+        Ok(fut)
+    }
+
+    def connect_write_pipe(&self, protocol_factory: PyObject, pipe: PyObject)
+                           -> PyResult<PyFuture> {
+        let protocol = protocol_factory.call(py, NoArgs, None)?;
+        let waiter = PyFuture::new(py, &self)?;
+
+        // create unix transport
+        let cls = Classes.UnixEvents.get(py, "_UnixWritePipeTransport")?;
+        let transport = cls.call(
+            py, (&self, pipe, protocol.clone_ref(py),
+                 waiter.clone_ref(py), py.None()), None)?;
+
+        // wait for transport get ready
+        let fut = PyFuture::new(py, &self)?;
+        let fut_ready = fut.clone_ref(py);
+
+        self.href().spawn(
+            waiter.then(move |res| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                match res {
+                    Ok(res) => match res {
+                        Ok(res) => {
+                            let _ = fut_ready.set(
+                                py, Ok((transport, protocol).to_py_tuple(py).into_object()));
+                        },
+                        Err(err) => {
+                            let _ = transport.call_method(py, "close", NoArgs, None);
+                            let _ = fut_ready.set(py, Err(err));
+                        }
+                    },
+                    Err(_) => {
+                        let _ = fut_ready.cancel(py);
+                    }
+                }
+                Ok(())
+            }));
+
+        Ok(fut)
+    }
+    
     //
     // Create a TCP server.
     //
