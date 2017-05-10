@@ -26,11 +26,11 @@ tokio-io = "0.1"
 tokio-core = "0.1"
 # tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
 
-# tokio-signal = "0.1"
-tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
+tokio-signal = "0.1"
+# tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
 
-# tokio-uds = "0.1"
-tokio-uds = { git = "https://github.com/tokio-rs/tokio-uds.git" }
+tokio-uds = "0.1"
+# tokio-uds = { git = "https://github.com/tokio-rs/tokio-uds.git" }
 
 # native-tls = "0.1"
 # tokio-tls = "0.1"
@@ -48,6 +48,3 @@ httparse = "*"
 lto = true
 codegen-units = 1
 opt-level = 3
-
-[replace]
-"tokio-core:0.1.7" = { git = "https://github.com/tokio-rs/tokio-core.git" }

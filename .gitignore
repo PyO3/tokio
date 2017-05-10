@@ -19,7 +19,6 @@
 .noseids
 .tox
 .vimrc
-Cargo.lock
 bin
 build
 cover
