@@ -1,3 +1,7 @@
+# Copied from the uvloop project.  If you add a new unittest here,
+# please consider contributing it to the uvloop project.
+#
+# Portions copyright (c) 2015-present MagicStack Inc.  http://magic.io
 """Test utilities. Don't use outside of the uvloop project."""
 
 

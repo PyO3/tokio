@@ -1,3 +1,8 @@
+# Copied from the uvloop project.  If you add a new unittest here,
+# please consider contributing it to the uvloop project.
+#
+# Portions copyright (c) 2015-present MagicStack Inc.  http://magic.io
+
 import asyncio
 import concurrent.futures
 import re
