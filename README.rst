@@ -1,5 +1,6 @@
-Asyncio event loop based on tokio-rs (WIP)
-==========================================
+
+Asyncio event loop based on tokio-rs (WIP) |Build Status| |Join the dev chat at https://gitter.im/PyO3/Lobby|
+=============================================================================
 
 async-tokio is a drop-in replacement of the built-in asyncio event loop. async-tokio is implemented in rust and uses tokio-rs under the hood.
 
@@ -37,3 +38,9 @@ License
 -------
 
 ``async-tokio`` is offered under the Apache 2.0 licenses.
+
+
+.. |Build Status| image:: https://travis-ci.org/PyO3/tokio.svg?branch=master
+                  :target: https://travis-ci.org/PyO3/tokio
+.. |Join the dev chat at https://gitter.im/PyO3/Lobby| image:: https://img.shields.io/gitter/room/nwjs/nw.js.svg
+   :target: https://gitter.im/PyO3/Lobby
