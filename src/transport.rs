@@ -57,7 +57,10 @@ pub struct BytesMsg {
 
 pub enum TcpTransportMessage {
     Bytes(BytesMsg),
+    Pause,
+    Resume,
     Close,
+    Shutdown,
 }
 
 
@@ -138,6 +141,7 @@ py_class!(pub class PyTcpTransport |py| {
     data _data_received: PyObject;
     data _transport: Sender<TcpTransportMessage>;
     data _drain: RefCell<Option<PyFuture>>;
+    data _drained: Cell<bool>;
     data _closing: Cell<bool>;
     data _info: HashMap<&'static str, PyObject>;
 
@@ -169,6 +173,7 @@ py_class!(pub class PyTcpTransport |py| {
                 py, "data argument must be a bytes-like object"))
         };
 
+        self._drained(py).set(false);
         let _ = self._transport(py).send(
             TcpTransportMessage::Bytes(BytesMsg{buf:data, len:len}));
         Ok(())
@@ -198,32 +203,46 @@ py_class!(pub class PyTcpTransport |py| {
     // write all data to socket
     //
     def drain(&self) -> PyResult<PyFuture> {
-        if let Some(ref fut) = *self._drain(py).borrow() {
-            Ok(fut.clone_ref(py))
+        if self._drained(py).get() {
+            Ok(PyFuture::done_fut(py, self._loop(py), py.None())?)
         } else {
-            let fut = PyFuture::new(py, self._loop(py))?;
-            *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
-            Ok(fut)
+            if let Some(ref fut) = *self._drain(py).borrow() {
+                Ok(fut.clone_ref(py))
+            } else {
+                let fut = PyFuture::new(py, self._loop(py))?;
+                *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
+                Ok(fut)
+            }
         }
     }
 
     def pause_reading(&self) -> PyResult<()> {
+        let _ = self._transport(py).send(TcpTransportMessage::Pause);
         Ok(())
     }
 
     def resume_reading(&self) -> PyResult<()> {
+        let _ = self._transport(py).send(TcpTransportMessage::Resume);
         Ok(())
     }
 
     //
     // close transport
     //
-    def close(&self) -> PyResult<PyObject> {
+    def close(&self) -> PyResult<()> {
         if ! self._closing(py).get() {
             self._closing(py).set(true);
             let _ = self._transport(py).send(TcpTransportMessage::Close);
         }
-        Ok(py.None())
+        Ok(())
+    }
+
+    //
+    // abort transport
+    //
+    def abort(&self) -> PyResult<()> {
+        let _ = self._transport(py).send(TcpTransportMessage::Shutdown);
+        Ok(())
     }
 
 });
@@ -242,7 +261,7 @@ impl PyTcpTransport {
         let transport = PyTcpTransport::create_instance(
             py, evloop.clone_ref(py),
             connection_lost, data_received, sender,
-            RefCell::new(None), Cell::new(false), info)?;
+            RefCell::new(None), Cell::new(true), Cell::new(false), info)?;
 
         // connection made
         let _ = connection_made.call(py, (transport.clone_ref(py),), None)
@@ -286,22 +305,37 @@ impl PyTcpTransport {
 
     pub fn data_received(&self, bytes: Bytes) {
         with_py(|py| {
-            let _ = pybytes::PyBytes::new(py, bytes)
-                .map_err(|e| e.into_log(py, "can not create PyBytes"))
-                .map(|bytes| self._loop(py).with(
-                    py, "data_received error", |py|
-                    self._data_received(py).call(py, (bytes,), None)));
-        });
+            self._loop(py).with(
+                py, "data_received error", |py| {
+                    let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    self._data_received(py).call(py, (bytes,), None)
+                }
+            )});
     }
 
     pub fn drained(&self) {
-        match self._drain(GIL::python()).borrow_mut().take() {
-            Some(fut) => with_py(|py| {let _ = fut.set(py, Ok(py.None()));}),
+        let gil = Python::acquire_gil();
+        let py = gil.python();
+
+        self._drained(py).set(true);
+        match self._drain(py).borrow_mut().take() {
+            Some(fut) => {
+                let _ = fut.set(py, Ok(py.None()));
+            },
             None => (),
         }
+        drop(py);
     }
 }
 
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum TransportState {
+    Normal,
+    Paused,
+    Closing,
+    Closed,
+}
 
 struct TcpTransport<T> {
     framed: Framed<T, TcpTransportCodec>,
@@ -311,7 +345,7 @@ struct TcpTransport<T> {
     buf: Option<BytesMsg>,
     incoming_eof: bool,
     flushed: bool,
-    closing: bool,
+    state: TransportState,
 }
 
 impl<T> TcpTransport<T>
@@ -330,7 +364,7 @@ impl<T> TcpTransport<T>
             buf: None,
             incoming_eof: false,
             flushed: true,
-            closing: false,
+            state: TransportState::Normal,
         }
     }
 }
@@ -343,24 +377,6 @@ impl<T> Future for TcpTransport<T>
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        // poll for incoming data
-        if !self.incoming_eof {
-            loop {
-                match self.framed.poll() {
-                    Ok(Async::Ready(Some(bytes))) => {
-                        self.transport.data_received(bytes);
-                        continue
-                    },
-                    Ok(Async::Ready(None)) => {
-                        self.incoming_eof = true;
-                    },
-                    Ok(Async::NotReady) => (),
-                    Err(err) => return Err(err.into()),
-                }
-                break
-            }
-        }
-
         loop {
             let bytes = if let Some(bytes) = self.buf.take() {
                 Some(bytes)
@@ -370,9 +386,38 @@ impl<T> Future for TcpTransport<T>
                         match msg {
                             TcpTransportMessage::Bytes(bytes) =>
                                 Some(bytes),
-                            TcpTransportMessage::Close => {
-                                self.closing = true;
+                            TcpTransportMessage::Pause => {
+                                match self.state {
+                                    TransportState::Normal => {
+                                        self.state = TransportState::Paused;
+                                        return self.poll()
+                                    }
+                                    _ => (),
+                                }
                                 None
+                            },
+                            TcpTransportMessage::Resume => {
+                                match self.state {
+                                    TransportState::Paused => {
+                                        self.state = TransportState::Normal;
+                                        return self.poll()
+                                    }
+                                    _ => (),
+                                }
+                                None
+                            },
+                            TcpTransportMessage::Close => {
+                                match self.state {
+                                    TransportState::Normal | TransportState::Paused =>
+                                        self.state = TransportState::Closing,
+                                    _ => (),
+                                }
+                                None
+                            }
+                            TcpTransportMessage::Shutdown => {
+                                self.state = TransportState::Closed;
+                                let _ = self.framed.get_mut().shutdown();
+                                return Ok(Async::Ready(()))
                             }
                         }
                     }
@@ -399,6 +444,24 @@ impl<T> Future for TcpTransport<T>
             }
         }
 
+        // poll for incoming data
+        if !self.incoming_eof && self.state != TransportState::Paused {
+            loop {
+                match self.framed.poll() {
+                    Ok(Async::Ready(Some(bytes))) => {
+                        self.transport.data_received(bytes);
+                        continue
+                    },
+                    Ok(Async::Ready(None)) => {
+                        self.incoming_eof = true;
+                    },
+                    Ok(Async::NotReady) => (),
+                    Err(err) => return Err(err.into()),
+                }
+                break
+            }
+        }
+
         // flush sink
         if !self.flushed {
             self.flushed = self.framed.poll_complete()?.is_ready();
@@ -409,7 +472,7 @@ impl<T> Future for TcpTransport<T>
         }
 
         // close
-        if self.closing {
+        if self.state == TransportState::Closing {
             if self.incoming_eof {
                 return Ok(Async::Ready(()))
             }
