@@ -151,6 +151,14 @@ py_class!(pub class PyTcpTransport |py| {
 
     def get_extra_info(&self, name: PyString,
                        default: Option<PyObject> = None) -> PyResult<PyObject> {
+        if self._closing(py).get() {
+            return
+                match default {
+                    Some(val) => Ok(val),
+                    None => Ok(py.None())
+                };
+        }
+
         if let Some(val) = self._info(py).get(name.to_string(py)?.as_ref()) {
             Ok(val.clone_ref(py))
         } else {
@@ -241,6 +249,7 @@ py_class!(pub class PyTcpTransport |py| {
     // abort transport
     //
     def abort(&self) -> PyResult<()> {
+        self._closing(py).set(true);
         let _ = self._transport(py).send(TcpTransportMessage::Shutdown);
         Ok(())
     }
@@ -349,7 +358,7 @@ struct TcpTransport<T> {
 }
 
 impl<T> TcpTransport<T>
-    where T: AsyncRead + AsyncWrite
+    where T: AsyncRead + AsyncWrite + AsRawFd
 {
 
     fn new(socket: T,
@@ -452,11 +461,12 @@ impl<T> Future for TcpTransport<T>
                         self.transport.data_received(bytes);
                         continue
                     },
-                    Ok(Async::Ready(None)) => {
-                        self.incoming_eof = true;
-                    },
-                    Ok(Async::NotReady) => (),
-                    Err(err) => return Err(err.into()),
+                    Ok(Async::Ready(None)) =>
+                        self.incoming_eof = true,
+                    Ok(Async::NotReady) =>
+                        (),
+                    Err(err) =>
+                        return Err(err.into()),
                 }
                 break
             }

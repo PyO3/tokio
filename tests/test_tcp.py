@@ -6,6 +6,7 @@
 import asyncio
 import socket
 import sys
+import threading
 
 import pytest
 import uvloop
@@ -508,6 +509,19 @@ def test_tcp_handle_exception_in_connection_made(loop):
     assert loop.run_until_complete(connection_lost_called) is None
 
 
+@pytest.mark.parametrize('backlog', (1.1, '1'))
+def _test_create_server_float_backlog(loop, backlog):
+    # asyncio spits out a warning we cannot suppress
+
+    async def runner(bl):
+        await loop.create_server(
+            asyncio.Protocol,
+            None, 0, backlog=bl)
+
+    with pytest.raises(TypeError):
+        loop.run_until_complete(runner(backlog))
+
+
 def test_many_small_writes(loop):
     N = 10000
     TOTAL = 0
@@ -570,8 +584,100 @@ def test_many_small_writes(loop):
     loop.run_until_complete(run())
 
 
+def _test_tcp_handle_abort_in_connection_made(loop):
+    async def server(reader, writer):
+        try:
+            await reader.read()
+        finally:
+            writer.close()
+
+    class Proto(asyncio.Protocol):
+        def connection_made(self, tr):
+            tr.abort()
+
+    srv = loop.run_until_complete(asyncio.start_server(
+        server,
+        '127.0.0.1', 0,
+        family=socket.AF_INET,
+        loop=loop))
+
+    async def runner():
+        tr, pr = await asyncio.wait_for(
+            loop.create_connection(
+                Proto, *srv.sockets[0].getsockname()),
+            timeout=1.0, loop=loop)
+
+        # Asyncio would return a closed socket, which we
+        # can't do: the transport was aborted, hence there
+        # is no FD to attach a socket to (to make
+        # get_extra_info() work).
+        assert tr.get_extra_info('socket') is None
+        tr.close()
+
+    loop.run_until_complete(runner())
+    srv.close()
+    loop.run_until_complete(srv.wait_closed())
+
+
+def test_connect_accepted_socket(loop, server_ssl=None, client_ssl=None):
+
+    class MyProto(MyBaseProto):
+
+        def connection_lost(self, exc):
+            super().connection_lost(exc)
+            loop.call_soon(loop.stop)
+
+        def data_received(self, data):
+            super().data_received(data)
+            self.transport.write(expected_response)
+
+    lsock = socket.socket()
+    lsock.bind(('127.0.0.1', 0))
+    lsock.listen(1)
+    addr = lsock.getsockname()
+
+    message = b'test data'
+    response = None
+    expected_response = b'roger'
+
+    def client():
+        nonlocal response
+        try:
+            csock = socket.socket()
+            if client_ssl is not None:
+                csock = client_ssl.wrap_socket(csock)
+            csock.connect(addr)
+            csock.sendall(message)
+            response = csock.recv(99)
+            csock.close()
+        except Exception as exc:
+            print("Failure in client thread in test_connect_accepted_socket",
+                  exc)
+
+    thread = threading.Thread(target=client, daemon=True)
+    thread.start()
+
+    conn, _ = lsock.accept()
+    proto = MyProto(loop=loop)
+    proto.loop = loop
+    f = loop.create_task(
+        loop.connect_accepted_socket(
+            (lambda: proto), conn, ssl=server_ssl))
+    loop.run_forever()
+    conn.close()
+    lsock.close()
+
+    thread.join(1)
+    assert not thread.is_alive()
+    assert proto.state == 'CLOSED'
+    assert proto.nbytes == len(message)
+    assert response == expected_response
+    tr, _ = f.result()
+    tr.close()
+
+
 @pytest.mark.skipif(not hasattr(socket, 'AF_UNIX'), reason='no Unix sockets')
-def _test_create_connection_wrong_sock(loop):
+def test_create_connection_wrong_sock(loop):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     with sock:
         coro = loop.create_connection(MyBaseProto, sock=sock)

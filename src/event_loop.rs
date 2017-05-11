@@ -144,14 +144,18 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Return a task object.
     //
-    def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
+    def create_task(&self, coro: PyObject) -> PyResult<PyObject> {
         if self._debug(py).get() {
             if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
 
-        PyTask::new(py, coro, &self)
+        if let Ok(fut) = PyFuture::downcast_from(py, coro.clone_ref(py)) {
+            Ok(fut.into_object())
+        } else {
+            Ok(PyTask::new(py, coro, &self)?.into_object())
+        }
     }
 
     //
@@ -1475,8 +1479,10 @@ py_class!(pub class TokioEventLoop |py| {
             let sock = if let Some(sock) = sock {
                 // Try to use supplied python connected socket object
                 if ! self.is_stream_socket(py, &sock)? {
-                    return Err(PyErr::new::<exc::ValueError, _>(
-                        py, format!("A Stream Socket was expected, got {:?}", sock)))
+                    return Ok(PyFuture::done_res(
+                        py, &self,
+                        Err(PyErr::new::<exc::ValueError, _>(
+                            py, format!("A Stream Socket was expected, got {:?}", sock))))?)
                 }
 
                 // check if socket is UNIX domain socket
@@ -1699,6 +1705,66 @@ py_class!(pub class TokioEventLoop |py| {
         Ok(fut)
     }
 
+    // Handle an accepted connection.
+    //
+    // This is used by servers that accept connections outside of
+    // asyncio but that use asyncio to handle connections.
+    //
+    // This method is a coroutine.  When completed, the coroutine
+    // returns a (transport, protocol) pair.
+    def connect_accepted_socket(&self, protocol_factory: PyObject, sock: PyObject,
+                                ssl: Option<PyObject> = None) -> PyResult<PyFuture> {
+        if ! self.is_stream_socket(py, &sock)? {
+            return Err(PyErr::new::<exc::ValueError, _>(
+                py, format!("A Stream Socket was expected, got {:?}", sock)))
+        }
+
+        let fileno = self.clone_socket_fd(py, &sock)?;
+        let addr = self.addr_from_socket(py, sock)?;
+
+        // create TcpStream object
+        let stream = unsafe {
+            net::TcpStream::from_raw_fd(fileno as RawFd)
+        };
+
+        // tokio stream
+        let stream = match TcpStream::from_stream(stream, self.href()) {
+            Ok(stream) => stream,
+            Err(err) => return Err(err.to_pyerr(py)),
+        };
+
+        let waiter = PyFuture::new(py, &self)?;
+        let peer = stream.peer_addr().expect("should never happen");
+
+        let result = transport::tcp_transport_factory(
+            &self, true, &protocol_factory, &ssl,
+            None, stream, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
+
+        // client future
+        let fut = PyFuture::new(py, &self)?;
+        let fut_err = fut.clone_ref(py);
+        let fut_conn = fut.clone_ref(py);
+
+        // wait until transport get ready
+        self.handle(py).spawn(
+            waiter.then(move |_| {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+
+                match result {
+                    Ok(transport) => {
+                        let _ = fut_conn.set(py, Ok(transport.to_py_tuple(py).into_object()));
+                    },
+                    Err(err) => {
+                        let _ = fut_err.set(py, Err(err.to_pyerr(py)));
+                    },
+                }
+                Ok(())
+            }));
+
+        Ok(fut)
+    }
+
     // Return an exception handler, or None if the default one is in use.
     def get_exception_handler(&self) -> PyResult<PyObject> {
         Ok(self._exception_handler(py).borrow().clone_ref(py))
@@ -1863,7 +1929,7 @@ py_class!(pub class TokioEventLoop |py| {
                     py, "loop argument must agree with Future"))
             }
             py.allow_threads(|| self.run_future(Box::new(fut)))
-        // asyncio.Future
+            // asyncio.Future
         } else if fut.hasattr(py, "_asyncio_future_blocking")? {
             let l = fut.getattr(py, "_loop")?;
             if l != self.to_py_object(py).into_object() {
@@ -1991,11 +2057,15 @@ impl TokioEventLoop {
                 let result = core.0.run(
                     fut.select2(sel).then(|res| {
                         match res {
-                            Ok(future::Either::A((res, _))) => future::ok(
-                                RunStatus::PyRes(res)),
-                            Ok(future::Either::B((res, _))) =>
-                                future::ok(res),
-                            Err(err) => future::err(err),
+                            Ok(future::Either::A((res, _))) => {
+                                future::ok(RunStatus::PyRes(res))
+                            },
+                            Ok(future::Either::B((res, _))) => {
+                                future::ok(res)
+                            },
+                            Err(err) => {
+                                future::err(err)
+                            },
                         }
                     }));
 
@@ -2059,6 +2129,19 @@ impl TokioEventLoop {
             Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
         } else {
             Ok(fileno)
+        }
+    }
+
+    // clone socket
+    fn clone_socket_fd(&self, py: Python, sock: &PyObject) -> PyResult<c_int> {
+        let fd = self.get_socket_fd(py, sock)?;
+        let fd = unsafe {
+            libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0)
+        };
+        if fd == -1 {
+            Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+        } else {
+            Ok(fd)
         }
     }
 

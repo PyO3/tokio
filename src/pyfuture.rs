@@ -505,7 +505,7 @@ impl future::Future for _PyFuture {
                 Err(err) => Err(err),
             }
         } else {
-            Err(unsync::oneshot::Canceled)
+            Ok(Async::Ready(with_py(|py| self.get(py))))
         }
     }
 }
