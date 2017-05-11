@@ -1,17 +1,22 @@
 #![allow(unused_variables)]
+use std::cell::RefCell;
 use std::net::SocketAddr;
+use std::os::unix::io::RawFd;
 
 use cpython::*;
 
 use addrinfo::AddrInfo;
+use utils::Classes;
 
 
 py_class!(pub class Socket |py| {
+    data fd: Option<RawFd>;
     data family: i32;
     data socktype: i32;
     data proto: i32;
     data sockaddr: SocketAddr;
     data peername: Option<SocketAddr>;
+    data socket: RefCell<Option<PyObject>>;
     
     property family {
         get(&slf) -> PyResult<i32> {
@@ -53,8 +58,22 @@ py_class!(pub class Socket |py| {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "detach method is not supported."))
     }
 
-    def dup(&self) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
+    def dup(&self) -> PyResult<PyObject> {
+        if let Some(ref sock) = *self.socket(py).borrow() {
+            return sock.call_method(py, "dup", NoArgs, None)
+        }
+
+        if let Some(fd) = *self.fd(py) {
+            let sock = Classes.Socket.call(
+                py, "socket", (
+                    self.family(py), self.socktype(py), self.proto(py), fd), None)?;
+
+            let res = sock.call_method(py, "dup", NoArgs, None);
+            *self.socket(py).borrow_mut() = Some(sock);
+            res
+        } else {
+            Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
+        }
     }
 
     def fileno(&self) -> PyResult<i32> {
@@ -191,20 +210,21 @@ py_class!(pub class Socket |py| {
 impl Socket {
     pub fn new(py: Python, addr: &AddrInfo) -> PyResult<Socket> {
         Socket::create_instance(
-            py,
+            py, None,
             addr.family.to_int() as i32,
             addr.socktype.to_int() as i32,
             addr.protocol.to_int() as i32,
-            addr.sockaddr.clone(), None)
+            addr.sockaddr.clone(), None, RefCell::new(None))
     }
 
-    pub fn new_peer(py: Python, addr: &AddrInfo, peer: SocketAddr) -> PyResult<Socket> {
+    pub fn new_peer(py: Python, addr: &AddrInfo,
+                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<Socket> {
         Socket::create_instance(
-            py,
+            py, fd,
             addr.family.to_int() as i32,
             addr.socktype.to_int() as i32,
             addr.protocol.to_int() as i32,
             addr.sockaddr.clone(),
-            Some(peer))
+            Some(peer), RefCell::new(None))
     }
 }
