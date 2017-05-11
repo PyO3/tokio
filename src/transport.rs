@@ -78,7 +78,7 @@ pub fn tcp_transport_factory<T>(
     let mut info: HashMap<&'static str, PyObject> = HashMap::new();
 
     if let (Some(ref addr), Some(peer)) = (addr, peer) {
-        let sock = Socket::new_peer(py, addr, peer)?;
+        let sock = Socket::new_peer(py, addr, peer, Some(socket.as_raw_fd()))?;
         info.insert("sockname", sock.getsockname(py)?.into_object());
         info.insert("peername", sock.getpeername(py)?.into_object());
         info.insert("socket", sock.clone_ref(py).into_object());
