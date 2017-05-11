@@ -40,6 +40,12 @@ pub struct WorkingClasses {
     pub ExtractStack: PyObject,
 }
 
+impl WorkingClasses {
+    pub fn print_stack(&self, py: Python) {
+        let _ = Classes.Traceback.call(py, "print_stack", NoArgs, None);
+    }
+}
+
 lazy_static! {
     pub static ref Classes: WorkingClasses = {
         let gil = Python::acquire_gil();

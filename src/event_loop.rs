@@ -1,8 +1,9 @@
 #![allow(unused_variables)]
 
 use std::io;
-use std::thread;
 use std::net;
+use std::borrow::Borrow;
+use std::borrow::BorrowMut;
 use std::error::Error;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
@@ -18,7 +19,7 @@ use libc;
 use cpython::*;
 use futures::{future, sync, unsync, Async, Future, Stream};
 use futures::sync::{oneshot};
-use tokio_core::reactor::{Core, CoreId, Remote};
+use tokio_core::reactor::{self, CoreId, Remote};
 use tokio_signal;
 use tokio_signal::unix::Signal;
 use tokio_core::net::TcpStream;
@@ -34,65 +35,58 @@ use http;
 use signals;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
-use pyunsafe::{GIL, Handle, OneshotSender};
+use pyunsafe::{GIL, Core, Handle, OneshotSender};
 use transport;
 
 
 thread_local!(
-    pub static ID: RefCell<Option<CoreId>> = RefCell::new(None);
-    pub static CORE: RefCell<Option<Core>> = RefCell::new(None);
+    pub static ID: Cell<Option<CoreId>> = Cell::new(None);
 );
 
-pub fn no_loop_exc(py: Python) -> PyErr {
-    let cur = thread::current();
-    PyErr::new::<exc::RuntimeError, _>(
-        py, format!("There is no current event loop in thread {}.",
-                    cur.name().unwrap_or("unknown")))
-}
-
 pub fn new_event_loop(py: Python) -> PyResult<TokioEventLoop> {
-    CORE.with(|cell| {
-        let core = Core::new().unwrap();
-        let handle = core.handle();
-        let signals = signals::Signals::new(&handle);
+    let core = reactor::Core::new().unwrap();
+    let handle = core.handle();
+    let remote = core.remote();
+    let signals = signals::Signals::new(&handle);
 
-        let evloop = TokioEventLoop::create_instance(
-            py, core.id(),
-            Handle::new(handle),
-            core.remote(),
-            Instant::now(),
-            addrinfo::start_workers(3),
-            RefCell::new(None),
-            RefCell::new(None),
-            RefCell::new(py.None()),
-            Cell::new(100),
-            Cell::new(false),
-            RefCell::new(None),
-            signals,
-            RefCell::new(HashMap::new()),
-            RefCell::new(HashMap::new()),
-        );
-
-        ID.with(|cell| { *cell.borrow_mut() = Some(core.id())});
-        *cell.borrow_mut() = Some(core);
-        evloop
-    })
+    TokioEventLoop::create_instance(
+        py,
+        Cell::new(Some(core.id())),
+        RefCell::new(Some(Core::new(core))),
+        Handle::new(handle),
+        remote,
+        Instant::now(),
+        addrinfo::start_workers(3),
+        RefCell::new(None),
+        RefCell::new(None),
+        RefCell::new(py.None()),
+        Cell::new(100),
+        Cell::new(false),
+        RefCell::new(None),
+        signals,
+        RefCell::new(HashMap::new()),
+        RefCell::new(HashMap::new()),
+    )
 }
 
-pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
-    let check = ID.with(|cell| {
-        match *cell.borrow() {
-            None => false,
-            Some(ref curr_id) => return curr_id == id,
-        }
-    });
+pub fn thread_safe_check(py: Python, id: Option<CoreId>) -> Option<PyErr> {
+    if let Some(id) = id {
+        let check = ID.with(|cell| {
+            match cell.borrow().get() {
+                None => true,
+                Some(ref curr_id) => return *curr_id == id,
+            }
+        });
 
-    if !check {
-        Some(PyErr::new::<exc::RuntimeError, _>(
-            py, "Non-thread-safe operation invoked on an event loop \
-                 other than the current one"))
+        if !check {
+            Some(PyErr::new::<exc::RuntimeError, _>(
+                py, "Non-thread-safe operation invoked on an event loop \
+                     other than the current one"))
+        } else {
+            None
+        }
     } else {
-        None
+        Some(PyErr::new::<exc::RuntimeError, _>(py, "Event loop is closed"))
     }
 }
 
@@ -100,14 +94,14 @@ pub fn thread_safe_check(py: Python, id: &CoreId) -> Option<PyErr> {
 enum RunStatus {
     Stopped,
     CtrlC,
-    NoEventLoop,
     Error,
     PyRes(PyResult<PyObject>),
 }
 
 
 py_class!(pub class TokioEventLoop |py| {
-    data id: CoreId;
+    data id: Cell<Option<CoreId>>;
+    data core: RefCell<Option<Core>>;
     data handle: Handle;
     data _remote: Remote;
     data _instant: Instant;
@@ -137,7 +131,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def create_future(&self) -> PyResult<PyFuture> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -152,7 +146,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def create_task(&self, coro: PyObject) -> PyResult<PyTask> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -192,7 +186,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def call_soon(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -252,7 +246,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def call_later(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -286,7 +280,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def call_at(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -322,7 +316,7 @@ py_class!(pub class TokioEventLoop |py| {
     // Raise RuntimeError if there is a problem setting up the handler.
     def add_signal_handler(&self, *args, **kwargs) -> PyResult<()> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -811,12 +805,7 @@ py_class!(pub class TokioEventLoop |py| {
     }
 
     def is_closed(&self) -> PyResult<bool> {
-        ID.with(|cell| {
-            match *cell.borrow() {
-                None => Ok(true),
-                Some(_) => Ok(false),
-            }
-        })
+        if let None = self.id(py).get() { Ok(true) } else { Ok(false) }
     }
 
     //
@@ -839,8 +828,20 @@ py_class!(pub class TokioEventLoop |py| {
         }
 
         // drop CORE
-        ID.with(|cell| {cell.borrow_mut().take()});
-        CORE.with(|cell| {cell.borrow_mut().take()});
+        self.core(py).borrow_mut().take();
+
+        if let Some(id) = self.id(py).borrow_mut().take() {
+            ID.with(|mut cell| {
+                let curr = if let Some(gid) = cell.borrow().get() {
+                    gid == id
+                } else {
+                    false
+                };
+                if curr {
+                    cell.borrow_mut().take();
+                }
+            });
+        }
 
         Ok(py.None())
     }
@@ -850,7 +851,7 @@ py_class!(pub class TokioEventLoop |py| {
     //
     def run_in_executor(&self, *args, **kwargs) -> PyResult<PyObject> {
         if self._debug(py).get() {
-            if let Some(err) = thread_safe_check(py, &self.id(py)) {
+            if let Some(err) = thread_safe_check(py, self.id(py).get()) {
                 return Err(err)
             }
         }
@@ -1768,56 +1769,57 @@ py_class!(pub class TokioEventLoop |py| {
     //
     // Run until stop() is called
     //
-    def run_forever(&self, stop_on_sigint: bool = true) -> PyResult<PyObject> {
+    def run_forever(&self) -> PyResult<PyObject> {
         if let Some(_) = *self._runner(py).borrow() {
             return Err(PyErr::new::<exc::RuntimeError, _>(
                 py, "Event loop is running already"));
         }
 
         let res = py.allow_threads(|| {
-            CORE.with(|cell| {
-                match *cell.borrow_mut() {
-                    Some(ref mut core) => {
-                        let rx = {
-                            let gil = Python::acquire_gil();
-                            let py = gil.python();
+            if let Some(ref mut core) = *self.core(GIL::python()).borrow_mut() {
+                let rx = {
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
 
-                            // set cancel sender
-                            let (tx, rx) = oneshot::channel();
-                            *(self._runner(py)).borrow_mut() = Some(tx);
-                            rx
-                        };
+                    // set cancel sender
+                    let (tx, rx) = oneshot::channel();
+                    *(self._runner(py)).borrow_mut() = Some(tx);
+                    rx
+                };
 
-                        // SIGINT
-                        if stop_on_sigint {
-                            let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
-                            let ctrlc = core.run(ctrlc_f).unwrap().into_future();
+                // SIGINT
+                let ctrlc_f = tokio_signal::ctrl_c(self.href());
+                let ctrlc = core.0.run(ctrlc_f).unwrap().into_future();
 
-                            let fut = rx.select2(ctrlc).then(|res| {
-                                match res {
-                                    Ok(future::Either::A((res, _))) => match res {
-                                        Ok(_) => future::ok(RunStatus::Stopped),
-                                        Err(err) => future::ok(RunStatus::PyRes(Err(err))),
-                                    },
-                                    Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
-                                    Err(_) => future::err(()),
-                                }
-                            });
-                            match core.run(fut) {
-                                Ok(status) => status,
-                                Err(_) => RunStatus::Error,
-                            }
-                        } else {
-                            match core.run(rx) {
-                                Ok(_) => RunStatus::Stopped,
-                                Err(_) => RunStatus::Error,
-                            }
-                        }
+                let fut = rx.select2(ctrlc).then(|res| {
+                    match res {
+                        Ok(future::Either::A((res, _))) => match res {
+                            Ok(_) => future::ok(RunStatus::Stopped),
+                            Err(err) => future::ok(RunStatus::PyRes(Err(err))),
+                        },
+                        Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
+                        Err(_) => future::err(()),
                     }
-                    None => RunStatus::NoEventLoop,
+                });
+
+                let old = ID.with(|cell| cell.borrow().get());
+                ID.with(|mut cell| cell.borrow_mut().set(self.id(GIL::python()).get()));
+
+                let result = match core.0.run(fut) {
+                    Ok(status) => status,
+                    Err(_) => RunStatus::Error,
+                };
+                if let Some(id) = old {
+                    ID.with(|cell| cell.set(Some(id)));
                 }
-            })
-        });
+
+                Ok(result)
+            } else {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+                return Err(PyErr::new::<exc::RuntimeError, _>(py, "Event loop is closed"));
+            }
+        })?;
 
         let _ = self.stop(py);
 
@@ -1827,7 +1829,6 @@ py_class!(pub class TokioEventLoop |py| {
             RunStatus::PyRes(res) => res,
             RunStatus::Error => Err(
                 PyErr::new::<exc::RuntimeError, _>(py, "Unknown runtime error")),
-            RunStatus::NoEventLoop => Err(no_loop_exc(py)),
         }
     }
 
@@ -1955,50 +1956,62 @@ impl TokioEventLoop {
     pub fn run_future(&self,
                       fut: Box<Future<Item=PyResult<PyObject>,
                                       Error=unsync::oneshot::Canceled>>) -> PyResult<PyObject> {
-        let res = CORE.with(|cell| {
-            match *cell.borrow_mut() {
-                Some(ref mut core) => {
-                    let rx = {
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
+        let res = match *self.core(GIL::python()).borrow_mut() {
+            Some(ref mut core) => {
+                let rx = {
+                    let gil = Python::acquire_gil();
+                    let py = gil.python();
 
-                        // stop fut
-                        let (tx, rx) = oneshot::channel();
-                        *(self._runner(py)).borrow_mut() = Some(tx);
+                    // stop fut
+                    let (tx, rx) = oneshot::channel();
+                    *(self._runner(py)).borrow_mut() = Some(tx);
 
-                        rx
-                    };
+                    rx
+                };
 
-                    // SIGINT
-                    let ctrlc_f = tokio_signal::ctrl_c(&core.handle());
-                    let ctrlc = core.run(ctrlc_f).unwrap().into_future();
+                // SIGINT
+                let ctrlc_f = tokio_signal::ctrl_c(self.href());
+                let ctrlc = core.0.run(ctrlc_f).unwrap().into_future();
 
-                    let sel = rx.select2(ctrlc).then(|res| {
-                        match res {
-                            Ok(future::Either::A((res, _))) => match res {
-                                Ok(_) => future::ok(RunStatus::Stopped),
-                                Err(err) => future::ok(RunStatus::PyRes(Err(err))),
-                            },
+                let sel = rx.select2(ctrlc).then(|res| {
+                    match res {
+                        Ok(future::Either::A((res, _))) => match res {
                             Ok(_) => future::ok(RunStatus::Stopped),
+                            Err(err) => future::ok(RunStatus::PyRes(Err(err))),
+                        },
+                        Ok(_) => future::ok(RunStatus::Stopped),
+                        Err(err) => future::err(err),
+                    }
+                });
+
+                let old = ID.with(|cell| cell.borrow().get());
+                ID.with(|mut cell| cell.borrow_mut().set(self.id(GIL::python()).get()));
+
+                // wait for completion
+                let result = core.0.run(
+                    fut.select2(sel).then(|res| {
+                        match res {
+                            Ok(future::Either::A((res, _))) => future::ok(
+                                RunStatus::PyRes(res)),
+                            Ok(future::Either::B((res, _))) =>
+                                future::ok(res),
                             Err(err) => future::err(err),
                         }
-                    });
+                    }));
 
-                    // wait for completion
-                    core.run(
-                        fut.select2(sel).then(|res| {
-                            match res {
-                                Ok(future::Either::A((res, _))) => future::ok(
-                                    RunStatus::PyRes(res)),
-                                Ok(future::Either::B((res, _))) =>
-                                    future::ok(res),
-                                Err(err) => future::err(err),
-                            }
-                        }))
+                if let Some(id) = old {
+                    ID.with(|cell| cell.set(Some(id)));
                 }
-                None => Ok(RunStatus::NoEventLoop),
-            }
-        });
+
+                result
+            },
+            None => {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+                return Err(PyErr::new::<exc::RuntimeError, _>(py, "Event loop is closed"));
+            },
+        };
+
         let gil = Python::acquire_gil();
         let py = gil.python();
 
@@ -2006,8 +2019,6 @@ impl TokioEventLoop {
 
         match res {
             Ok(RunStatus::PyRes(res)) => res,
-            Ok(RunStatus::NoEventLoop) => Err(PyErr::new::<exc::RuntimeError, _>(
-                py, "There is event loop in current thread.")),
             Err(_) => Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
             _ => Ok(py.None())
         }

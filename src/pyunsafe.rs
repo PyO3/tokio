@@ -27,6 +27,29 @@ impl GIL {
 
 // tokio handle
 #[doc(hidden)]
+pub struct Core (pub reactor::Core);
+
+unsafe impl Send for Core {}
+
+impl Core {
+    pub fn new(core: reactor::Core) -> Core {
+        Core(core)
+    }
+    pub fn into(self) -> reactor::Core {
+        self.0
+    }
+}
+
+impl Deref for Core {
+    type Target = reactor::Core;
+
+    fn deref(&self) -> &reactor::Core {
+        &self.0
+    }
+}
+
+// tokio handle
+#[doc(hidden)]
 pub struct Handle {
     pub h: reactor::Handle,
 }
