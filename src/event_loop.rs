@@ -1431,7 +1431,7 @@ py_class!(pub class TokioEventLoop |py| {
     // (transport, protocol) pair.
     //
     def create_connection(&self, protocol_factory: PyObject,
-                          host: Option<PyString>, port: Option<u16> = None,
+                          host: Option<PyString> = None, port: Option<u16> = None,
                           ssl: Option<PyObject> = None,
                           family: i32 = 0, proto: i32 = 0,
                           flags: i32 = addrinfo::AI_PASSIVE,
@@ -2100,7 +2100,7 @@ impl TokioEventLoop {
 
             net::SocketAddr::V4(net::SocketAddrV4::new(ip, port))
 
-        } else if addr.len(py) == 6 {
+        } else if addr.len(py) == 4 {
             // parse INET6
             let s = PyString::downcast_from(py, addr.get_item(py, 0))?;
             let ip = if let Ok(ip) = net::Ipv6Addr::from_str(
