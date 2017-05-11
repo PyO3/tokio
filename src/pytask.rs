@@ -158,9 +158,11 @@ py_class!(pub class PyTask |py| {
     // Python GC support
     //
     def __traverse__(&self, visit) {
-        if let Some(ref callbacks) = self._fut(py).borrow().callbacks {
-            for callback in callbacks.iter() {
-                visit.call(callback)?;
+        if let Ok(fut) = self._fut(py).try_borrow() {
+            if let Some(ref callbacks) = fut.callbacks {
+                for callback in callbacks.iter() {
+                    visit.call(callback)?;
+                }
             }
         }
         Ok(())
