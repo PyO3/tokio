@@ -29,7 +29,7 @@ is to create a virtual env, so that you'll have ``python`` commands pointing to 
 
 2. ``cd tokio``
 
-3. ``make buid``
+3. ``make build``
 
 4. ``make test``
 
