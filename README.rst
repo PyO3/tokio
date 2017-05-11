@@ -34,6 +34,25 @@ is to create a virtual env, so that you'll have ``python`` commands pointing to 
 4. ``make test``
 
 
+Status
+------
+
+At the moment async-tokio works on unix like systems only.
+Supported api:
+
+* time api (call_at, call_later)
+* sockets api (sock_xxx methods)
+* tcp (client/server)
+* unix domain socket
+* dns
+* pipes
+* subprocess
+* signals
+* executors
+
+UDP support is missing.
+
+
 License
 -------
 
