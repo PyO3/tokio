@@ -95,9 +95,9 @@ def pytest_configure(config):
         LOOP_FACTORY_IDS.append('uvloop')
 
     if tokio is not None:
-        LOOP_FACTORIES.append(tokio.TokioLoopPolicy)
+        LOOP_FACTORIES.append(tokio.EventLoopPolicy)
         LOOP_FACTORY_IDS.append('tokio')
-        LOOP_FACTORIES2.append(tokio.TokioLoopPolicy)
+        LOOP_FACTORIES2.append(tokio.EventLoopPolicy)
         LOOP_FACTORY_IDS2.append('tokio')
 
     asyncio.set_event_loop(None)
