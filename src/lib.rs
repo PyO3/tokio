@@ -13,7 +13,6 @@ extern crate tokio_signal;
 extern crate tokio_uds;
 extern crate boxfnonce;
 extern crate env_logger;
-extern crate backtrace;
 #[macro_use] extern crate log;
 #[macro_use] extern crate cpython;
 #[macro_use] extern crate lazy_static;
