@@ -317,6 +317,7 @@ impl PyTcpTransport {
             self._loop(py).with(
                 py, "data_received error", |py| {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    // let bytes = PyBytes::new(py, bytes.as_ref());
                     self._data_received(py).call(py, (bytes,), None)
                 }
             )});

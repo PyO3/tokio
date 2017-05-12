@@ -14,9 +14,8 @@ You can create an instance of the loop manually, using:
 
     import tokio
     
-    policy = tokio.TokioLoopPolicy()
+    policy = tokio.EventLoopPolicy()
     asyncio.set_event_loop_policy(policy)
-    asyncio.set_event_loop(tokio.new_event_loop())
 
 
 Development of tokio loop

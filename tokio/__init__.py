@@ -14,14 +14,14 @@ from . import _tokio
 
 gc.enable()  # noqa
 
-__all__ = ('new_event_loop', 'TokioLoopPolicy')
+__all__ = ('new_event_loop', 'EventLoopPolicy')
 
 
 def new_event_loop():
     return _tokio.new_event_loop()
 
 
-class TokioLoopPolicy(DefaultEventLoopPolicy):
+class EventLoopPolicy(DefaultEventLoopPolicy):
     """Event loop policy."""
 
     def _loop_factory(self):
