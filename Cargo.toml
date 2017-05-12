@@ -34,6 +34,7 @@ tokio-uds = "0.1"
 
 # native-tls = "0.1"
 # tokio-tls = "0.1"
+# backtrace = "0.2"
 
 [dependencies.cpython]
 # path = "../tokio/rust-cpython"

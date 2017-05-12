@@ -87,7 +87,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "gcc"
-version = "0.3.45"
+version = "0.3.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -95,7 +95,7 @@ name = "http-muncher"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "gcc 0.3.45 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.46 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -374,7 +374,7 @@ dependencies = [
 "checksum cpython 0.1.0 (git+https://github.com/PyO3/rust-cpython.git)" = "<none>"
 "checksum env_logger 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "e3856f1697098606fc6cb97a93de88ca3f3bc35bb878c725920e6e82ecf05e83"
 "checksum futures 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)" = "55f0008e13fc853f79ea8fc86e931486860d4c4c156cdffb59fa5f7fa833660a"
-"checksum gcc 0.3.45 (registry+https://github.com/rust-lang/crates.io-index)" = "40899336fb50db0c78710f53e87afc54d8c7266fb76262fecc78ca1a7f09deae"
+"checksum gcc 0.3.46 (registry+https://github.com/rust-lang/crates.io-index)" = "181e3cebba1d663bd92eb90e2da787e10597e027eb00de8d742b260a7850948f"
 "checksum http-muncher 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0f0d8b98946459faf4fdfdf6d90e9aac08967b9b9ffe67005d2b1f99115da741"
 "checksum httparse 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "77f756bed9ee3a83ce98774f4155b42a31b787029013f3a7d83eca714e500e21"
 "checksum iovec 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "29d062ee61fccdf25be172e70f34c9f6efc597e1fb8f6526e8437b2046ab26be"

@@ -49,7 +49,6 @@ pub type TransportFactory = fn(
     TcpStream, Option<&AddrInfo>, Option<SocketAddr>,
     Option<PyFuture>) -> io::Result<InitializedTransport>;
 
-
 pub struct BytesMsg {
     pub buf: buffer::PyBuffer,
     pub len: usize,
@@ -144,6 +143,7 @@ py_class!(pub class PyTcpTransport |py| {
     data _drained: Cell<bool>;
     data _closing: Cell<bool>;
     data _info: HashMap<&'static str, PyObject>;
+    data _paused: Cell<bool>;
 
     def is_closing(&self) -> PyResult<bool> {
         Ok(self._closing(py).get())
@@ -225,11 +225,13 @@ py_class!(pub class PyTcpTransport |py| {
     }
 
     def pause_reading(&self) -> PyResult<()> {
+        self._paused(py).set(true);
         let _ = self._transport(py).send(TcpTransportMessage::Pause);
         Ok(())
     }
 
     def resume_reading(&self) -> PyResult<()> {
+        self._paused(py).set(false);
         let _ = self._transport(py).send(TcpTransportMessage::Resume);
         Ok(())
     }
@@ -270,7 +272,8 @@ impl PyTcpTransport {
         let transport = PyTcpTransport::create_instance(
             py, evloop.clone_ref(py),
             connection_lost, data_received, sender,
-            RefCell::new(None), Cell::new(true), Cell::new(false), info)?;
+            RefCell::new(None), Cell::new(true), Cell::new(false),
+            info, Cell::new(false))?;
 
         // connection made
         let _ = connection_made.call(py, (transport.clone_ref(py),), None)
@@ -312,15 +315,16 @@ impl PyTcpTransport {
         });
     }
 
-    pub fn data_received(&self, bytes: Bytes) {
+    pub fn data_received(&self, bytes: Bytes) -> bool {
         with_py(|py| {
             self._loop(py).with(
                 py, "data_received error", |py| {
-                    let bytes = pybytes::PyBytes::new(py, bytes)?;
-                    // let bytes = PyBytes::new(py, bytes.as_ref());
+                    // let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    let bytes = PyBytes::new(py, bytes.as_ref());
                     self._data_received(py).call(py, (bytes,), None)
-                }
-            )});
+                });
+            ! self._paused(py).get()
+        })
     }
 
     pub fn drained(&self) {
@@ -400,21 +404,19 @@ impl<T> Future for TcpTransport<T>
                                 match self.state {
                                     TransportState::Normal => {
                                         self.state = TransportState::Paused;
-                                        return self.poll()
                                     }
                                     _ => (),
                                 }
-                                None
+                                return self.poll()
                             },
                             TcpTransportMessage::Resume => {
                                 match self.state {
                                     TransportState::Paused => {
                                         self.state = TransportState::Normal;
-                                        return self.poll()
                                     }
                                     _ => (),
                                 }
-                                None
+                                return self.poll()
                             },
                             TcpTransportMessage::Close => {
                                 match self.state {
@@ -459,7 +461,10 @@ impl<T> Future for TcpTransport<T>
             loop {
                 match self.framed.poll() {
                     Ok(Async::Ready(Some(bytes))) => {
-                        self.transport.data_received(bytes);
+                        if ! self.transport.data_received(bytes) {
+                            self.state = TransportState::Paused;
+                            break
+                        }
                         continue
                     },
                     Ok(Async::Ready(None)) =>
