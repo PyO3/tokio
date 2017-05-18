@@ -311,22 +311,6 @@ pub struct PyTaskIter {
 #[py::methods]
 impl PyTaskIter {
 
-    fn __iter__(&self, py: Python) -> PyResult<PyTaskIter> {
-        Ok(self.clone_ref(py))
-    }
-
-    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
-        let fut = self._fut(py);
-
-        if !fut._fut(py).done() {
-            *fut._blocking_mut(py) = true;
-            Ok(Some(fut.clone_ref(py).into_object()))
-        } else {
-            let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
-        }
-    }
-
     fn send(&self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
         self.__next__(py)
     }
@@ -346,6 +330,26 @@ impl PyTaskIter {
         }
 
         self.__next__(py)
+    }
+}
+
+#[py::proto]
+impl PyIterProtocol for PyTaskIter {
+
+    fn __iter__(&self, py: Python) -> PyResult<PyTaskIter> {
+        Ok(self.clone_ref(py))
+    }
+
+    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
+        let fut = self._fut(py);
+
+        if !fut._fut(py).done() {
+            *fut._blocking_mut(py) = true;
+            Ok(Some(fut.clone_ref(py).into_object()))
+        } else {
+            let res = fut.result(py)?;
+            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
+        }
     }
 }
 

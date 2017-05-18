@@ -651,13 +651,6 @@ impl PyFuture {
     }
 
     //
-    // awaitable
-    //
-    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
-        PyFutureIter::create_instance(py, self.clone_ref(py))
-    }
-
-    //
     // isfuture support
     //
     #[getter(_asyncio_future_blocking)]
@@ -756,6 +749,14 @@ impl PyGCProtocol for PyFuture {
 impl PyAsyncProtocol for PyFuture {
 
     fn __await__(&self, py: Python) -> PyResult<PyFutureIter> {
+        PyFutureIter::create_instance(py, self.clone_ref(py))
+    }
+}
+
+#[py::proto]
+impl PyIterProtocol for PyFuture {
+
+    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
         PyFutureIter::create_instance(py, self.clone_ref(py))
     }
 }
@@ -873,22 +874,6 @@ pub struct PyFutureIter {
 #[py::methods]
 impl PyFutureIter {
 
-    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
-        Ok(self.clone_ref(py))
-    }
-
-    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
-        let fut = self._fut(py);
-
-        if !fut._fut(py).done() {
-            *fut._blocking_mut(py) = true;
-            Ok(Some(fut.clone_ref(py).into_object()))
-        } else {
-            let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
-        }
-    }
-
     fn send(&self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
         self.__next__(py)
     }
@@ -907,5 +892,24 @@ impl PyFutureIter {
         }
 
         self.__next__(py)
+    }
+}
+
+#[py::proto]
+impl PyIterProtocol for PyFutureIter {
+    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
+        Ok(self.clone_ref(py))
+    }
+
+    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
+        let fut = self._fut(py);
+
+        if !fut._fut(py).done() {
+            *fut._blocking_mut(py) = true;
+            Ok(Some(fut.clone_ref(py).into_object()))
+        } else {
+            let res = fut.result(py)?;
+            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
+        }
     }
 }

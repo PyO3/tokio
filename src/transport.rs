@@ -321,8 +321,8 @@ impl PyTcpTransport {
         with_py(|py| {
             self._loop(py).with(
                 py, "data_received error", |py| {
-                    let bytes = pybytes::PyBytes::new(py, bytes)?;
-                    // let bytes = PyBytes::new(py, bytes.as_ref());
+                    // let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    let bytes = PyBytes::new(py, bytes.as_ref());
                     self._data_received(py).call(py, (bytes,), None)
                 });
             ! *self._paused(py)
@@ -395,7 +395,7 @@ impl<T> Future for TcpTransport<T>
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        println!("POLL");
+        // println!("POLL");
         loop {
             let bytes = if let Some(bytes) = self.buf.take() {
                 Some(bytes)
