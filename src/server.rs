@@ -1,8 +1,7 @@
 use std::io;
 use std::net;
-use std::cell::RefCell;
 use std::os::unix;
-use cpython::*;
+use pyo3::*;
 use futures::{unsync, Async, Stream, Future, Poll};
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
@@ -89,7 +88,7 @@ pub fn create_server(py: Python, evloop: TokioEventLoop,
     }
 
     let srv = TokioServer::create_instance(
-        py, evloop.clone_ref(py), PyTuple::new(py, &sockets[..]), RefCell::new(Some(handles)))?;
+        py, evloop.clone_ref(py), PyTuple::new(py, &sockets[..]), Some(handles))?;
 
     Ok(srv.into_object())
 }
@@ -114,7 +113,7 @@ pub fn create_sock_server(py: Python, evloop: TokioEventLoop,
                           transport_factory, proto_factory, ssl, rx);
 
             let srv = TokioServer::create_instance(
-                py, evloop, PyTuple::new(py, &[sock]), RefCell::new(Some(handles)))?;
+                py, evloop, PyTuple::new(py, &[sock]), Some(handles))?;
 
             Ok(srv.into_object())
         },
@@ -134,25 +133,29 @@ pub fn create_uds_server(py: Python, evloop: TokioEventLoop,
     UdsServer::serve(evloop.clone_ref(py), listener.incoming(), proto_factory, ssl, rx);
 
     let srv = TokioServer::create_instance(
-        py, evloop, PyTuple::new(py, &[]), RefCell::new(Some(handles)))?;
+        py, evloop, PyTuple::new(py, &[]), Some(handles))?;
 
     Ok(srv.into_object())
 }
 
 
-py_class!(pub class TokioServer |py| {
-    data _loop: TokioEventLoop;
-    data sockets: PyTuple;
-    data stop_handle: RefCell<Option<Vec<pyunsafe::OneshotSender<()>>>>;
+#[py::class]
+pub struct TokioServer {
+    _loop: TokioEventLoop,
+    _sockets: PyTuple,
+    stop_handle: Option<Vec<pyunsafe::OneshotSender<()>>>,
+}
 
-    property sockets {
-        get(&slf) -> PyResult<PyObject> {
-            Ok(slf.sockets(py).clone_ref(py).into_object())
-        }
+#[py::methods]
+impl TokioServer {
+
+    #[getter]
+    fn sockets(&self, py: Python) -> PyResult<PyObject> {
+        Ok(self._sockets(py).clone_ref(py).into_object())
     }
 
-    def close(&self) -> PyResult<PyObject> {
-        let handles = self.stop_handle(py).borrow_mut().take();
+    fn close(&self, py: Python) -> PyResult<PyObject> {
+        let handles = self.stop_handle_mut(py).take();
         if let Some(handles) = handles {
             for h in handles {
                 let _ = h.send(());
@@ -161,13 +164,12 @@ py_class!(pub class TokioServer |py| {
         Ok(py.None())
     }
 
-    def wait_closed(&self) -> PyResult<PyFuture> {
+    fn wait_closed(&self, py: Python) -> PyResult<PyFuture> {
         let fut = PyFuture::new(py, self._loop(py))?;
         fut.set_result(py, true.to_py_object(py).into_object())?;
         Ok(fut)
     }
-
-});
+}
 
 
 struct Server {

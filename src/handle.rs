@@ -1,38 +1,40 @@
-use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
-use cpython::*;
+use pyo3::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
 use ::{TokioEventLoop, Classes, with_py};
 
+#[py::class]
+pub struct PyHandle {
+    _loop: TokioEventLoop,
+    _cancelled: bool,
+    _cancel_handle: Option<oneshot::Sender<()>>,
+    _callback: PyObject,
+    _args: PyTuple,
+    _source_traceback: Option<PyObject>,
+}
 
-py_class!(pub class PyHandle |py| {
-    data _loop: TokioEventLoop;
-    data _cancelled: Cell<bool>;
-    data _cancel_handle: RefCell<Option<oneshot::Sender<()>>>;
-    data _callback: PyObject;
-    data _args: PyTuple;
-    data _source_traceback: Option<PyObject>;
+#[py::methods]
+impl PyHandle {
 
-    def cancel(&self) -> PyResult<PyObject> {
-        self._cancelled(py).set(true);
+    fn cancel(&self, py: Python) -> PyResult<PyObject> {
+        *self._cancelled_mut(py) = true;
 
-        if let Some(tx) = self._cancel_handle(py).borrow_mut().take() {
+        if let Some(tx) = self._cancel_handle_mut(py).take() {
             let _ = tx.send(());
         }
 
         Ok(py.None())
     }
 
-    property _cancelled {
-        get(&slf) -> PyResult<bool> {
-            Ok(slf._cancelled(py).get())
-        }
+    #[getter(_cancelled)]
+    fn get_cancelled(&self, py: Python) -> PyResult<bool> {
+        Ok(*self._cancelled(py))
     }
-});
+}
 
 
 impl PyHandle {
@@ -48,7 +50,7 @@ impl PyHandle {
         };
 
         PyHandle::create_instance(
-            py, evloop.clone_ref(py), Cell::new(false), RefCell::new(None), callback, args, tb)
+            py, evloop.clone_ref(py), false, None, callback, args, tb)
     }
 
     pub fn call_soon(&self, py: Python) {
@@ -74,7 +76,7 @@ impl PyHandle {
     pub fn call_later(&self, py: Python, when: Duration) {
         // cancel onshot
         let (cancel, rx) = oneshot::channel::<()>();
-        *self._cancel_handle(py).borrow_mut() = Some(cancel);
+        *self._cancel_handle_mut(py) = Some(cancel);
 
         // we need to hold reference, otherwise python will release handle object
         let h = self.clone_ref(py);
@@ -94,7 +96,7 @@ impl PyHandle {
     pub fn run(&self) {
         let _: PyResult<()> = with_py(|py| {
             // check if cancelled
-            if self._cancelled(py).get() {
+            if *self._cancelled(py) {
                 return Ok(())
             }
 

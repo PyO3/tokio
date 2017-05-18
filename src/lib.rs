@@ -1,3 +1,4 @@
+#![feature(proc_macro, specialization)]
 #![recursion_limit="1024"]
 
 extern crate mio;
@@ -14,7 +15,7 @@ extern crate tokio_uds;
 extern crate boxfnonce;
 extern crate env_logger;
 #[macro_use] extern crate log;
-#[macro_use] extern crate cpython;
+#[macro_use] extern crate pyo3;
 #[macro_use] extern crate lazy_static;
 
 pub mod fut;
@@ -34,6 +35,7 @@ mod server;
 mod client;
 mod signals;
 
+pub use pyo3::*;
 pub use utils::{Classes, PyLogger, ToPyErr, with_py};
 pub use pybytes::PyBytes;
 pub use pyfuture::PyFuture;
@@ -44,7 +46,7 @@ pub use server::create_server;
 pub use client::create_connection;
 
 
-py_module_initializer!(tokio, init__tokio, PyInit__tokio, |py, m| {
+py_module_init!(tokio, PyInit__tokio, |py, m| {
     let _ = env_logger::init();
 
     m.add(py, "__doc__", "Asyncio event loop based on tokio-rs")?;
@@ -55,7 +57,7 @@ py_module_initializer!(tokio, init__tokio, PyInit__tokio, |py, m| {
 });
 
 
-pub fn register_classes(py: cpython::Python, m: &cpython::PyModule) -> cpython::PyResult<()> {
+pub fn register_classes(py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>(py)?;
     m.add_class::<pytask::PyTask>(py)?;
     m.add_class::<pytask::PyTaskIter>(py)?;

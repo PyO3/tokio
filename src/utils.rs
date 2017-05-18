@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
 
-use cpython;
-use cpython::*;
+use pyo3;
+use pyo3::*;
 use std::io;
 use std::os::raw::c_long;
 use std::time::Duration;
@@ -106,11 +106,11 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
 
 pub fn iscoroutine(ob: &PyObject) -> bool {
     unsafe {
-        (cpython::_detail::ffi::PyCoro_Check(ob.as_ptr()) != 0 ||
-         cpython::_detail::ffi::PyCoroWrapper_Check(ob.as_ptr()) != 0 ||
-         cpython::_detail::ffi::PyAsyncGen_Check(ob.as_ptr()) != 0 ||
-         cpython::_detail::ffi::PyIter_Check(ob.as_ptr()) != 0 ||
-         cpython::_detail::ffi::PyGen_Check(ob.as_ptr()) != 0)
+        (pyo3::ffi::PyCoro_Check(ob.as_ptr()) != 0 ||
+         pyo3::ffi::PyCoroWrapper_Check(ob.as_ptr()) != 0 ||
+         pyo3::ffi::PyAsyncGen_Check(ob.as_ptr()) != 0 ||
+         pyo3::ffi::PyIter_Check(ob.as_ptr()) != 0 ||
+         pyo3::ffi::PyGen_Check(ob.as_ptr()) != 0)
     }
 }
 
@@ -233,7 +233,7 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option
         } else {
             Ok(Some(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32)))
         }
-    } else if let Ok(i) = PyInt::downcast_from(py, value) {
+    } else if let Ok(i) = PyLong::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
             if val < 0 {
                 Ok(None)
@@ -261,7 +261,7 @@ pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
         } else {
             Ok(0)
         }
-    } else if let Ok(i) = PyInt::downcast_from(py, value) {
+    } else if let Ok(i) = PyLong::downcast_from(py, value) {
         if let Ok(val) = i.as_object().extract::<c_long>(py) {
             if val < 0 {
                 Ok(0)

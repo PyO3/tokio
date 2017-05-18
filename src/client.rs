@@ -1,6 +1,6 @@
 use std::io;
 use std::net;
-use cpython::*;
+use pyo3::*;
 use futures::{future, Future};
 use net2::TcpBuilder;
 use tokio_core::net::TcpStream;

@@ -244,7 +244,7 @@ impl ParseHeaderName {
         }
     }
 
-    //#[inline]
+    #[inline]
     fn completed(&self) -> bool {
         match *self {
             ParseHeaderName::Connection(idx) => idx+1 == CONNECTION.len,

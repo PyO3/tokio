@@ -1,8 +1,6 @@
-#![allow(unused_variables)]
-
 use std::cell;
 use std::mem;
-use cpython::*;
+use pyo3::*;
 use futures::{future, unsync, Async, Poll};
 use futures::unsync::oneshot;
 use boxfnonce::SendBoxFnOnce;
@@ -510,14 +508,19 @@ impl future::Future for _PyFuture {
     }
 }
 
-py_class!(pub class PyFuture |py| {
-    data _fut: cell::RefCell<_PyFuture>;
-    data _blocking: cell::Cell<bool>;
+#[py::class]
+pub struct PyFuture {
+    _fut: _PyFuture,
+    _blocking: bool,
 
     // reference to asyncio.Future if any
-    data _pyfut: cell::RefCell<Option<PyObject>>;
+    _pyfut: Option<PyObject>,
+}
 
-    def __repr__(&self) -> PyResult<PyString> {
+#[py::methods]
+impl PyFuture {
+
+    fn __repr__(&self, py: Python) -> PyResult<PyString> {
         let repr = Classes.Helpers.call(py, "future_repr", ("Future", &self,), None)?;
         Ok(PyString::downcast_from(py, repr)?)
     }
@@ -529,21 +532,21 @@ py_class!(pub class PyFuture |py| {
     // change the future's state to cancelled, schedule the callbacks and
     // return True.
     //
-    def cancel(&self) -> PyResult<bool> {
+    pub fn cancel(&self, py: Python) -> PyResult<bool> {
         // handle wrapped asyncio.Future object
-        if let Some(fut) = self._pyfut(py).borrow_mut().take() {
+        if let Some(fut) = self._pyfut_mut(py).take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "cancel", NoArgs, None);
         }
 
-        Ok(self._fut(py).borrow_mut().cancel(py, self.clone_ref(py).into_object()))
+        Ok(self._fut_mut(py).cancel(py, self.clone_ref(py).into_object()))
     }
 
     //
     // Return True if the future was cancelled
     //
-    def cancelled(&self) -> PyResult<bool> {
-        Ok(self._fut(py).borrow().cancelled())
+    pub fn cancelled(&self, py: Python) -> PyResult<bool> {
+        Ok(self._fut(py).cancelled())
     }
 
     // Return True if the future is done.
@@ -551,8 +554,8 @@ py_class!(pub class PyFuture |py| {
     // Done means either that a result / exception are available, or that the
     // future was cancelled.
     //
-    def done(&self) -> PyResult<bool> {
-        Ok(self._fut(py).borrow().done())
+    fn done(&self, py: Python) -> PyResult<bool> {
+        Ok(self._fut(py).done())
     }
 
     //
@@ -562,17 +565,16 @@ py_class!(pub class PyFuture |py| {
     // future's result isn't yet available, raises InvalidStateError.  If
     // the future is done and has an exception set, this exception is raised.
     //
-    def result(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().result(py, true)
+    fn result(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).result(py, true)
     }
 
     //
     // asyncio.gather() uses protected attribute
     //
-    property _result {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().get_result(py)
-        }
+    #[getter(_result)]
+    fn get_result(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).get_result(py)
     }
 
     //
@@ -583,17 +585,16 @@ py_class!(pub class PyFuture |py| {
     // CancelledError.  If the future isn't done yet, raises
     // InvalidStateError.
     //
-    def exception(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().exception(py)
+    fn exception(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).exception(py)
     }
 
     //
     // asyncio.gather() uses protected attribute
     //
-    property _exception {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().get_exception(py)
-        }
+    #[getter(_exception)]
+    fn get_exception(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).get_exception(py)
     }
 
     //
@@ -603,8 +604,8 @@ py_class!(pub class PyFuture |py| {
     // the future is already done when this is called, the callback is
     // scheduled with call_soon.
     //
-    def add_done_callback(&self, f: PyObject) -> PyResult<PyObject> {
-        self._fut(py).borrow_mut().add_done_callback(
+    fn add_done_callback(&self, py: Python, f: PyObject) -> PyResult<PyObject> {
+        self._fut_mut(py).add_done_callback(
             py, f, self.clone_ref(py).into_object())
     }
 
@@ -613,23 +614,23 @@ py_class!(pub class PyFuture |py| {
     //
     // Returns the number of callbacks removed.
     //
-    def remove_done_callback(&self, f: PyObject) -> PyResult<u32> {
-        self._fut(py).borrow_mut().remove_done_callback(py, f)
+    fn remove_done_callback(&self, py: Python, f: PyObject) -> PyResult<u32> {
+        self._fut_mut(py).remove_done_callback(py, f)
     }
 
-    //
-    // Mark the future done and set its result.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
-    def set_result(&self, result: PyObject) -> PyResult<PyObject> {
+    ///
+    /// Mark the future done and set its result.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
+    pub fn set_result(&self, py: Python, result: PyObject) -> PyResult<PyObject> {
         // handle wrapped asyncio.Future object
-        if let Some(fut) = self._pyfut(py).borrow_mut().take() {
+        if let Some(fut) = self._pyfut_mut(py).take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "set_result", (result.clone_ref(py),), None);
         }
-        self._fut(py).borrow_mut().set_result(
+        self._fut_mut(py).set_result(
             py, result, self.clone_ref(py).into_object(), false)
     }
 
@@ -639,75 +640,48 @@ py_class!(pub class PyFuture |py| {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    def set_exception(&self, exception: PyObject) -> PyResult<PyObject> {
+    fn set_exception(&self, py: Python, exception: PyObject) -> PyResult<PyObject> {
         // handle wrapped asyncio.Future object
-        if let Some(fut) = self._pyfut(py).borrow_mut().take() {
+        if let Some(fut) = self._pyfut_mut(py).take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "set_exception", (exception.clone_ref(py),), None);
         }
-        self._fut(py).borrow_mut().set_exception(
+        self._fut_mut(py).set_exception(
             py, exception, self.clone_ref(py).into_object(), false)
     }
 
     //
     // awaitable
     //
-    def __iter__(&self) -> PyResult<PyFutureIter> {
-        PyFutureIter::create_instance(py, self.clone_ref(py))
-    }
-
-    def __await__(&self) -> PyResult<PyFutureIter> {
+    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
         PyFutureIter::create_instance(py, self.clone_ref(py))
     }
 
     //
     // isfuture support
     //
-    property _asyncio_future_blocking {
-        get(&slf) -> PyResult<bool> {
-            Ok(slf._blocking(py).get())
-        }
-        set(&slf, value: bool) -> PyResult<()> {
-            slf._blocking(py).set(value);
-            Ok(())
-        }
+    #[getter(_asyncio_future_blocking)]
+    fn get_asyncio_future_blocking(&self, py: Python) -> PyResult<bool> {
+        Ok(*self._blocking(py))
     }
-
-    //
-    // Python GC support
-    //
-    def __traverse__(&self, visit) {
-        if let Ok(fut) = self._fut(py).try_borrow() {
-            if let Some(ref callbacks) = fut.callbacks {
-                for callback in callbacks.iter() {
-                    visit.call(callback)?;
-                }
-            }
-        }
+    #[setter(_asyncio_future_blocking)]
+    fn set_asyncio_future_blocking(&self, py: Python, value: bool) -> PyResult<()> {
+        *self._blocking_mut(py) = value;
         Ok(())
     }
 
-    def __clear__(&self) {
-        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
-        if let Some(callbacks) = callbacks {
-            for cb in callbacks {
-                cb.release_ref(py);
-            }
-        }
-    }
-
     // handler for asyncio.Future completion
-    def _fut_done(&self, fut: PyObject) -> PyResult<PyObject> {
+    fn _fut_done(&self, py: Python, fut: PyObject) -> PyResult<PyObject> {
         // drop reference to wrapped asyncio.Future
         // if it is None, then self initiated _pyfut completion
-        if let None = self._pyfut(py).borrow_mut().take() {
+        if let None = self._pyfut_mut(py).take() {
             return Ok(py.None())
         }
 
         // check fut is cancelled
         if let Ok(cancelled) = fut.call_method(py, "cancelled", NoArgs, None) {
             if cancelled.is_true(py)? {
-                let _ = self._fut(py).borrow_mut().cancel(
+                let _ = self._fut_mut(py).cancel(
                     py, self.clone_ref(py).into_object());
                 return Ok(py.None())
             }
@@ -716,7 +690,7 @@ py_class!(pub class PyFuture |py| {
         // if fut completed with exception
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
             if exc != py.None() {
-                let _ = self._fut(py).borrow_mut().set_exception(
+                let _ = self._fut_mut(py).set_exception(
                     py, exc, self.clone_ref(py).into_object(), true);
                 return Ok(py.None())
             }
@@ -724,7 +698,7 @@ py_class!(pub class PyFuture |py| {
 
         // if fut completed with normal result
         if let Ok(result) = fut.call_method(py, "result", NoArgs, None) {
-            let _ = self._fut(py).borrow_mut().set_result(
+            let _ = self._fut_mut(py).set_result(
                 py, result, self.clone_ref(py).into_object(), true);
             return Ok(py.None())
         }
@@ -733,53 +707,77 @@ py_class!(pub class PyFuture |py| {
     }
 
     // compatibility
-    property _loop {
-        get(&slf) -> PyResult<TokioEventLoop> {
-            Ok(slf._fut(py).borrow().evloop.clone_ref(py))
+    #[getter(_loop)]
+    fn get_loop(&self, py: Python) -> PyResult<TokioEventLoop> {
+        Ok(self._fut(py).evloop.clone_ref(py))
+    }
+
+    #[getter(_callbacks)]
+    fn get_callbacks(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref cb) = self._fut(py).callbacks {
+            Ok(PyTuple::new(py, cb.as_slice()).into_object())
+        } else {
+            Ok(py.None())
         }
     }
 
-    property _callbacks {
-        get(&slf) -> PyResult<PyObject> {
-            if let Some(ref cb) = slf._fut(py).borrow().callbacks {
-                Ok(PyTuple::new(py, cb.as_slice()).into_object())
-            } else {
-                Ok(py.None())
+    #[getter(_source_traceback)]
+    fn get_source_traceback(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).extract_traceback(py)
+    }
+}
+
+#[py::proto]
+impl PyGCProtocol for PyFuture {
+    //
+    // Python GC support
+    //
+    fn __traverse__(&self, py: Python, visit: PyVisit) -> Result<(), PyTraverseError> {
+        let fut = self._fut(py);
+        if let Some(ref callbacks) = fut.callbacks {
+            for callback in callbacks.iter() {
+                visit.call(callback)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn __clear__(&self, py: Python) {
+        let callbacks = mem::replace(&mut self._fut_mut(py).callbacks, None);
+        if let Some(callbacks) = callbacks {
+            for cb in callbacks {
+                cb.release_ref(py);
             }
         }
     }
+}
 
-    property _source_traceback {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().extract_traceback(py)
-        }
+#[py::proto]
+impl PyAsyncProtocol for PyFuture {
+
+    fn __await__(&self, py: Python) -> PyResult<PyFutureIter> {
+        PyFutureIter::create_instance(py, self.clone_ref(py))
     }
-});
+}
 
 impl PyFuture {
 
     pub fn new(py: Python, evloop: &TokioEventLoop) -> PyResult<PyFuture> {
         PyFuture::create_instance(
             py,
-            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
-            cell::Cell::new(false),
-            cell::RefCell::new(None))
+            _PyFuture::new(evloop.clone_ref(py)), false, None)
     }
 
     pub fn done_fut(py: Python, evloop: &TokioEventLoop, result: PyObject) -> PyResult<PyFuture> {
         PyFuture::create_instance(
             py,
-            cell::RefCell::new(_PyFuture::done_fut(evloop.clone_ref(py), result)),
-            cell::Cell::new(false),
-            cell::RefCell::new(None))
+            _PyFuture::done_fut(evloop.clone_ref(py), result), false, None)
     }
 
     pub fn done_res(py: Python, evloop: &TokioEventLoop, result: PyResult<PyObject>) -> PyResult<PyFuture> {
         PyFuture::create_instance(
             py,
-            cell::RefCell::new(_PyFuture::done_res(py, evloop.clone_ref(py), result)),
-            cell::Cell::new(false),
-            cell::RefCell::new(None))
+            _PyFuture::done_res(py, evloop.clone_ref(py), result), false, None)
     }
 
     /// wrap asyncio.Future into PyFuture
@@ -787,9 +785,7 @@ impl PyFuture {
     pub fn from_fut(py: Python, evloop: &TokioEventLoop, fut: PyObject) -> PyResult<PyFuture> {
         let f = PyFuture::create_instance(
             py,
-            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
-            cell::Cell::new(false),
-            cell::RefCell::new(Some(fut.clone_ref(py))))?;
+            _PyFuture::new(evloop.clone_ref(py)), false, Some(fut.clone_ref(py)))?;
 
         // add done callback to fut
         let f_obj = f.clone_ref(py).into_object();
@@ -800,12 +796,12 @@ impl PyFuture {
     }
 
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
-        self._fut(py).borrow().get(py)
+        self._fut(py).get(py)
     }
 
     pub fn set(&self, py: Python, result: PyResult<PyObject>) -> bool {
         // handle wrapped asyncio.Future object
-        if let Some(fut) = self._pyfut(py).borrow_mut().take() {
+        if let Some(fut) = self._pyfut_mut(py).take() {
             // TODO: add logging for exceptions
             match result {
                 Ok(ref res) => {
@@ -818,44 +814,44 @@ impl PyFuture {
             }
         }
 
-        self._fut(py).borrow_mut().set(py, result, self.clone_ref(py).into_object())
+        self._fut_mut(py).set(py, result, self.clone_ref(py).into_object())
     }
 
     pub fn state(&self, py: Python) -> State {
-        self._fut(py).borrow().state()
+        self._fut(py).state()
     }
 
     //
     // Add future completion callback
     //
     pub fn add_callback(&self, py: Python, cb: Callback) {
-        self._fut(py).borrow_mut().add_callback(py, cb);
+        self._fut_mut(py).add_callback(py, cb);
     }
 
     //
     // bloking
     //
     pub fn is_blocking(&self) -> bool {
-        self._blocking(GIL::python()).get()
+        *self._blocking(GIL::python())
     }
 
     pub fn set_blocking(&self, value: bool) {
-        self._blocking(GIL::python()).set(value)
+        *self._blocking_mut(GIL::python()) = value
     }
 
     //
     // helpers methods
     //
     pub fn is_same_loop(&self, py: Python, evloop: &TokioEventLoop) -> bool {
-        &self._fut(py).borrow().evloop == evloop
+        &self._fut_mut(py).evloop == evloop
     }
 
     pub fn is_done(&self, py: Python) -> bool {
-        self._fut(py).borrow().done()
+        self._fut(py).done()
     }
 
     pub fn is_cancelled(&self, py: Python) -> bool {
-        self._fut(py).borrow().cancelled()
+        self._fut(py).cancelled()
     }
 }
 
@@ -864,23 +860,28 @@ impl future::Future for PyFuture {
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self._fut(GIL::python()).borrow_mut().poll()
+        self._fut_mut(GIL::python()).poll()
     }
 }
 
 
-py_class!(pub class PyFutureIter |py| {
-    data _fut: PyFuture;
+#[py::class]
+pub struct PyFutureIter {
+    _fut: PyFuture
+}
 
-    def __iter__(&self) -> PyResult<PyFutureIter> {
+#[py::methods]
+impl PyFutureIter {
+
+    fn __iter__(&self, py: Python) -> PyResult<PyFutureIter> {
         Ok(self.clone_ref(py))
     }
 
-    def __next__(&self) -> PyResult<Option<PyObject>> {
+    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
         let fut = self._fut(py);
 
-        if !fut._fut(py).borrow().done() {
-            fut._blocking(py).set(true);
+        if !fut._fut(py).done() {
+            *fut._blocking_mut(py) = true;
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
@@ -888,12 +889,12 @@ py_class!(pub class PyFutureIter |py| {
         }
     }
 
-    def send(&self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+    fn send(&self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
         self.__next__(py)
     }
 
-    def throw(&self, tp: PyObject, val: Option<PyObject> = None,
-              _tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
+    fn throw(&self, py: Python, tp: PyObject, val: Option<PyObject>,
+             _tb: Option<PyObject>) -> PyResult<Option<PyObject>> {
 
         if Classes.Exception.is_instance(py, &tp) {
             PyErr::from_instance(py, tp).restore(py);
@@ -907,5 +908,4 @@ py_class!(pub class PyFutureIter |py| {
 
         self.__next__(py)
     }
-
-});
+}

@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::convert::Into;
 use std::collections::VecDeque;
-use cpython::*;
+use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{Async, AsyncSink, Stream, Future, Poll, Sink};
 use tokio_io::AsyncRead;

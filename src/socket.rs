@@ -1,65 +1,92 @@
 #![allow(unused_variables)]
-use std::cell::RefCell;
+
 use std::net::SocketAddr;
 use std::os::unix::io::RawFd;
 
-use cpython::*;
+use pyo3::*;
 
 use addrinfo::AddrInfo;
 use utils::Classes;
 
 
-py_class!(pub class Socket |py| {
-    data fd: Option<RawFd>;
-    data family: i32;
-    data socktype: i32;
-    data proto: i32;
-    data sockaddr: SocketAddr;
-    data peername: Option<SocketAddr>;
-    data socket: RefCell<Option<PyObject>>;
-    
-    property family {
-        get(&slf) -> PyResult<i32> {
-            Ok(*slf.family(py))
-        }
-    }
-    property _type {
-        get(&slf) -> PyResult<i32> {
-            Ok(*slf.socktype(py))
-        }
-    }
-    property proto {
-        get(&slf) -> PyResult<i32> {
-            Ok(*slf.proto(py))
-        }
+#[py::class]
+pub struct Socket {
+    fd: Option<RawFd>,
+    family: i32,
+    socktype: i32,
+    proto: i32,
+    sockaddr: SocketAddr,
+    peername: Option<SocketAddr>,
+    socket: Option<PyObject>,
+}
+
+impl Socket {
+    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<Socket> {
+        Socket::create_instance(
+            py, None,
+            addr.family.to_int() as i32,
+            addr.socktype.to_int() as i32,
+            addr.protocol.to_int() as i32,
+            addr.sockaddr.clone(), None, None)
     }
 
-    def accept(&self) -> PyResult<()> {
+    pub fn new_peer(py: Python, addr: &AddrInfo,
+                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<Socket> {
+        Socket::create_instance(
+            py, fd,
+            addr.family.to_int() as i32,
+            addr.socktype.to_int() as i32,
+            addr.protocol.to_int() as i32,
+            addr.sockaddr.clone(),
+            Some(peer), None)
+    }
+}
+
+
+#[py::methods]
+impl Socket {
+
+    #[getter]
+    fn get_family(&self, py: Python) -> PyResult<i32> {
+        Ok(*self.family(py))
+    }
+
+    #[getter]
+    fn get_type(&self, py: Python) -> PyResult<i32> {
+        Ok(*self.socktype(py))
+    }
+
+    #[getter]
+    fn get_proto(&self, py: Python) -> PyResult<i32> {
+        Ok(*self.proto(py))
+    }
+
+    fn accept(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "accept method is not supported."))
     }
 
-    def bind(&self, address) -> PyResult<()> {
+    fn bind(&self, py: Python, address: PyObject) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "bind method is not supported."))
     }
 
-    def close(&self) -> PyResult<()> {
+    fn close(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "close method is not supported."))
     }
 
-    def connect(&self, address) -> PyResult<()> {
+    fn connect(&self, py: Python, address: PyObject) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "connect method is not supported."))
     }
 
-    def connect_ex(&self, address) -> PyResult<()> {
+    fn connect_ex(&self, py: Python, address: PyObject) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "connect_ex method is not supported."))
     }
 
-    def detach(&self) -> PyResult<()> {
+    fn detach(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "detach method is not supported."))
     }
 
-    def dup(&self) -> PyResult<PyObject> {
-        if let Some(ref sock) = *self.socket(py).borrow() {
+    fn dup(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref sock) = *self.socket(py) {
             return sock.call_method(py, "dup", NoArgs, None)
         }
 
@@ -69,22 +96,22 @@ py_class!(pub class Socket |py| {
                     self.family(py), self.socktype(py), self.proto(py), fd), None)?;
 
             let res = sock.call_method(py, "dup", NoArgs, None);
-            *self.socket(py).borrow_mut() = Some(sock);
+            *self.socket_mut(py) = Some(sock);
             res
         } else {
             Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
         }
     }
 
-    def fileno(&self) -> PyResult<i32> {
+    fn fileno(&self, py: Python) -> PyResult<i32> {
         Ok(-1)
     }
 
-    def get_inheritable(&self) -> PyResult<()> {
+    fn get_inheritable(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    def getpeername(&self) -> PyResult<PyTuple> {
+    pub fn getpeername(&self, py: Python) -> PyResult<PyTuple> {
         match *self.peername(py) {
             None => Err(PyErr::new::<exc::OSError, _>(py, "Socket is not connected")),
             Some(addr) => match addr {
@@ -99,7 +126,7 @@ py_class!(pub class Socket |py| {
         }
     }
 
-    def getsockname(&self) -> PyResult<PyTuple> {
+    pub fn getsockname(&self, py: Python) -> PyResult<PyTuple> {
         match *self.sockaddr(py) {
             SocketAddr::V4(ref addr) => {
                 Ok((format!("{}", addr.ip()), addr.port()).to_py_tuple(py))
@@ -111,120 +138,97 @@ py_class!(pub class Socket |py| {
         }
     }
 
-    def getsockopt(&self, *args, **kwargs) -> PyResult<()> {
+    fn getsockopt(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "getsockopt method is not supported."))
     }
 
-    def gettimeout(&self, *args, **kwargs) -> PyResult<()> {
+    fn gettimeout(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "gettimeout method is not supported."))
     }
 
-    def ioctl(&self, *args, **kwargs) -> PyResult<()> {
+    fn ioctl(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "ioctl method is not supported."))
     }
 
-    def listen(&self, *args, **kwargs) -> PyResult<()> {
+    fn listen(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "listen method is not supported."))
     }
 
-    def makefile(&self, *args, **kwargs) -> PyResult<()> {
+    fn makefile(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "makefile method is not supported."))
     }
 
-    def recv(&self, *args, **kwargs) -> PyResult<()> {
+    fn recv(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "recv method is not supported."))
     }
 
-    def recvfrom(&self, *args, **kwargs) -> PyResult<()> {
+    fn recvfrom(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "recvfrom method is not supported."))
     }
 
-    def recvmsg(&self, *args, **kwargs) -> PyResult<()> {
+    fn recvmsg(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "recvmsg method is not supported."))
     }
 
-    def recvmsg_into(&self, *args, **kwargs) -> PyResult<()> {
+    fn recvmsg_into(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    def recvfrom_into(&self, *args, **kwargs) -> PyResult<()> {
+    fn recvfrom_into(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    def recv_into(&self, *args, **kwargs) -> PyResult<()> {
+    fn recv_into(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    def send(&self, *args, **kwargs) -> PyResult<()> {
+    fn send(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "send method is not supported."))
     }
 
-    def sendall(&self, *args, **kwargs) -> PyResult<()> {
+    fn sendall(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "sendall method is not supported."))
     }
 
-    def sendto(&self, *args, **kwargs) -> PyResult<()> {
+    fn sendto(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "sendto method is not supported."))
     }
 
-    def sendmsg(&self, *args, **kwargs) -> PyResult<()> {
+    fn sendmsg(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "sendmsg method is not supported."))
     }
 
-    def sendmsg_afalg(&self, *args, **kwargs) -> PyResult<()> {
+    fn sendmsg_afalg(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "sendmsg_afalg method is not supported."))
     }
 
     // we need to implement this
-    def sendfile(&self, *args, **kwargs) -> PyResult<()> {
+    fn sendfile(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "sendfile method is not supported."))
     }
 
-    def set_inheritable(&self, *args, **kwargs) -> PyResult<()> {
+    fn set_inheritable(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    def setblocking(&self, *args, **kwargs) -> PyResult<()> {
+    fn setblocking(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "setblocking method is not supported."))
     }
 
-    def settimeout(&self, *args, **kwargs) -> PyResult<()> {
+    fn settimeout(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "settimeout method is not supported."))
     }
 
-    def setsockopt(&self, *args, **kwargs) -> PyResult<()> {
+    fn setsockopt(&self, py: Python) -> PyResult<()> {
         // Err(PyErr::new::<exc::RuntimeError, _>(py, "setsockopt method is not supported."))
         Ok(())
     }
 
-    def shutdown(&self, *args, **kwargs) -> PyResult<()> {
+    fn shutdown(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "shutdown method is not supported."))
     }
 
-    def share(&self, *args, **kwargs) -> PyResult<()> {
+    fn share(&self, py: Python) -> PyResult<()> {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "share method is not supported."))
-    }
-
-});
-
-impl Socket {
-    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<Socket> {
-        Socket::create_instance(
-            py, None,
-            addr.family.to_int() as i32,
-            addr.socktype.to_int() as i32,
-            addr.protocol.to_int() as i32,
-            addr.sockaddr.clone(), None, RefCell::new(None))
-    }
-
-    pub fn new_peer(py: Python, addr: &AddrInfo,
-                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<Socket> {
-        Socket::create_instance(
-            py, fd,
-            addr.family.to_int() as i32,
-            addr.socktype.to_int() as i32,
-            addr.protocol.to_int() as i32,
-            addr.sockaddr.clone(),
-            Some(peer), RefCell::new(None))
     }
 }

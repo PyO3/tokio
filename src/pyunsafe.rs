@@ -4,7 +4,7 @@ use std::clone::Clone;
 use tokio_core::reactor;
 use futures::{Future, Poll};
 use futures::unsync::{mpsc, oneshot};
-use cpython::Python;
+use pyo3::Python;
 
 
 #[doc(hidden)]

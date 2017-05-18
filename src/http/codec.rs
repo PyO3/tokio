@@ -1,5 +1,5 @@
 use std::io;
-use cpython::*;
+use pyo3::*;
 use bytes::{Bytes, BytesMut};
 use tokio_io::codec::{Encoder, Decoder};
 

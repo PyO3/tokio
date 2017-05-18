@@ -1,8 +1,5 @@
-#![allow(unused_variables)]
-
-use std::cell;
 use std::mem;
-use cpython::*;
+use pyo3::*;
 use futures::{future, unsync, Poll};
 use boxfnonce::SendBoxFnOnce;
 
@@ -12,16 +9,16 @@ use pyunsafe::GIL;
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
-py_class!(pub class PyTask |py| {
-    data _fut: cell::RefCell<_PyFuture>;
-    data _waiter: cell::RefCell<Option<PyObject>>;
-    data _must_cancel: cell::Cell<bool>;
-    data _blocking: cell::Cell<bool>;
+#[py::class]
+pub struct PyTask {
+    _fut: _PyFuture,
+    _waiter: Option<PyObject>,
+    _must_cancel: bool,
+    _blocking: bool,
+}
 
-    def __repr__(&self) -> PyResult<PyString> {
-        let repr = Classes.Helpers.call(py, "future_repr", ("Task", &self,), None)?;
-        Ok(PyString::downcast_from(py, repr)?)
-    }
+#[py::methods]
+impl PyTask {
 
     //
     // Cancel the future and schedule callbacks.
@@ -30,13 +27,13 @@ py_class!(pub class PyTask |py| {
     // change the future's state to cancelled, schedule the callbacks and
     // return True.
     //
-    def cancel(&self) -> PyResult<bool> {
-        if !self._fut(py).borrow().done() {
-            if let Some(ref waiter) = *self._waiter(py).borrow() {
+    fn cancel(&self, py: Python) -> PyResult<bool> {
+        if !self._fut(py).done() {
+            if let Some(ref waiter) = *self._waiter(py) {
                 let _ = waiter.call_method(py, "cancel", NoArgs, None)?;
                 return Ok(true);
             }
-            self._must_cancel(py).set(true);
+            *self._must_cancel_mut(py) = true;
             Ok(true)
         } else {
             Ok(false)
@@ -46,8 +43,8 @@ py_class!(pub class PyTask |py| {
     //
     // Return True if the future was cancelled
     //
-    def cancelled(&self) -> PyResult<bool> {
-        Ok(self._fut(py).borrow().cancelled())
+    fn cancelled(&self, py: Python) -> PyResult<bool> {
+        Ok(self._fut(py).cancelled())
     }
 
     // Return True if the future is done.
@@ -55,8 +52,8 @@ py_class!(pub class PyTask |py| {
     // Done means either that a result / exception are available, or that the
     // future was cancelled.
     //
-    def done(&self) -> PyResult<bool> {
-        Ok(self._fut(py).borrow().done())
+    fn done(&self, py: Python) -> PyResult<bool> {
+        Ok(self._fut(py).done())
     }
 
     //
@@ -66,17 +63,16 @@ py_class!(pub class PyTask |py| {
     // future's result isn't yet available, raises InvalidStateError.  If
     // the future is done and has an exception set, this exception is raised.
     //
-    def result(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().result(py, true)
+    fn result(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).result(py, true)
     }
 
     //
     // asyncio.gather() uses attribute
     //
-    property _result {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().get_result(py)
-        }
+    #[getter(_result)]
+    fn get_result(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).get_result(py)
     }
 
     //
@@ -87,17 +83,16 @@ py_class!(pub class PyTask |py| {
     // CancelledError.  If the future isn't done yet, raises
     // InvalidStateError.
     //
-    def exception(&self) -> PyResult<PyObject> {
-        self._fut(py).borrow().exception(py)
+    fn exception(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).exception(py)
     }
 
     //
     // asyncio.gather() uses attribute
     //
-    property _exception {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().get_exception(py)
-        }
+    #[getter(_exception)]
+    fn get_exception(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).get_exception(py)
     }
 
     //
@@ -107,8 +102,8 @@ py_class!(pub class PyTask |py| {
     // the future is already done when this is called, the callback is
     // scheduled with call_soon.
     //
-    def add_done_callback(&self, f: PyObject) -> PyResult<PyObject> {
-        self._fut(py).borrow_mut().add_done_callback(
+    fn add_done_callback(&self, py: Python, f: PyObject) -> PyResult<PyObject> {
+        self._fut_mut(py).add_done_callback(
             py, f, self.clone_ref(py).into_object())
     }
 
@@ -117,8 +112,8 @@ py_class!(pub class PyTask |py| {
     //
     // Returns the number of callbacks removed.
     //
-    def remove_done_callback(&self, f: PyObject) -> PyResult<u32> {
-        self._fut(py).borrow_mut().remove_done_callback(py, f)
+    fn remove_done_callback(&self, py: Python, f: PyObject) -> PyResult<u32> {
+        self._fut_mut(py).remove_done_callback(py, f)
     }
 
     //
@@ -127,8 +122,8 @@ py_class!(pub class PyTask |py| {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    def set_result(&self, result: PyObject) -> PyResult<PyObject> {
-        self._fut(py).borrow_mut().set_result(
+    fn set_result(&self, py: Python, result: PyObject) -> PyResult<PyObject> {
+        self._fut_mut(py).set_result(
             py, result, self.clone_ref(py).into_object(), false)
     }
 
@@ -138,105 +133,73 @@ py_class!(pub class PyTask |py| {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    def set_exception(&self, exception: PyObject) -> PyResult<PyObject> {
-        self._fut(py).borrow_mut().set_exception(
+    fn set_exception(&self, py: Python, exception: PyObject) -> PyResult<PyObject> {
+        self._fut_mut(py).set_exception(
             py, exception, self.clone_ref(py).into_object(), false)
     }
 
     //
     // awaitable
     //
-    def __iter__(&self) -> PyResult<PyTaskIter> {
+    fn __iter__(&self, py: Python) -> PyResult<PyTaskIter> {
         PyTaskIter::create_instance(py, self.clone_ref(py))
-    }
-
-    def __await__(&self) -> PyResult<PyTaskIter> {
-        PyTaskIter::create_instance(py, self.clone_ref(py))
-    }
-
-    //
-    // Python GC support
-    //
-    def __traverse__(&self, visit) {
-        if let Ok(fut) = self._fut(py).try_borrow() {
-            if let Some(ref callbacks) = fut.callbacks {
-                for callback in callbacks.iter() {
-                    visit.call(callback)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    def __clear__(&self) {
-        let callbacks = mem::replace(&mut (*self._fut(py).borrow_mut()).callbacks, None);
-        if let Some(callbacks) = callbacks {
-            for cb in callbacks {
-                cb.release_ref(py);
-            }
-        }
     }
 
     // compatibility
-    property _loop {
-        get(&slf) -> PyResult<TokioEventLoop> {
-            Ok(slf._fut(py).borrow().evloop.clone_ref(py))
+    #[getter(_loop)]
+    fn get_loop(&self, py: Python) -> PyResult<TokioEventLoop> {
+        Ok(self._fut(py).evloop.clone_ref(py))
+    }
+
+    #[getter(_fut_waiter)]
+    fn get_fut_waiter(&self, py: Python) -> PyResult<PyObject> {
+        match *self._waiter(py) {
+            Some(ref fut) => Ok(fut.clone_ref(py)),
+            None => Ok(py.None())
         }
     }
 
-    property _fut_waiter {
-        get(&slf) -> PyResult<PyObject> {
-            match *slf._waiter(py).borrow_mut() {
-                Some(ref fut) => Ok(fut.clone_ref(py)),
-                None => Ok(py.None())
-            }
+    #[getter(_must_cancel)]
+    fn get_must_cancel(&self, py: Python) -> PyResult<bool> {
+        Ok(*self._must_cancel(py))
+    }
+
+    #[getter(_callbacks)]
+    fn get_callbacks(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref cb) = self._fut(py).callbacks {
+            Ok(PyTuple::new(py, cb.as_slice()).into_object())
+        } else {
+            Ok(py.None())
         }
     }
 
-    property _must_cancel {
-        get(&slf) -> PyResult<bool> {
-            Ok(slf._must_cancel(py).get())
-        }
+    #[getter(_source_traceback)]
+    fn get_source_traceback(&self, py: Python) -> PyResult<PyObject> {
+        self._fut(py).extract_traceback(py)
     }
 
-    property _callbacks {
-        get(&slf) -> PyResult<PyObject> {
-            if let Some(ref cb) = slf._fut(py).borrow().callbacks {
-                Ok(PyTuple::new(py, cb.as_slice()).into_object())
-            } else {
-                Ok(py.None())
-            }
-        }
+    #[getter(_log_destroy_pending)]
+    fn get_log_destroy_pending(&self, py: Python) -> PyResult<PyBool> {
+        Ok(py.False())
     }
-
-    property _source_traceback {
-        get(&slf) -> PyResult<PyObject> {
-            slf._fut(py).borrow().extract_traceback(py)
-        }
-    }
-
-    property _log_destroy_pending {
-        get(&slf) -> PyResult<PyBool> {
-            Ok(py.False())
-        }
-        set(&slf, value: PyObject) -> PyResult<()> {
-            Ok(())
-        }
+    #[setter(_log_destroy_pending)]
+    fn set_log_destroy_pending(&self, _py: Python, _value: &PyObject) -> PyResult<()> {
+        Ok(())
     }
 
     //
     // isfuture support
     //
-    property _asyncio_future_blocking {
-        get(&slf) -> PyResult<bool> {
-            Ok(slf._blocking(py).get())
-        }
-        set(&slf, value: bool) -> PyResult<()> {
-            slf._blocking(py).set(value);
-            Ok(())
-        }
+    #[getter(_asyncio_future_blocking)]
+    fn get_asyncio_future_blocking(&self, py: Python) -> PyResult<bool> {
+        Ok(*self._blocking(py))
     }
-});
+    #[setter(_asyncio_future_blocking)]
+    fn set_asyncio_future_blocking(&self, py: Python, value: bool) -> PyResult<()> {
+        *self._blocking_mut(py) = value;
+        Ok(())
+    }
+}
 
 
 impl PyTask {
@@ -244,11 +207,7 @@ impl PyTask {
     pub fn new(py: Python, coro: PyObject, evloop: &TokioEventLoop) -> PyResult<PyTask> {
         let task = PyTask::create_instance(
             py,
-            cell::RefCell::new(_PyFuture::new(evloop.clone_ref(py))),
-            cell::RefCell::new(None),
-            cell::Cell::new(false),
-            cell::Cell::new(false),
-        )?;
+            _PyFuture::new(evloop.clone_ref(py)), None, false, false)?;
 
         let fut = task.clone_ref(py);
 
@@ -266,32 +225,72 @@ impl PyTask {
     }
 
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
-        self._fut(py).borrow().get(py)
+        self._fut(py).get(py)
     }
 
     //
     // Add future completion callback
     //
     pub fn add_callback(&self, py: Python, cb: Callback) {
-        self._fut(py).borrow_mut().add_callback(py, cb);
+        self._fut_mut(py).add_callback(py, cb);
     }
 
     //
     // bloking
     //
     pub fn is_blocking(&self) -> bool {
-        self._blocking(GIL::python()).get()
+        *self._blocking(GIL::python())
     }
 
     pub fn set_blocking(&self, value: bool) {
-        self._blocking(GIL::python()).set(value)
+        *self._blocking_mut(GIL::python()) = value
     }
 
     //
     // helpers methods
     //
     pub fn is_same_loop(&self, py: Python, evloop: &TokioEventLoop) -> bool {
-        &self._fut(py).borrow().evloop == evloop
+        &self._fut(py).evloop == evloop
+    }
+}
+
+#[py::proto]
+impl PyGCProtocol for PyTask {
+    //
+    // Python GC support
+    //
+    fn __traverse__(&self, py: Python, visit: PyVisit) -> Result<(), PyTraverseError> {
+        let fut = self._fut(py);
+        if let Some(ref callbacks) = fut.callbacks {
+            for callback in callbacks.iter() {
+                let _ = visit.call(callback);
+            }
+        }
+        Ok(())
+    }
+
+    fn __clear__(&self, py: Python) {
+        let callbacks = mem::replace(&mut self._fut_mut(py).callbacks, None);
+        if let Some(callbacks) = callbacks {
+            for cb in callbacks {
+                cb.release_ref(py);
+            }
+        }
+    }
+}
+
+#[py::proto]
+impl PyObjectProtocol for PyTask {
+    fn __repr__(&self, py: Python) -> PyResult<PyObject> {
+        Classes.Helpers.call(py, "future_repr", ("Task", &self,), None)
+    }
+}
+
+#[py::proto]
+impl PyAsyncProtocol for PyTask {
+
+    fn __await__(&self, py: Python) -> PyResult<PyTaskIter> {
+        PyTaskIter::create_instance(py, self.clone_ref(py))
     }
 }
 
@@ -300,22 +299,27 @@ impl future::Future for PyTask {
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self._fut(GIL::python()).borrow_mut().poll()
+        self._fut_mut(GIL::python()).poll()
     }
 }
 
-py_class!(pub class PyTaskIter |py| {
-    data _fut: PyTask;
+#[py::class]
+pub struct PyTaskIter {
+    _fut: PyTask
+}
 
-    def __iter__(&self) -> PyResult<PyTaskIter> {
+#[py::methods]
+impl PyTaskIter {
+
+    fn __iter__(&self, py: Python) -> PyResult<PyTaskIter> {
         Ok(self.clone_ref(py))
     }
 
-    def __next__(&self) -> PyResult<Option<PyObject>> {
+    fn __next__(&self, py: Python) -> PyResult<Option<PyObject>> {
         let fut = self._fut(py);
 
-        if !fut._fut(py).borrow().done() {
-            fut._blocking(py).set(true);
+        if !fut._fut(py).done() {
+            *fut._blocking_mut(py) = true;
             Ok(Some(fut.clone_ref(py).into_object()))
         } else {
             let res = fut.result(py)?;
@@ -323,12 +327,11 @@ py_class!(pub class PyTaskIter |py| {
         }
     }
 
-    def send(&self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+    fn send(&self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
         self.__next__(py)
     }
 
-    def throw(&self, tp: PyObject, val: Option<PyObject> = None,
-              _tb: Option<PyObject> = None) -> PyResult<Option<PyObject>> {
+    fn throw(&self, py: Python, tp: PyObject, val: Option<PyObject>, _tb: Option<PyObject>) -> PyResult<Option<PyObject>> {
 
         if Classes.Exception.is_instance(py, &tp) {
             let val = tp;
@@ -344,7 +347,7 @@ py_class!(pub class PyTaskIter |py| {
 
         self.__next__(py)
     }
-});
+}
 
 
 const INPLACE_RETRY: usize = 5;
@@ -369,7 +372,7 @@ fn wakeup_task(fut: PyTask, coro: PyObject, result: PyResult<PyObject>) {
 fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, retry: usize) {
     // cancel if needed
     let mut exc = exc;
-    if task._must_cancel(py).get() {
+    if *task._must_cancel(py) {
         exc = if let Some(exc) = exc {
             if Classes.CancelledError.is_instance(py, &exc) {
                 Some(exc)
@@ -380,10 +383,10 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
         };
     }
-    *task._waiter(py).borrow_mut() = None;
+    *task._waiter_mut(py) = None;
 
     // set current task
-    task._fut(py).borrow().evloop.set_current_task(py, task.clone_ref(py).into_object());
+    task._fut(py).evloop.set_current_task(py, task.clone_ref(py).into_object());
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
@@ -395,12 +398,12 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
     match res {
         Err(mut err) => {
             if err.matches(py, &Classes.StopIteration) {
-                let _ = task._fut(py).borrow_mut().set_result(
+                let _ = task._fut_mut(py).set_result(
                     py, err.instance(py).getattr(py, "value").unwrap(),
                     task.clone_ref(py).into_object(), false);
             }
             else if err.matches(py, &Classes.CancelledError) {
-                let _ = task._fut(py).borrow_mut().cancel(py, task.clone_ref(py).into_object());
+                let _ = task._fut_mut(py).cancel(py, task.clone_ref(py).into_object());
             }
             else if err.matches(py, &Classes.BaseException) {
                 task.set_exception(py, err.instance(py))
@@ -421,7 +424,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                                         task.clone_ref(py).into_object(), &result));
 
                         let waiter_task = task.clone_ref(py);
-                        task._fut(py).borrow().evloop.href().spawn_fn(move|| {
+                        task._fut(py).evloop.href().spawn_fn(move|| {
                             let gil = Python::acquire_gil();
                             let py = gil.python();
 
@@ -447,9 +450,9 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 res.set_blocking(false);
 
                 // cancel if needed
-                if task._must_cancel(py).get() {
+                if *task._must_cancel(py) {
                     let _ = res.cancel(py);
-                    task._must_cancel(py).set(false)
+                    *task._must_cancel_mut(py) = false
                 }
 
                 // fast path
@@ -464,7 +467,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 }
 
                 // store ref to future
-                *task._waiter(py).borrow_mut() = Some(res.clone_ref(py).into_object());
+                *task._waiter_mut(py) = Some(res.clone_ref(py).into_object());
 
                 // schedule wakeup on done
                 let waiter_task = task.clone_ref(py);
@@ -484,7 +487,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 res.set_blocking(false);
 
                 // store ref to future
-                *task._waiter(py).borrow_mut() = Some(res.clone_ref(py).into_object());
+                *task._waiter_mut(py) = Some(res.clone_ref(py).into_object());
 
                 // schedule wakeup on done
                 let waiter_task = task.clone_ref(py);
@@ -493,18 +496,18 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 }));
 
                 // cancel if needed
-                if task._must_cancel(py).get() {
+                if *task._must_cancel(py) {
                     let _ = res.cancel(py);
-                    task._must_cancel(py).set(false)
+                    *task._must_cancel_mut(py) = false
                 }
             }
             else if result.hasattr(py, "_asyncio_future_blocking").unwrap() {
                 // wrap into PyFuture, use unwrap because if it failes then whole
                 // processes is hosed
-                let fut = PyFuture::from_fut(py, &task._fut(py).borrow().evloop, result).unwrap();
+                let fut = PyFuture::from_fut(py, &task._fut(py).evloop, result).unwrap();
 
                 // store ref to future
-                *task._waiter(py).borrow_mut() = Some(fut.clone_ref(py).into_object());
+                *task._waiter_mut(py) = Some(fut.clone_ref(py).into_object());
 
                 // schedule wakeup on done
                 let waiter_task = task.clone_ref(py);
@@ -513,15 +516,15 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
                 }));
 
                 // cancel if needed
-                if task._must_cancel(py).get() {
+                if *task._must_cancel(py) {
                     let _ = fut.cancel(py);
-                    task._must_cancel(py).set(false)
+                    *task._must_cancel_mut(py) = false
                 }
             }
             else if result == py.None() {
                 // call soon
                 let task2 = task.clone_ref(py);
-                task._fut(py).borrow().evloop.href().spawn_fn(move|| {
+                task._fut(py).evloop.href().spawn_fn(move|| {
                     let gil = Python::acquire_gil();
                     let py = gil.python();
 
@@ -534,7 +537,7 @@ fn task_step(py: Python, task: PyTask, coro: PyObject, exc: Option<PyObject>, re
             else {
                 // Yielding something else is an error.
                 let task2 = task.clone_ref(py);
-                task._fut(py).borrow().evloop.href().spawn_fn(move|| {
+                task._fut(py).evloop.href().spawn_fn(move|| {
                     let gil = Python::acquire_gil();
                     let py = gil.python();
 

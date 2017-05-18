@@ -36,10 +36,10 @@ tokio-uds = "0.1"
 # tokio-tls = "0.1"
 # backtrace = "0.2"
 
-[dependencies.cpython]
-# path = "../tokio/rust-cpython"
-git = "https://github.com/PyO3/rust-cpython.git"
-default-features = false
+[dependencies.pyo3]
+path = "../pyo3"
+#git = "https://github.com/PyO3/rust-cpython.git"
+features = ["nightly"]
 
 [dev-dependencies]
 http-muncher = "0.3"

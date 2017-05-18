@@ -1,10 +1,10 @@
 #![allow(dead_code, unused_variables)]
 
 extern crate bytes;
-extern crate cpython;
+extern crate pyo3;
 extern crate async_tokio;
 
-use cpython::*;
+use pyo3::*;
 use bytes::{Bytes, BytesMut};
 use async_tokio::{PyBytes, PyLogger};
 
@@ -39,6 +39,7 @@ fn test_pybytes() {
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
     py.run("assert len(pb) == 17", None, Some(&d)).unwrap();
     py.run("assert bytes(pb) == b'{\"test\": \"value\"}'", None, Some(&d)).unwrap();
+
     py.run("assert str(pb, encoding=\"utf-8\") == '{\"test\": \"value\"}'",
            None, Some(&d)).unwrap();
     py.run("assert memoryview(pb) == b'{\"test\": \"value\"}'",
@@ -110,6 +111,9 @@ fn test_pybytes_strip() {
     let d = PyDict::new(py);
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
 
-    py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).unwrap();
+    py.run("print(dir(pb))", None, Some(&d));
+    py.run("print(pb.strip())", None, Some(&d));
+
+    py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).map_err(|e| e.print(py));
     py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
 }

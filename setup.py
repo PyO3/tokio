@@ -39,7 +39,7 @@ with codecs.open(os.path.join(os.path.abspath(os.path.dirname(
         raise RuntimeError('Unable to determine version.')
 
 
-setup_requires = ['setuptools-rust>=0.5.1']
+setup_requires = ['setuptools-rust>=0.6']
 install_requires = []
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
@@ -74,7 +74,7 @@ setup(name='tokio',
       author_email='fafhrd91@gmail.com',
       url='https://github.com/PyO3/tokio/',
       packages=['tokio'],
-      rust_extensions=[RustExtension('tokio._tokio', 'Cargo.toml')],
+      rust_extensions=[RustExtension('tokio._tokio', 'Cargo.toml', pyo3=True)],
       install_requires=install_requires,
       tests_require=tests_require,
       setup_requires=setup_requires,

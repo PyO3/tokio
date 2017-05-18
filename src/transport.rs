@@ -1,11 +1,10 @@
 #![allow(unused_variables)]
 
 use std::io;
-use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::os::unix::io::AsRawFd;
-use cpython::*;
+use std::os::unix::io::{AsRawFd, RawFd};
+use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
 use bytes::{Bytes, BytesMut, BufMut};
@@ -134,24 +133,29 @@ pub fn tcp_transport_factory<T>(
 }
 
 
-py_class!(pub class PyTcpTransport |py| {
-    data _loop: TokioEventLoop;
-    data _connection_lost: PyObject;
-    data _data_received: PyObject;
-    data _transport: Sender<TcpTransportMessage>;
-    data _drain: RefCell<Option<PyFuture>>;
-    data _drained: Cell<bool>;
-    data _closing: Cell<bool>;
-    data _info: HashMap<&'static str, PyObject>;
-    data _paused: Cell<bool>;
+#[py::class]
+pub struct PyTcpTransport {
+    _loop: TokioEventLoop,
+    _connection_lost: PyObject,
+    _data_received: PyObject,
+    _transport: Sender<TcpTransportMessage>,
+    _drain: Option<PyFuture>,
+    _drained: bool,
+    _closing: bool,
+    _info: HashMap<&'static str, PyObject>,
+    _paused: bool,
+}
 
-    def is_closing(&self) -> PyResult<bool> {
-        Ok(self._closing(py).get())
+#[py::methods]
+impl PyTcpTransport {
+
+    fn is_closing(&self, py: Python) -> PyResult<bool> {
+        Ok(*self._closing(py))
     }
 
-    def get_extra_info(&self, name: PyString,
-                       default: Option<PyObject> = None) -> PyResult<PyObject> {
-        if self._closing(py).get() {
+    fn get_extra_info(&self, py: Python,
+                      name: PyString, default: Option<PyObject>) -> PyResult<PyObject> {
+        if *self._closing(py) {
             return
                 match default {
                     Some(val) => Ok(val),
@@ -172,7 +176,7 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // write bytes to transport
     //
-    def write(&self, data: PyObject) -> PyResult<()> {
+    fn write(&self, py: Python, data: PyObject) -> PyResult<()> {
         let data = buffer::PyBuffer::get(py, &data)?;
         let len = if let Some(slice) = data.as_slice::<u8>(py) {
             slice.len() as usize
@@ -181,7 +185,7 @@ py_class!(pub class PyTcpTransport |py| {
                 py, "data argument must be a bytes-like object"))
         };
 
-        self._drained(py).set(false);
+        *self._drained_mut(py) = false;
         let _ = self._transport(py).send(
             TcpTransportMessage::Bytes(BytesMsg{buf:data, len:len}));
         Ok(())
@@ -190,7 +194,7 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // write bytes to transport
     //
-    def writelines(&self, data: PyObject) -> PyResult<()> {
+    fn writelines(&self, py: Python, data: PyObject) -> PyResult<()> {
         let iter = data.iter(py)?;
 
         for item in iter {
@@ -203,35 +207,35 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // write eof, close tx part of socket
     //
-    def write_eof(&self) -> PyResult<()> {
+    fn write_eof(&self, _py: Python) -> PyResult<()> {
         Ok(())
     }
 
     //
     // write all data to socket
     //
-    def drain(&self) -> PyResult<PyFuture> {
-        if self._drained(py).get() {
+    fn drain(&self, py: Python) -> PyResult<PyFuture> {
+        if *self._drained(py) {
             Ok(PyFuture::done_fut(py, self._loop(py), py.None())?)
         } else {
-            if let Some(ref fut) = *self._drain(py).borrow() {
+            if let Some(ref fut) = *self._drain(py) {
                 Ok(fut.clone_ref(py))
             } else {
                 let fut = PyFuture::new(py, self._loop(py))?;
-                *self._drain(py).borrow_mut() = Some(fut.clone_ref(py));
+                *self._drain_mut(py) = Some(fut.clone_ref(py));
                 Ok(fut)
             }
         }
     }
 
-    def pause_reading(&self) -> PyResult<()> {
-        self._paused(py).set(true);
+    fn pause_reading(&self, py: Python) -> PyResult<()> {
+        *self._paused_mut(py) = true;
         let _ = self._transport(py).send(TcpTransportMessage::Pause);
         Ok(())
     }
 
-    def resume_reading(&self) -> PyResult<()> {
-        self._paused(py).set(false);
+    fn resume_reading(&self, py: Python) -> PyResult<()> {
+        *self._paused_mut(py) = false;
         let _ = self._transport(py).send(TcpTransportMessage::Resume);
         Ok(())
     }
@@ -239,9 +243,9 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // close transport
     //
-    def close(&self) -> PyResult<()> {
-        if ! self._closing(py).get() {
-            self._closing(py).set(true);
+    fn close(&self, py: Python) -> PyResult<()> {
+        if ! *self._closing(py) {
+            *self._closing_mut(py) = true;
             let _ = self._transport(py).send(TcpTransportMessage::Close);
         }
         Ok(())
@@ -250,13 +254,12 @@ py_class!(pub class PyTcpTransport |py| {
     //
     // abort transport
     //
-    def abort(&self) -> PyResult<()> {
-        self._closing(py).set(true);
+    fn abort(&self, py: Python) -> PyResult<()> {
+        *self._closing_mut(py) = true;
         let _ = self._transport(py).send(TcpTransportMessage::Shutdown);
         Ok(())
     }
-
-});
+}
 
 impl PyTcpTransport {
 
@@ -272,13 +275,12 @@ impl PyTcpTransport {
         let transport = PyTcpTransport::create_instance(
             py, evloop.clone_ref(py),
             connection_lost, data_received, sender,
-            RefCell::new(None), Cell::new(true), Cell::new(false),
-            info, Cell::new(false))?;
+            None, true, false, info, false)?;
 
         // connection made
         let _ = connection_made.call(py, (transport.clone_ref(py),), None)
             .map_err(|err| {
-                transport._closing(py).set(true);
+                *transport._closing_mut(py) = true;
                 let _ = transport._transport(py).send(TcpTransportMessage::Close);
                 evloop.log_error(py, err, "Protocol.connection_made error")
             });
@@ -319,11 +321,11 @@ impl PyTcpTransport {
         with_py(|py| {
             self._loop(py).with(
                 py, "data_received error", |py| {
-                    // let bytes = pybytes::PyBytes::new(py, bytes)?;
-                    let bytes = PyBytes::new(py, bytes.as_ref());
+                    let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    // let bytes = PyBytes::new(py, bytes.as_ref());
                     self._data_received(py).call(py, (bytes,), None)
                 });
-            ! self._paused(py).get()
+            ! *self._paused(py)
         })
     }
 
@@ -331,8 +333,8 @@ impl PyTcpTransport {
         let gil = Python::acquire_gil();
         let py = gil.python();
 
-        self._drained(py).set(true);
-        match self._drain(py).borrow_mut().take() {
+        *self._drained_mut(py) = true;
+        match self._drain_mut(py).take() {
             Some(fut) => {
                 let _ = fut.set(py, Ok(py.None()));
             },
@@ -352,6 +354,7 @@ enum TransportState {
 }
 
 struct TcpTransport<T> {
+    fd: RawFd,
     framed: Framed<T, TcpTransportCodec>,
     intake: unsync::mpsc::UnboundedReceiver<TcpTransportMessage>,
     transport: PyTcpTransport,
@@ -371,6 +374,7 @@ impl<T> TcpTransport<T>
            transport: PyTcpTransport) -> TcpTransport<T> {
 
         TcpTransport {
+            fd: socket.as_raw_fd(),
             framed: socket.framed(TcpTransportCodec),
             intake: intake,
             transport: transport,
@@ -391,6 +395,7 @@ impl<T> Future for TcpTransport<T>
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        println!("POLL");
         loop {
             let bytes = if let Some(bytes) = self.buf.take() {
                 Some(bytes)
@@ -398,9 +403,12 @@ impl<T> Future for TcpTransport<T>
                 match self.intake.poll() {
                     Ok(Async::Ready(Some(msg))) => {
                         match msg {
-                            TcpTransportMessage::Bytes(bytes) =>
-                                Some(bytes),
+                            TcpTransportMessage::Bytes(bytes) => {
+                                //println!("got bytes {:?}", self.fd);
+                                Some(bytes)
+                            },
                             TcpTransportMessage::Pause => {
+                                //println!("got pause");
                                 match self.state {
                                     TransportState::Normal => {
                                         self.state = TransportState::Paused;
@@ -410,6 +418,7 @@ impl<T> Future for TcpTransport<T>
                                 return self.poll()
                             },
                             TcpTransportMessage::Resume => {
+                                //println!("got resume");
                                 match self.state {
                                     TransportState::Paused => {
                                         self.state = TransportState::Normal;
@@ -443,8 +452,10 @@ impl<T> Future for TcpTransport<T>
             if let Some(bytes) = bytes {
                 self.flushed = false;
 
+                //println!("sending bytes {:?}", self.fd);
                 match self.framed.start_send(bytes) {
                     Ok(AsyncSink::NotReady(bytes)) => {
+                        //println!("sink not ready");
                         self.buf = Some(bytes);
                         break
                     }
@@ -456,11 +467,22 @@ impl<T> Future for TcpTransport<T>
             }
         }
 
+        // flush sink
+        if !self.flushed {
+            self.flushed = self.framed.poll_complete()?.is_ready();
+            //println!("flushed: {:?} {:?}", self.fd, self.flushed);
+
+            if self.flushed {
+                self.transport.drained();
+            }
+        }
+
         // poll for incoming data
         if !self.incoming_eof && self.state != TransportState::Paused {
             loop {
                 match self.framed.poll() {
                     Ok(Async::Ready(Some(bytes))) => {
+                        //println!("received: {:?}", self.fd);
                         if ! self.transport.data_received(bytes) {
                             self.state = TransportState::Paused;
                             break
@@ -469,21 +491,14 @@ impl<T> Future for TcpTransport<T>
                     },
                     Ok(Async::Ready(None)) =>
                         self.incoming_eof = true,
-                    Ok(Async::NotReady) =>
-                        (),
+                    Ok(Async::NotReady) => {
+                        //println!("received not ready: {:?}", self.fd);
+                        ()
+                    },
                     Err(err) =>
                         return Err(err.into()),
                 }
                 break
-            }
-        }
-
-        // flush sink
-        if !self.flushed {
-            self.flushed = self.framed.poll_complete()?.is_ready();
-
-            if self.flushed {
-                self.transport.drained();
             }
         }
 

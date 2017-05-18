@@ -2,10 +2,9 @@
 #![allow(dead_code)]
 
 use std::io;
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
-use cpython::*;
+use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
@@ -22,30 +21,34 @@ pub enum PyHttpTransportMessage {
 
 const CONCURENCY_LEVEL: usize = 1;
 
+#[py::class]
+pub struct PyHttpTransport {
+    _loop: TokioEventLoop,
+    _connection_lost: PyObject,
+    _data_received: PyObject,
+    _request_handler: PyObject,
+    _socket: PyObject,
+    transport: Sender<PyHttpTransportMessage>,
+    req: Option<pyreq::PyRequest>,
+    req_count: usize,
 
-py_class!(pub class PyHttpTransport |py| {
-    data _loop: TokioEventLoop;
-    data _connection_lost: PyObject;
-    data _data_received: PyObject;
-    data _request_handler: PyObject;
-    data _socket: PyObject;
-    data transport: Sender<PyHttpTransportMessage>;
-    data req: RefCell<Option<pyreq::PyRequest>>;
-    data req_count: Cell<usize>;
+    inflight: usize,
+    reqs: VecDeque<(http::Request, Sender<codec::EncoderMessage>)>,
+    payloads: VecDeque<StreamReader>,
+}
 
-    data inflight: Cell<usize>;
-    data reqs: RefCell<VecDeque<(http::Request, Sender<codec::EncoderMessage>)>>;
-    data payloads: RefCell<VecDeque<StreamReader>>;
+#[py::methods]
+impl PyHttpTransport {
 
-    def get_extra_info(&self, _name: PyString,
-                       default: Option<PyObject> = None ) -> PyResult<PyObject> {
+    fn get_extra_info(&self, py: Python, _name: PyString,
+                       default: Option<PyObject>) -> PyResult<PyObject> {
         Ok(self._socket(py).clone_ref(py))
     }
 
     //
     // write bytes to transport
     //
-    def write(&self, data: PyBytes) -> PyResult<PyObject> {
+    fn write(&self, py: Python, data: PyBytes) -> PyResult<PyObject> {
         Err(PyErr::new::<exc::RuntimeError, _>(
             py, "write() method is not available, use PayloadWriter"))
     }
@@ -53,19 +56,18 @@ py_class!(pub class PyHttpTransport |py| {
     //
     // send buffered data to socket
     //
-    def drain(&self) -> PyResult<PyFuture> {
+    fn drain(&self, py: Python) -> PyResult<PyFuture> {
         Ok(PyFuture::done_fut(py, self._loop(py), py.None())?)
     }
 
     //
     // close transport
     //
-    def close(&self) -> PyResult<PyObject> {
+    fn close(&self, py: Python) -> PyResult<PyObject> {
         let _ = self.transport(py).send(PyHttpTransportMessage::Close(None));
         Ok(py.None())
     }
-
-});
+}
 
 
 impl PyHttpTransport {
@@ -84,9 +86,9 @@ impl PyHttpTransport {
             py, evloop.clone_ref(py),
             connection_lost, data_received, request_handler, sock,
             sender,
-            RefCell::new(None), Cell::new(0), Cell::new(0),
-            RefCell::new(VecDeque::with_capacity(12)),
-            RefCell::new(VecDeque::with_capacity(CONCURENCY_LEVEL)))?;
+            None, 0, 0,
+            VecDeque::with_capacity(12),
+            VecDeque::with_capacity(CONCURENCY_LEVEL))?;
 
         // connection made
         connection_made.call(
@@ -100,7 +102,7 @@ impl PyHttpTransport {
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
         with_py(|py| {
-            self.reqs(py).borrow_mut().clear();
+            self.reqs_mut(py).clear();
 
             self._connection_lost(py).call(py, PyTuple::new(py, &[py.None()]), None)
                 .into_log(py, "connection_lost error");
@@ -110,7 +112,7 @@ impl PyHttpTransport {
     pub fn connection_error(&self, err: io::Error) {
         trace!("Protocol.connection_lost({:?})", err);
         with_py(|py| {
-            self.reqs(py).borrow_mut().clear();
+            self.reqs_mut(py).clear();
 
             match err.kind() {
                 io::ErrorKind::TimedOut => {
@@ -149,7 +151,7 @@ impl PyHttpTransport {
                         err.clone_ref(py).print(py);
                     },
                     Ok(req) => {
-                        self.payloads(py).borrow_mut().push_back(req.content().clone_ref(py));
+                        self.payloads_mut(py).push_back(req.content().clone_ref(py));
                         self._data_received(py).call(
                             py, PyTuple::new(py, &[req.into_object()]), None)
                             .into_log(py, "data_received error");
@@ -183,7 +185,7 @@ impl PyHttpTransport {
             },
             http::RequestMessage::Body(chunk) => {
                 with_py(|py| {
-                    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
+                    if let Some(payload) = self.payloads_mut(py).pop_front() {
                         match pybytes::PyBytes::new(py, chunk) {
                             Ok(bytes) => payload.feed_data(py, bytes),
                             Err(err) =>  {
@@ -197,7 +199,7 @@ impl PyHttpTransport {
             },
             http::RequestMessage::Completed => {
                 with_py(|py| {
-                    if let Some(payload) = self.payloads(py).borrow_mut().pop_front() {
+                    if let Some(payload) = self.payloads_mut(py).pop_front() {
                         payload.feed_eof(py);
                     }
                 });
@@ -264,12 +266,12 @@ impl Future for RequestHandler {
                 //if self.tr.reqs(GIL::python()).borrow_mut().len() > 0 {
                 //    println!("num: {}", self.tr.reqs(GIL::python()).borrow_mut().len());
                 //}
-                let (msg, sender) = match self.tr.reqs(GIL::python()).borrow_mut().pop_front() {
+                let (msg, sender) = match self.tr.reqs_mut(GIL::python()).pop_front() {
                     Some((msg, sender)) => (msg, sender),
                     None => {
                         // nothing to process, decrease number of inflight tasks and exit
-                        let inflight = self.tr.inflight(GIL::python());
-                        inflight.set(inflight.get() - 1);
+                        let inflight = self.tr.inflight_mut(GIL::python());
+                        *inflight = *inflight - 1;
 
                         //println!("no requests in queue");
                         return Ok(Async::Ready(()))
