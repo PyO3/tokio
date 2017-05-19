@@ -21,7 +21,7 @@ You can create an instance of the loop manually, using:
 Development of tokio loop
 -------------------------
 
-To build tokio loop, you'll need rust 1.17.0+nightly and Python 3.6.  The best way
+To build tokio loop, you'll need rust `nightly` and Python 3.6.  The best way
 is to create a virtual env, so that you'll have ``python`` commands pointing to the correct tools.
 
 1. ``git clone git@github.com:PyO3/tokio.git``
