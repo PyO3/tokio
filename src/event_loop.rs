@@ -929,11 +929,11 @@ impl TokioEventLoop {
         } else if let Ok(host) = PyString::downcast_from(py, host_arg.clone_ref(py)) {
             Some(String::from(host.to_string_lossy(py)))
         } else {
-            if let Ok(host) = PyString::from_object(py, &host_arg, "utf-8", "strict") {
+            if let Ok(host) = PyString::from_object(py, &host_arg, "utf-8\0", "strict\0") {
                 Some(String::from(host.to_string_lossy(py)))
             } else {
                 return Err(PyErr::new::<exc::TypeError, _>(
-                    py, "string or none type is required as host"))
+                    py, format!("string or none type is required as host, got: {:?}", host_arg)))
             }
         };
 
@@ -948,7 +948,7 @@ impl TokioEventLoop {
         } else {
             Some(String::from(
                 PyString::from_object(
-                    py, &port_arg, "utf-8", "strict")?.to_string_lossy(py)))
+                    py, &port_arg, "utf-8\0", "strict\0")?.to_string_lossy(py)))
         };
 
         let mut family: i32 = 0;
