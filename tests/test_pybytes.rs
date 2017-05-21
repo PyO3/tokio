@@ -111,9 +111,6 @@ fn test_pybytes_strip() {
     let d = PyDict::new(py);
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
 
-    py.run("print(dir(pb))", None, Some(&d));
-    py.run("print(pb.strip())", None, Some(&d));
-
     py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).map_err(|e| e.print(py));
     py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
 }

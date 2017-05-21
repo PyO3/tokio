@@ -210,7 +210,7 @@ impl PyBytes {
 impl pyo3::class::PyObjectProtocol for PyBytes {
 
     fn __richcmp__(&self, py: Python,
-                   other: &PyObject, op: pyo3::CompareOp) -> PyResult<PyObject> {
+                   other: PyObject, op: pyo3::CompareOp) -> PyResult<PyObject> {
         match op {
             pyo3::CompareOp::Eq => {
                 if let Ok(other) = PyBytes::downcast_from(py, other.clone_ref(py).into_object()) {
@@ -236,7 +236,7 @@ impl pyo3::class::PyObjectProtocol for PyBytes {
 #[py::proto]
 impl pyo3::class::PyNumberProtocol for PyBytes {
 
-    fn __add__(&self, py: Python, rhs: &PyObject) -> PyResult<PyObject> {
+    fn __add__(&self, py: Python, rhs: PyObject) -> PyResult<PyObject> {
         let l = PyBuffer::get(py, self.as_object())?;
         let r = PyBuffer::get(py, &rhs)?;
 
