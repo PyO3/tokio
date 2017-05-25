@@ -25,7 +25,7 @@ flake: .flake
 	@touch .develop
 
 test: .develop .flake .build
-	@cargo test --color always --features cpython/python3-sys
+	@cargo test --color always
 	@python -m pytest ./tests
 
 build:
