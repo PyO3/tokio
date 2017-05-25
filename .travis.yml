@@ -17,7 +17,7 @@ install:
   - export LIBRARY_PATH="$LIBRARY_PATH:$PYTHON_LIB"
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$PYTHON_LIB:$HOME/rust/lib"
   - rustc -V
-  - python -m pip install setuptools-rust
+  - python -m pip install -U https://github.com/PyO3/setuptools-rust/archive/master.zip
   - pip install -r requirements-ci.txt
 script:
   - make test
