@@ -303,6 +303,15 @@ impl PyAsyncProtocol for PyTask {
     }
 }
 
+#[py::proto]
+impl PyIterProtocol for PyTask {
+
+    fn __iter__(&mut self, py: Python) -> PyResult<PyTaskIterPtr> {
+        py.init(|t| PyTaskIter{fut: self.to_inst_ptr(), token: t})
+    }
+}
+
+
 impl future::Future for PyTaskPtr {
     type Item = PyResult<PyObject>;
     type Error = unsync::oneshot::Canceled;

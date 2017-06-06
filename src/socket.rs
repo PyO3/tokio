@@ -42,7 +42,7 @@ impl Socket {
                     peer: SocketAddr, fd: Option<RawFd>) -> PyResult<SocketPtr> {
         py.init(
             |token| Socket{
-                fd: None,
+                fd: fd,
                 family: addr.family.to_int() as i32,
                 socktype: addr.socktype.to_int() as i32,
                 proto: addr.protocol.to_int() as i32,
