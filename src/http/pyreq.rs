@@ -8,7 +8,7 @@ use pyo3::*;
 use bytes::{Bytes, BytesMut};
 use futures::{Async, Future, Poll, Stream, future};
 
-use ::{PyFuture, TokioEventLoop, pybytes, with_py};
+use {PyFuture, PyFuturePtr, TokioEventLoop, TokioEventLoopPtr, pybytes, with_py};
 use pyunsafe::{GIL, Sender};
 use http::codec::EncoderMessage;
 use http::{Request, Version, Headers, ConnectionType, ContentCompression};
@@ -29,42 +29,45 @@ pub struct PyRequest {
     _time_service: PyObject,
 }
 
+#[py::ptr(PyRequest)]
+pub struct PyRequestPtr(PyRequest);
+
 #[py::methods]
 impl PyRequest {
 
     #[getter(_method)]
     fn get_method_prop(&self, py: Python) -> PyResult<PyString> {
-        Ok(self.method(py).clone_ref(py))
+        Ok(self.method.clone_ref(py))
     }
 
     #[getter]
     fn get_method(&self, py: Python) -> PyResult<PyString> {
-        Ok(self.method(py).clone_ref(py))
+        Ok(self.method.clone_ref(py))
     }
 
     #[getter]
     fn get_path(&self, py: Python) -> PyResult<PyString> {
-        Ok(self.path(py).clone_ref(py))
+        Ok(self.path.clone_ref(py))
     }
     #[getter]
     fn get_rel_url(&self, py: Python) -> PyResult<Url> {
-        Ok(self.url(py).clone_ref(py))
+        Ok(self.url.clone_ref(py))
     }
     #[getter]
     fn get_version(&self, py: Python) -> PyResult<PyTuple> {
-        Ok(self.version(py).clone_ref(py))
+        Ok(self.version.clone_ref(py))
     }
     #[getter]
     fn get_headers(&self, py: Python) -> PyResult<RawHeaders> {
-        Ok(self.headers(py).clone_ref(py))
+        Ok(self.headers.clone_ref(py))
     }
     #[getter]
     fn get_content(&self, py: Python) -> PyResult<StreamReader> {
-        Ok(self._content(py).clone_ref(py))
+        Ok(self._content.clone_ref(py))
     }
     #[getter]
     fn get_keep_alive(&self, py: Python) -> PyResult<bool> {
-        if let &ConnectionType::KeepAlive = self.connection(py) {
+        if let &ConnectionType::KeepAlive = self.connection {
             Ok(true)
         } else {
             Ok(false)
@@ -72,38 +75,39 @@ impl PyRequest {
     }
     #[getter]
     fn get_match_info(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self._match_info(py).clone_ref(py))
+        Ok(self._match_info.clone_ref(py))
     }
     #[setter]
-    fn set_match_info(&self, py: Python, value: &PyObject) -> PyResult<()> {
-        *self._match_info_mut(py) = value.clone_ref(py);
+    fn set_match_info(&mut self, py: Python, value: &PyObject) -> PyResult<()> {
+        self._match_info = value.clone_ref(py);
         Ok(())
     }
     #[getter(_writer)]
     fn get_writer_prop(&self, py: Python) -> PyResult<PayloadWriter> {
-        Ok(self._writer(py).clone_ref(py))
+        Ok(self._writer.clone_ref(py))
     }
     #[getter]
     fn get_writer(&self, py: Python) -> PyResult<PayloadWriter> {
-        Ok(self._writer(py).clone_ref(py))
+        Ok(self._writer.clone_ref(py))
     }
     #[getter]
     fn get_time_service(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self._time_service(py).clone_ref(py))
+        Ok(self._time_service.clone_ref(py))
     }
     #[setter]
-    fn set_time_service(&self, py: Python, value: &PyObject) -> PyResult<()> {
-        *self._time_service_mut(py) = value.clone_ref(py);
+    fn set_time_service(&mut self, py: Python, value: &PyObject) -> PyResult<()> {
+        self._time_service = value.clone_ref(py);
         Ok(())
     }
 
     fn _prepare_hook(&self, py: Python, _resp: &PyObject) -> PyResult<PyObject> {
-        Ok(PyFuture::done_fut(py, self._loop(py), py.None())?.into_object())
+        Ok(PyFuture::done_fut(py, self._loop, py.None())?.into())
     }
 }
 
 
 impl PyRequest {
+
     pub fn new(py: Python, req: Request,
                evloop: &TokioEventLoop, sender: Sender<EncoderMessage>) -> PyResult<PyRequest> {
         let conn = req.connection;
@@ -134,33 +138,36 @@ impl PyRequest {
 
 #[py::class]
 pub struct StreamReader {
-    _loop: TokioEventLoop,
+    _loop: TokioEventLoopPtr,
     _size: usize,
     _total_bytes: usize,
     _eof: bool,
-    _eof_waiter: Option<PyFuture>,
-    _waiter: Option<PyFuture>,
-    _buffer: VecDeque<pybytes::PyBytes>,
+    _eof_waiter: Option<PyFuturePtr>,
+    _waiter: Option<PyFuturePtr>,
+    _buffer: VecDeque<pybytes::PyBytesPtr>,
     _exception: Option<PyObject>,
 }
+
+#[py::ptr(StreamReader)]
+pub struct StreamReaderPtr(PyPtr);
 
 #[py::methods]
 impl StreamReader {
     #[getter]
     fn get_total_bytes(&self, py: Python) -> PyResult<usize> {
-        Ok(*self._total_bytes(py))
+        Ok(self._total_bytes)
     }
 
     fn exception(&self, py: Python) -> PyResult<PyObject> {
-        if let Some(ref exc) = *self._exception(py).borrow() {
+        if let Some(ref exc) = self._exception {
             Ok(exc.clone_ref(py))
         } else {
             Ok(py.None())
         }
     }
 
-    fn on_eof(&self, py: Python) -> PyResult<PyObject> {
-        Ok(py.None())
+    fn on_eof(&self, py: Python) -> PyResult<()> {
+        Ok(())
     }
 
     fn is_eof(&self, py: Python) -> PyResult<bool> {

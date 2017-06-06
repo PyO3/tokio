@@ -30,7 +30,7 @@ use client;
 use handle::PyHandle;
 use fd;
 use fut::{Until, UntilError};
-//use http;
+use http;
 use signals;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
@@ -1445,8 +1445,8 @@ impl TokioEventLoop {
                      family: i32, flags: i32,
                      sock: Option<PyObject>, backlog: i32, ssl: Option<PyObject>,
                      reuse_address: bool, reuse_port: bool)
-                     -> PyResult<PyFuturePtr> {
-
+                     -> PyResult<PyFuturePtr>
+    {
         self.create_server_helper(
             py, protocol_factory, host, port, family, flags,
             sock, backlog, ssl, reuse_address, reuse_port, transport::tcp_transport_factory)
@@ -1459,8 +1459,8 @@ impl TokioEventLoop {
                           family: i32, flags: i32,
                           sock: Option<PyObject>,
                           backlog: i32, ssl: Option<PyObject>,
-                          reuse_address: bool, reuse_port: bool) -> PyResult<PyFuture> {
-
+                          reuse_address: bool, reuse_port: bool) -> PyResult<PyFuturePtr>
+    {
         self.create_server_helper(
             py, protocol_factory, host, port, family, flags,
             sock, backlog, ssl, reuse_address, reuse_port, http::http_transport_factory)

@@ -1,7 +1,8 @@
 use std::io;
 use std::net::SocketAddr;
 use std::convert::Into;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
+use std::os::unix::io::{AsRawFd, RawFd};
 use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{Async, AsyncSink, Stream, Future, Poll, Sink};
@@ -9,55 +10,63 @@ use tokio_io::AsyncRead;
 use tokio_io::codec::Framed;
 use tokio_core::net::TcpStream;
 
-use ::{PyFuture, TokioEventLoop};
+use {PyFuture, PyFuturePtr, TokioEventLoop, TokioEventLoopPtr};
 use addrinfo::AddrInfo;
 use http::codec::{HttpTransportCodec, EncoderMessage};
 use http::pytransport::{PyHttpTransport, PyHttpTransportMessage};
-// use socket::Socket;
+use socket::Socket;
 use utils::PyLogger;
 use pyunsafe::Sender;
 use transport::InitializedTransport;
 
 
 pub fn http_transport_factory(
-    evloop: &TokioEventLoop, _server: bool, factory: &PyObject,
+    evloop: TokioEventLoopPtr, _server: bool, factory: &PyObject,
     _ssl: &Option<PyObject>, _server_hostname: Option<PyObject>,
-    socket: TcpStream, _addr: Option<&AddrInfo>,
-    _peer: Option<SocketAddr>, _waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+    socket: TcpStream, addr: Option<&AddrInfo>,
+    peer: Option<SocketAddr>, _waiter: Option<PyFuturePtr>) -> io::Result<InitializedTransport>
 {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
-    // connected socket
-    // let sock = Socket::new_peer(py, addr, peer)?;
+    let ev = evloop.as_ref(py);
+    let mut info: HashMap<&'static str, PyObject> = HashMap::new();
+
+    if let (Some(ref addr), Some(peer)) = (addr, peer) {
+        let sock = Socket::new_peer(py, addr, peer, Some(socket.as_raw_fd()))?;
+        let sock_ref = sock.as_ref(py);
+        info.insert("sockname", sock_ref.getsockname(py)?.into());
+        info.insert("peername", sock_ref.getpeername(py)?.into());
+        info.insert("socket", sock.clone_ref(py).into());
+    }
 
     // create protocol
     let proto = factory.call(py, NoArgs, None).log_error(py, "Protocol factory failure")?;
 
     let (tx, rx) = mpsc::unbounded();
-    let tr = PyHttpTransport::new(py, evloop, Sender::new(tx), &proto, py.None())?;
-    let tr2 = tr.clone_ref(py);
-    let tr3 = tr.clone_ref(py);
+    let tr = PyHttpTransport::new(py, ev, Sender::new(tx), &proto, py.None())?;
+    let tr2 = tr.clone_ref(py).into();
+    let tr3 = tr.clone_ref(py).into();
 
     // create internal wire transport
     let transport = HttpTransport::new(socket, rx, tr.clone_ref(py));
 
     // start connection processing
-    evloop.href().spawn(
+    ev.href().spawn(
         transport.map(move |_| {
             tr2.connection_lost()
         }).map_err(move |err| {
             tr3.connection_error(err)
         })
     );
-    Ok(InitializedTransport::new(tr.into_object(), py.None()))
+    Ok(InitializedTransport::new(tr.into(), proto))
 }
 
 
 struct HttpTransport {
     framed: Framed<TcpStream, HttpTransportCodec>,
     intake: mpsc::UnboundedReceiver<PyHttpTransportMessage>,
-    transport: PyHttpTransport,
+    transport: PyHttpTransportPtr,
 
     buf: Option<EncoderMessage>,
     streams: VecDeque<mpsc::UnboundedReceiver<EncoderMessage>>,

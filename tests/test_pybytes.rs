@@ -33,7 +33,7 @@ fn test_pybytes() {
 
     let bytes = Bytes::from("{\"test\": \"value\"}");
     let pb = PyBytes::new(py, bytes).unwrap();
-    assert_eq!(pb.len(py), 17);
+    assert_eq!(pb.as_ref(py).len(), 17);
 
     let d = PyDict::new(py);
     d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
@@ -57,7 +57,7 @@ fn test_pybytes() {
         .log_error(py, "assert error").unwrap();
 
     let mut buf = BytesMut::with_capacity(24);
-    pb.as_ref(py).extend_into(py, &mut buf);
+    pb.as_ref(py).extend_into(&mut buf);
     assert_eq!(&buf[..], b"{\"test\": \"value\"}");
 
     py.run("b=bytearray(); b.extend(pb); assert b == b'{\"test\": \"value\"}'",

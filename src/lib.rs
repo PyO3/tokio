@@ -19,7 +19,7 @@ extern crate env_logger;
 #[macro_use] extern crate lazy_static;
 
 pub mod fut;
-//pub mod http;
+pub mod http;
 pub mod addrinfo;
 pub mod utils;
 pub mod handle;

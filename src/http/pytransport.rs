@@ -8,9 +8,9 @@ use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{Async, Future, Poll};
 
-use ::{TokioEventLoop, PyFuture, PyTask, pybytes};
+use {TokioEventLoop, PyFuture, PyFuturePtr, PyTask, PyTaskPtr, pybytes};
 use http::{self, pyreq, codec};
-use http::pyreq::{PyRequest, StreamReader};
+use http::pyreq::{PyRequest, PyRequestPtr, StreamReader, StreamReaderPtr};
 use utils::{Classes, PyLogger, ToPyErr, with_py};
 use pyunsafe::{GIL, Sender};
 
@@ -23,19 +23,25 @@ const CONCURENCY_LEVEL: usize = 1;
 
 #[py::class]
 pub struct PyHttpTransport {
-    _loop: TokioEventLoop,
+    _loop: TokioEventLoopPtr,
     _connection_lost: PyObject,
     _data_received: PyObject,
     _request_handler: PyObject,
     _socket: PyObject,
     transport: Sender<PyHttpTransportMessage>,
-    req: Option<pyreq::PyRequest>,
+    req: Option<pyreq::PyRequestPtr>,
     req_count: usize,
 
     inflight: usize,
     reqs: VecDeque<(http::Request, Sender<codec::EncoderMessage>)>,
-    payloads: VecDeque<StreamReader>,
+    payloads: VecDeque<StreamReaderPtr>,
+
+    token: PyToken,
 }
+
+#[py::ptr(PyHttpTransport)]
+pub struct PyHttpTransportPtr(PyPtr);
+
 
 #[py::methods]
 impl PyHttpTransport {
@@ -211,17 +217,17 @@ impl PyHttpTransport {
 
 
 struct RequestHandler {
-    evloop: TokioEventLoop,
-    tr: PyHttpTransport,
+    evloop: TokioEventLoopPtr,
+    tr: PyHttpTransportPtr,
     handler: PyObject,
-    task: PyTask,
-    inflight: PyRequest,
+    task: PyTaskPtr,
+    inflight: PyRequestPtr,
 }
 
 impl RequestHandler {
 
-    fn new(evloop: TokioEventLoop, msg: http::Request, tx: Sender<codec::EncoderMessage>,
-           tr: PyHttpTransport, handler: PyObject) -> PyResult<RequestHandler> {
+    fn new(evloop: TokioEventLoopPtr, msg: http::Request, tx: Sender<codec::EncoderMessage>,
+           tr: PyHttpTransportPtr, handler: PyObject) -> PyResult<RequestHandler> {
 
         let (task, req) = RequestHandler::start_task(&evloop, msg, tx, &handler)?;
 
@@ -234,9 +240,9 @@ impl RequestHandler {
         })
     }
 
-    pub fn start_task(evloop: &TokioEventLoop, msg: http::Request,
+    pub fn start_task(evloop: &TokioEventLoopPtr, msg: http::Request,
                       sender: Sender<codec::EncoderMessage>,
-                      handler: &PyObject) -> PyResult<(PyTask, PyRequest)> {
+                      handler: &PyObject) -> PyResult<(PyTaskPtr, PyRequestPtr)> {
         // start python task
         with_py(|py| {
             let req = pyreq::PyRequest::new(py, msg, &evloop, sender)?;
@@ -266,12 +272,12 @@ impl Future for RequestHandler {
                 //if self.tr.reqs(GIL::python()).borrow_mut().len() > 0 {
                 //    println!("num: {}", self.tr.reqs(GIL::python()).borrow_mut().len());
                 //}
-                let (msg, sender) = match self.tr.reqs_mut(GIL::python()).pop_front() {
+                let tr = self.tr.as_mut(GIL::python());
+                let (msg, sender) = match tr.reqs.pop_front() {
                     Some((msg, sender)) => (msg, sender),
                     None => {
                         // nothing to process, decrease number of inflight tasks and exit
-                        let inflight = self.tr.inflight_mut(GIL::python());
-                        *inflight = *inflight - 1;
+                        tr.inflight = tr.inflight - 1;
 
                         //println!("no requests in queue");
                         return Ok(Async::Ready(()))
