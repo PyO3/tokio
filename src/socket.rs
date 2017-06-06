@@ -18,27 +18,38 @@ pub struct Socket {
     sockaddr: SocketAddr,
     peername: Option<SocketAddr>,
     socket: Option<PyObject>,
+    token: PyToken,
 }
 
+#[py::ptr(Socket)]
+pub struct SocketPtr(PyPtr);
+
 impl Socket {
-    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<Socket> {
-        Socket::create_instance(
-            py, None,
-            addr.family.to_int() as i32,
-            addr.socktype.to_int() as i32,
-            addr.protocol.to_int() as i32,
-            addr.sockaddr.clone(), None, None)
+    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<SocketPtr> {
+        py.init(
+            |token| Socket{
+                fd: None,
+                family: addr.family.to_int() as i32,
+                socktype: addr.socktype.to_int() as i32,
+                proto: addr.protocol.to_int() as i32,
+                sockaddr: addr.sockaddr.clone(),
+                peername: None,
+                socket: None,
+                token: token})
     }
 
     pub fn new_peer(py: Python, addr: &AddrInfo,
-                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<Socket> {
-        Socket::create_instance(
-            py, fd,
-            addr.family.to_int() as i32,
-            addr.socktype.to_int() as i32,
-            addr.protocol.to_int() as i32,
-            addr.sockaddr.clone(),
-            Some(peer), None)
+                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<SocketPtr> {
+        py.init(
+            |token| Socket{
+                fd: None,
+                family: addr.family.to_int() as i32,
+                socktype: addr.socktype.to_int() as i32,
+                proto: addr.protocol.to_int() as i32,
+                sockaddr: addr.sockaddr.clone(),
+                peername: Some(peer),
+                socket: None,
+                token: token})
     }
 }
 
@@ -48,17 +59,17 @@ impl Socket {
 
     #[getter]
     fn get_family(&self, py: Python) -> PyResult<i32> {
-        Ok(*self.family(py))
+        Ok(self.family)
     }
 
     #[getter]
     fn get_type(&self, py: Python) -> PyResult<i32> {
-        Ok(*self.socktype(py))
+        Ok(self.socktype)
     }
 
     #[getter]
     fn get_proto(&self, py: Python) -> PyResult<i32> {
-        Ok(*self.proto(py))
+        Ok(self.proto)
     }
 
     fn accept(&self, py: Python) -> PyResult<()> {
@@ -85,18 +96,17 @@ impl Socket {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "detach method is not supported."))
     }
 
-    fn dup(&self, py: Python) -> PyResult<PyObject> {
-        if let Some(ref sock) = *self.socket(py) {
+    fn dup(&mut self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref sock) = self.socket {
             return sock.call_method(py, "dup", NoArgs, None)
         }
 
-        if let Some(fd) = *self.fd(py) {
+        if let Some(fd) = self.fd {
             let sock = Classes.Socket.call(
-                py, "socket", (
-                    self.family(py), self.socktype(py), self.proto(py), fd), None)?;
+                py, "socket", (self.family, self.socktype, self.proto, fd), None)?;
 
             let res = sock.call_method(py, "dup", NoArgs, None);
-            *self.socket_mut(py) = Some(sock);
+            self.socket = Some(sock);
             res
         } else {
             Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
@@ -112,28 +122,28 @@ impl Socket {
     }
 
     pub fn getpeername(&self, py: Python) -> PyResult<PyTuple> {
-        match *self.peername(py) {
+        match self.peername {
             None => Err(PyErr::new::<exc::OSError, _>(py, "Socket is not connected")),
-            Some(addr) => match addr {
-                SocketAddr::V4(addr) => {
-                    Ok((format!("{}", addr.ip()), addr.port()).to_py_tuple(py))
+            Some(ref addr) => match addr {
+                &SocketAddr::V4(addr) => {
+                    Ok((format!("{}", addr.ip()), addr.port()).into_tuple(py))
                 }
-                SocketAddr::V6(addr) => {
+                &SocketAddr::V6(addr) => {
                     Ok((format!("{}", addr.ip()),
-                        addr.port(), addr.flowinfo(), addr.scope_id(),).to_py_tuple(py))
+                        addr.port(), addr.flowinfo(), addr.scope_id(),).into_tuple(py))
                 },
             }
         }
     }
 
     pub fn getsockname(&self, py: Python) -> PyResult<PyTuple> {
-        match *self.sockaddr(py) {
+        match self.sockaddr {
             SocketAddr::V4(ref addr) => {
-                Ok((format!("{}", addr.ip()), addr.port()).to_py_tuple(py))
+                Ok((format!("{}", addr.ip()), addr.port()).into_tuple(py))
             }
             SocketAddr::V6(ref addr) => {
                 Ok((format!("{}", addr.ip()),
-                    addr.port(), addr.flowinfo(), addr.scope_id(),).to_py_tuple(py))
+                    addr.port(), addr.flowinfo(), addr.scope_id(),).into_tuple(py))
             },
         }
     }

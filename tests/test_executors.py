@@ -25,9 +25,11 @@ def test_executors_process_pool(loop, pool_factory):
             coros = []
             for i in range(0, 10):
                 coros.append(loop.run_in_executor(pool, fib, i))
-                res = await asyncio.gather(*coros, loop=loop)
-            assert res == fib10
-            await asyncio.sleep(0.01, loop=loop)
+
+            res = await asyncio.gather(*coros, loop=loop)
+
+        assert res == fib10
+        await asyncio.sleep(0.01, loop=loop)
 
     fib10 = [fib(i) for i in range(10)]
     loop.run_until_complete(run())

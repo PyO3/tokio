@@ -5,34 +5,38 @@ use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
-use ::{TokioEventLoop, Classes, with_py};
+use ::{TokioEventLoop, TokioEventLoopPtr, Classes};
 
 #[py::class]
 pub struct PyHandle {
-    _loop: TokioEventLoop,
-    _cancelled: bool,
-    _cancel_handle: Option<oneshot::Sender<()>>,
-    _callback: PyObject,
-    _args: PyTuple,
-    _source_traceback: Option<PyObject>,
+    evloop: TokioEventLoopPtr,
+    cancelled: bool,
+    cancel_handle: Option<oneshot::Sender<()>>,
+    callback: PyObject,
+    args: PyTuple,
+    source_traceback: Option<PyObject>,
+    token: PyToken,
 }
+
+#[py::ptr(PyHandle)]
+pub struct PyHandlePtr(PyPtr);
 
 #[py::methods]
 impl PyHandle {
 
-    fn cancel(&self, py: Python) -> PyResult<PyObject> {
-        *self._cancelled_mut(py) = true;
+    fn cancel(&mut self, _py: Python) -> PyResult<()> {
+        self.cancelled = true;
 
-        if let Some(tx) = self._cancel_handle_mut(py).take() {
+        if let Some(tx) = self.cancel_handle.take() {
             let _ = tx.send(());
         }
 
-        Ok(py.None())
+        Ok(())
     }
 
     #[getter(_cancelled)]
-    fn get_cancelled(&self, py: Python) -> PyResult<bool> {
-        Ok(*self._cancelled(py))
+    fn get_cancelled(&self, _py: Python) -> PyResult<bool> {
+        Ok(self.cancelled)
     }
 }
 
@@ -40,7 +44,7 @@ impl PyHandle {
 impl PyHandle {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
-               callback: PyObject, args: PyTuple) -> PyResult<PyHandle> {
+               callback: PyObject, args: PyTuple) -> PyResult<PyHandlePtr> {
 
         let tb = if evloop.is_debug() {
             let frame = Classes.Sys.call(py, "_getframe", (0,), None)?;
@@ -49,40 +53,49 @@ impl PyHandle {
             None
         };
 
-        PyHandle::create_instance(
-            py, evloop.clone_ref(py), false, None, callback, args, tb)
+        py.init(|t| PyHandle{
+            evloop: evloop.to_inst_ptr(),
+            cancelled: false,
+            cancel_handle: None,
+            callback: callback,
+            args: args,
+            source_traceback: tb,
+            token: t})
     }
+}
 
-    pub fn call_soon(&self, py: Python) {
+impl PyHandlePtr {
+
+    pub fn call_soon(&self, py: Python, evloop: &TokioEventLoop) {
         let h = self.clone_ref(py);
 
         // schedule work
-        self._loop(py).get_handle().spawn_fn(move || {
+        evloop.get_handle().spawn_fn(move || {
             h.run();
             future::ok(())
         });
     }
 
-    pub fn call_soon_threadsafe(&self, py: Python) {
+    pub fn call_soon_threadsafe(&self, py: Python, evloop: &TokioEventLoop) {
         let h = self.clone_ref(py);
 
         // schedule work
-        self._loop(py).remote().spawn(move |_| {
+        evloop.remote().spawn(move |_| {
             h.run();
             future::ok(())
         });
     }
 
-    pub fn call_later(&self, py: Python, when: Duration) {
+    pub fn call_later(&mut self, py: Python, evloop: &TokioEventLoop, when: Duration) {
         // cancel onshot
         let (cancel, rx) = oneshot::channel::<()>();
-        *self._cancel_handle_mut(py) = Some(cancel);
+        self.as_mut(py).cancel_handle = Some(cancel);
 
         // we need to hold reference, otherwise python will release handle object
         let h = self.clone_ref(py);
 
         // start timer
-        let fut = Timeout::new(when, self._loop(py).href()).unwrap().select2(rx)
+        let fut = Timeout::new(when, evloop.href()).unwrap().select2(rx)
             .then(move |res| {
                 if let Ok(future::Either::A(_)) = res {
                     // timeout got fired, call callback
@@ -90,17 +103,17 @@ impl PyHandle {
                 }
                 future::ok(())
             });
-        self._loop(py).href().spawn(fut);
+        evloop.href().spawn(fut);
     }
 
     pub fn run(&self) {
-        let _: PyResult<()> = with_py(|py| {
+        let _: PyResult<()> = self.with(|py, h| {
             // check if cancelled
-            if *self._cancelled(py) {
+            if h.cancelled {
                 return Ok(())
             }
 
-            let result = self._callback(py).call(py, self._args(py).clone_ref(py), None);
+            let result = h.callback.call(py, h.args.clone_ref(py), None);
 
             // handle python exception
             if let Err(err) = result {
@@ -108,19 +121,17 @@ impl PyHandle {
                     let context = PyDict::new(py);
                     context.set_item(py, "message",
                                      format!("Exception in callback {:?} {:?}",
-                                             self._callback(py),
-                                             self._args(py).clone_ref(py).into_object()))?;
-                    context.set_item(py, "handle",
-                                     format!("{:?}", self.clone_ref(py).into_object()))?;
+                                             h.callback, h.args))?;
+                    context.set_item(py, "handle", format!("{:?}", h))?;
                     context.set_item(py, "exception", err.clone_ref(py).instance(py))?;
 
-                    if let Some(ref tb) = *self._source_traceback(py) {
+                    if let Some(ref tb) = h.source_traceback {
                         context.set_item(py, "source_traceback", tb.clone_ref(py))?;
                     }
-                    self._loop(py).call_exception_handler(py, context)?;
+                    h.evloop.as_ref(py).call_exception_handler(py, context)?;
                 } else {
                     // escalate to event loop
-                    self._loop(py).stop_with_err(py, err);
+                    h.evloop.as_mut(py).stop_with_err(py, err);
                 }
             }
             Ok(())

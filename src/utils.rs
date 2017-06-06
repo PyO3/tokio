@@ -197,7 +197,7 @@ impl ToPyErr for LookupError {
         match self {
             &LookupError::IOError(ref err) => err.to_pyerr(py),
             &LookupError::Other(ref err_str) =>
-                PyErr::new_err(py, &Classes.GaiError, (err_str,)),
+                PyErr::new_err(py, &Classes.GaiError, (err_str.to_object(py),)),
             &LookupError::NulError(_) =>
                 PyErr::new_err(py, &Classes.GaiError, ("nil pointer",)),
             &LookupError::Generic =>
@@ -214,9 +214,9 @@ pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
     let res = Classes.Traceback.call(py, "format_exception",
                                      (err.ptype, err.pvalue, err.ptraceback), None);
     if let Ok(lines) = res {
-        if let Ok(lines) = PyList::downcast_from(py, lines) {
+        if let Ok(lines) = PyList::downcast_from(py, &lines) {
             for idx in 0..lines.len(py) {
-                let _ = write!(w, "{}", lines.get_item(py, idx));
+                let _ = write!(w, "{}", lines.get_item(py, idx as isize));
             }
         }
     }
@@ -226,15 +226,15 @@ pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
 // convert PyFloat or PyInt into Duration
 //
 pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option<Duration>> {
-    if let Ok(f) = PyFloat::downcast_from(py, value.clone_ref(py)) {
+    if let Ok(f) = PyFloat::downcast_from(py, &value) {
         let val = f.value(py);
         if val < 0.0 {
             Ok(None)
         } else {
             Ok(Some(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32)))
         }
-    } else if let Ok(i) = PyLong::downcast_from(py, value) {
-        if let Ok(val) = i.as_object().extract::<c_long>(py) {
+    } else if let Ok(i) = PyLong::downcast_from(py, &value) {
+        if let Ok(val) = i.as_ref().extract::<c_long>(py) {
             if val < 0 {
                 Ok(None)
             } else {
@@ -254,15 +254,15 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option
 // convert PyFloat or PyInt into u64 (milliseconds)
 //
 pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
-    if let Ok(f) = PyFloat::downcast_from(py, value.clone_ref(py)) {
+    if let Ok(f) = PyFloat::downcast_from(py, &value) {
         let val = f.value(py);
         if val > 0.0 {
             Ok((val * 1000.0) as u64)
         } else {
             Ok(0)
         }
-    } else if let Ok(i) = PyLong::downcast_from(py, value) {
-        if let Ok(val) = i.as_object().extract::<c_long>(py) {
+    } else if let Ok(i) = PyLong::downcast_from(py, &value) {
+        if let Ok(val) = i.as_ref().extract::<c_long>(py) {
             if val < 0 {
                 Ok(0)
             } else {

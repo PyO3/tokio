@@ -5,7 +5,7 @@ use futures::{future, Future};
 use net2::TcpBuilder;
 use tokio_core::net::TcpStream;
 
-use ::{PyFuture, TokioEventLoop};
+use ::{PyFuturePtr, TokioEventLoopPtr};
 use addrinfo::AddrInfo;
 use fut::{for_each, Until, UntilError};
 use pyunsafe::{GIL, Handle};
@@ -13,9 +13,9 @@ use transport::{InitializedTransport, tcp_transport_factory};
 
 
 pub fn create_sock_connection(
-    factory: PyObject, evloop: &TokioEventLoop,
+    factory: PyObject, evloop: TokioEventLoopPtr,
     stream: TcpStream, addr: AddrInfo,
-    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuture)
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuturePtr)
     -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
     let peer = stream.peer_addr().expect("should never happen");
@@ -32,18 +32,18 @@ pub fn create_sock_connection(
 }
 
 pub fn create_connection(
-    factory: PyObject, evloop: TokioEventLoop, addrs: Vec<AddrInfo>,
-    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuture)
+    factory: PyObject, evloop: TokioEventLoopPtr, addrs: Vec<AddrInfo>,
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuturePtr)
                          -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
-    let handle = evloop.get_handle();
+    let handle = evloop.as_ref(GIL::python()).get_handle();
     let conn = connect(addrs, handle.clone());
 
     let transport = conn.and_then(
         move |(socket, addr)| {
             let peer = socket.peer_addr().expect("should never happen");
             let result = tcp_transport_factory(
-                &evloop, false, &factory, &ssl, hostname,
+                evloop, false, &factory, &ssl, hostname,
                 socket, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
 
             waiter.then(move |_| match result {

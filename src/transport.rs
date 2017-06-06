@@ -12,11 +12,11 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use ::TokioEventLoop;
-use utils::{Classes, PyLogger, ToPyErr, with_py};
+use {TokioEventLoop, TokioEventLoopPtr};
+use utils::{Classes, PyLogger, ToPyErr};
 use addrinfo::AddrInfo;
 use pybytes;
-use pyfuture::PyFuture;
+use pyfuture::{PyFuture, PyFuturePtr};
 use pyunsafe::{GIL, Sender};
 use socket::Socket;
 
@@ -35,18 +35,18 @@ impl InitializedTransport {
     }
 }
 
-impl ToPyTuple for InitializedTransport {
-    fn to_py_tuple(&self, py: Python) -> PyTuple {
-        (self.transport.clone_ref(py), self.protocol.clone_ref(py)).to_py_tuple(py)
+impl IntoPyTuple for InitializedTransport {
+    fn into_tuple(self, py: Python) -> PyTuple {
+        (self.transport.clone_ref(py), self.protocol.clone_ref(py)).into_tuple(py)
     }
 }
 
 
 // Transport factory
 pub type TransportFactory = fn(
-    &TokioEventLoop, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
+    TokioEventLoopPtr, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
     TcpStream, Option<&AddrInfo>, Option<SocketAddr>,
-    Option<PyFuture>) -> io::Result<InitializedTransport>;
+    Option<PyFuturePtr>) -> io::Result<InitializedTransport>;
 
 pub struct BytesMsg {
     pub buf: buffer::PyBuffer,
@@ -63,23 +63,25 @@ pub enum TcpTransportMessage {
 
 
 pub fn tcp_transport_factory<T>(
-    evloop: &TokioEventLoop, server: bool,
+    evloop: TokioEventLoopPtr, server: bool,
     factory: &PyObject, ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
     socket: T, addr: Option<&AddrInfo>,
-    peer: Option<SocketAddr>, waiter: Option<PyFuture>) -> io::Result<InitializedTransport>
+    peer: Option<SocketAddr>, waiter: Option<PyFuturePtr>) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + AsRawFd + 'static
 {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
+    let ev = evloop.as_ref(py);
     let mut info: HashMap<&'static str, PyObject> = HashMap::new();
 
     if let (Some(ref addr), Some(peer)) = (addr, peer) {
         let sock = Socket::new_peer(py, addr, peer, Some(socket.as_raw_fd()))?;
-        info.insert("sockname", sock.getsockname(py)?.into_object());
-        info.insert("peername", sock.getpeername(py)?.into_object());
-        info.insert("socket", sock.clone_ref(py).into_object());
+        let sock_ref = sock.as_ref(py);
+        info.insert("sockname", sock_ref.getsockname(py)?.into());
+        info.insert("peername", sock_ref.getpeername(py)?.into());
+        info.insert("socket", sock.clone_ref(py).into());
     }
 
     // create protocol
@@ -98,19 +100,18 @@ pub fn tcp_transport_factory<T>(
             let _ = kwargs.set_item(py, "server_hostname", hostname);
         }
         let ssl_proto = Classes.SSLProto.call(py, (
-            evloop.clone_ref(py),
-            proto.clone_ref(py), ssl.clone_ref(py), waiter), Some(&kwargs))?;
+            evloop.clone_ref(py), proto.clone_ref(py), ssl.clone_ref(py), waiter), Some(&kwargs))?;
 
-        let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &ssl_proto, info)?;
+        let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &ssl_proto, info)?;
         let wrp_tr = ssl_proto.getattr(py, "_app_transport")?;
         (tr, wrp_tr)
     } else {
         // normal transport
         if let Some(waiter) = waiter {
-            waiter.set(py, Ok(py.None()));
+            waiter.as_mut(py).set(py, Ok(py.None()));
         }
-        let tr = PyTcpTransport::new(py, evloop, Sender::new(tx), &proto, info)?;
-        let wrp_tr = tr.clone_ref(py).into_object();
+        let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &proto, info)?;
+        let wrp_tr = tr.clone_ref(py).into();
         (tr, wrp_tr)
     };
 
@@ -121,7 +122,7 @@ pub fn tcp_transport_factory<T>(
     let conn_err = tr.clone_ref(py);
     let conn_lost = tr.clone_ref(py);
 
-    evloop.href().spawn(
+    ev.href().spawn(
         transport.map(move |_| {
             conn_lost.connection_lost()
         }).map_err(move |err| {
@@ -129,41 +130,44 @@ pub fn tcp_transport_factory<T>(
         })
     );
 
-    Ok(InitializedTransport::new(wrp_tr.into_object(), proto))
+    Ok(InitializedTransport::new(wrp_tr.into(), proto))
 }
 
 
 #[py::class]
 pub struct PyTcpTransport {
-    _loop: TokioEventLoop,
-    _connection_lost: PyObject,
-    _data_received: PyObject,
-    _transport: Sender<TcpTransportMessage>,
-    _drain: Option<PyFuture>,
-    _drained: bool,
-    _closing: bool,
-    _info: HashMap<&'static str, PyObject>,
-    _paused: bool,
+    evloop: TokioEventLoopPtr,
+    connection_lost: PyObject,
+    data_received: PyObject,
+    transport: Sender<TcpTransportMessage>,
+    drain: Option<PyFuturePtr>,
+    drained: bool,
+    closing: bool,
+    info: HashMap<&'static str, PyObject>,
+    paused: bool,
+    token: PyToken,
 }
+
+#[py::ptr(PyTcpTransport)]
+pub struct PyTcpTransportPtr(PyPtr);
 
 #[py::methods]
 impl PyTcpTransport {
 
     fn is_closing(&self, py: Python) -> PyResult<bool> {
-        Ok(*self._closing(py))
+        Ok(self.closing)
     }
 
     fn get_extra_info(&self, py: Python,
                       name: PyString, default: Option<PyObject>) -> PyResult<PyObject> {
-        if *self._closing(py) {
-            return
-                match default {
-                    Some(val) => Ok(val),
-                    None => Ok(py.None())
-                };
+        if self.closing {
+            return match default {
+                Some(val) => Ok(val),
+                None => Ok(py.None())
+            };
         }
 
-        if let Some(val) = self._info(py).get(name.to_string(py)?.as_ref()) {
+        if let Some(val) = self.info.get(name.to_string(py)?.as_ref()) {
             Ok(val.clone_ref(py))
         } else {
             match default {
@@ -176,7 +180,7 @@ impl PyTcpTransport {
     //
     // write bytes to transport
     //
-    fn write(&self, py: Python, data: PyObject) -> PyResult<()> {
+    fn write(&mut self, py: Python, data: PyObject) -> PyResult<()> {
         let data = buffer::PyBuffer::get(py, &data)?;
         let len = if let Some(slice) = data.as_slice::<u8>(py) {
             slice.len() as usize
@@ -185,8 +189,8 @@ impl PyTcpTransport {
                 py, "data argument must be a bytes-like object"))
         };
 
-        *self._drained_mut(py) = false;
-        let _ = self._transport(py).send(
+        self.drained = false;
+        let _ = self.transport.send(
             TcpTransportMessage::Bytes(BytesMsg{buf:data, len:len}));
         Ok(())
     }
@@ -194,7 +198,7 @@ impl PyTcpTransport {
     //
     // write bytes to transport
     //
-    fn writelines(&self, py: Python, data: PyObject) -> PyResult<()> {
+    fn writelines(&mut self, py: Python, data: PyObject) -> PyResult<()> {
         let iter = data.iter(py)?;
 
         for item in iter {
@@ -214,39 +218,39 @@ impl PyTcpTransport {
     //
     // write all data to socket
     //
-    fn drain(&self, py: Python) -> PyResult<PyFuture> {
-        if *self._drained(py) {
-            Ok(PyFuture::done_fut(py, self._loop(py), py.None())?)
+    fn drain(&mut self, py: Python) -> PyResult<PyFuturePtr> {
+        if self.drained {
+            Ok(PyFuture::done_fut(py, self.evloop.clone_ref(py), py.None())?)
         } else {
-            if let Some(ref fut) = *self._drain(py) {
+            if let Some(ref fut) = self.drain {
                 Ok(fut.clone_ref(py))
             } else {
-                let fut = PyFuture::new(py, self._loop(py))?;
-                *self._drain_mut(py) = Some(fut.clone_ref(py));
+                let fut = PyFuture::new(py, self.evloop.clone_ref(py))?;
+                self.drain = Some(fut.clone_ref(py));
                 Ok(fut)
             }
         }
     }
 
-    fn pause_reading(&self, py: Python) -> PyResult<()> {
-        *self._paused_mut(py) = true;
-        let _ = self._transport(py).send(TcpTransportMessage::Pause);
+    fn pause_reading(&mut self, py: Python) -> PyResult<()> {
+        self.paused = true;
+        let _ = self.transport.send(TcpTransportMessage::Pause);
         Ok(())
     }
 
-    fn resume_reading(&self, py: Python) -> PyResult<()> {
-        *self._paused_mut(py) = false;
-        let _ = self._transport(py).send(TcpTransportMessage::Resume);
+    fn resume_reading(&mut self, py: Python) -> PyResult<()> {
+        self.paused = false;
+        let _ = self.transport.send(TcpTransportMessage::Resume);
         Ok(())
     }
 
     //
     // close transport
     //
-    fn close(&self, py: Python) -> PyResult<()> {
-        if ! *self._closing(py) {
-            *self._closing_mut(py) = true;
-            let _ = self._transport(py).send(TcpTransportMessage::Close);
+    fn close(&mut self, py: Python) -> PyResult<()> {
+        if !self.closing {
+            self.closing = true;
+            let _ = self.transport.send(TcpTransportMessage::Close);
         }
         Ok(())
     }
@@ -254,34 +258,41 @@ impl PyTcpTransport {
     //
     // abort transport
     //
-    fn abort(&self, py: Python) -> PyResult<()> {
-        *self._closing_mut(py) = true;
-        let _ = self._transport(py).send(TcpTransportMessage::Shutdown);
+    fn abort(&mut self, py: Python) -> PyResult<()> {
+        self.closing = true;
+        let _ = self.transport.send(TcpTransportMessage::Shutdown);
         Ok(())
     }
 }
 
-impl PyTcpTransport {
+impl PyTcpTransportPtr {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
-               protocol: &PyObject, info: HashMap<&'static str, PyObject>) -> PyResult<PyTcpTransport> {
+               protocol: &PyObject, info: HashMap<&'static str, PyObject>) -> PyResult<PyTcpTransportPtr> {
 
         // get protocol callbacks
         let connection_made = protocol.getattr(py, "connection_made")?;
         let connection_lost = protocol.getattr(py, "connection_lost")?;
         let data_received = protocol.getattr(py, "data_received")?;
 
-        let transport = PyTcpTransport::create_instance(
-            py, evloop.clone_ref(py),
-            connection_lost, data_received, sender,
-            None, true, false, info, false)?;
+        let transport = py.init(|token| PyTcpTransport {
+            evloop: evloop.to_inst_ptr(),
+            connection_lost: connection_lost,
+            data_received: data_received,
+            transport: sender,
+            drain: None,
+            drained: true,
+            closing: false,
+            info: info,
+            paused: false,
+            token: token})?;
 
         // connection made
         let _ = connection_made.call(py, (transport.clone_ref(py),), None)
             .map_err(|err| {
-                *transport._closing_mut(py) = true;
-                let _ = transport._transport(py).send(TcpTransportMessage::Close);
+                transport.as_mut(py).closing = true;
+                let _ = transport.as_mut(py).transport.send(TcpTransportMessage::Close);
                 evloop.log_error(py, err, "Protocol.connection_made error")
             });
 
@@ -290,27 +301,27 @@ impl PyTcpTransport {
 
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
-        with_py(|py| {
-            self._loop(py).with(
+        self.with(|py, transport| {
+            transport.evloop.as_ref(py).with(
                 py, "Protocol.connection_made error",
-                |py| self._connection_lost(py).call(py, (py.None(),), None))});
+                |py| transport.connection_lost.call(py, (py.None(),), None))});
     }
 
     pub fn connection_error(&self, err: io::Error) {
         trace!("Protocol.connection_lost({:?})", err);
-        with_py(|py| {
+        self.with_mut(|py, tr| {
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
                     let e = Classes.SocketTimeout.call(py, NoArgs, None).unwrap();
 
-                    self._connection_lost(py).call(py, (e,), None)
+                    tr.connection_lost.call(py, (e,), None)
                         .into_log(py, "connection_lost error");
                 },
                 _ => {
                     trace!("Protocol.connection_lost(err): {:?}", err);
                     let mut e = err.to_pyerr(py);
-                    self._connection_lost(py).call(py, (e.instance(py),), None)
+                    tr.connection_lost.call(py, (e.instance(py),), None)
                         .into_log(py, "connection_lost error");
                 }
             }
@@ -318,29 +329,27 @@ impl PyTcpTransport {
     }
 
     pub fn data_received(&self, bytes: Bytes) -> bool {
-        with_py(|py| {
-            self._loop(py).with(
+        self.with(|py, tr| {
+            tr.evloop.as_ref(py).with(
                 py, "data_received error", |py| {
                     // let bytes = pybytes::PyBytes::new(py, bytes)?;
                     let bytes = PyBytes::new(py, bytes.as_ref());
-                    self._data_received(py).call(py, (bytes,), None)
+                    tr.data_received.call(py, (bytes,), None)
                 });
-            ! *self._paused(py)
+            !tr.paused
         })
     }
 
     pub fn drained(&self) {
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-
-        *self._drained_mut(py) = true;
-        match self._drain_mut(py).take() {
-            Some(fut) => {
-                let _ = fut.set(py, Ok(py.None()));
-            },
-            None => (),
-        }
-        drop(py);
+        self.with_mut(|py, tr| {
+            tr.drained = true;
+            match tr.drain.take() {
+                Some(fut) => {
+                    let _ = fut.as_mut(py).set(py, Ok(py.None()));
+                },
+                None => (),
+            }
+        })
     }
 }
 
@@ -357,7 +366,7 @@ struct TcpTransport<T> {
     fd: RawFd,
     framed: Framed<T, TcpTransportCodec>,
     intake: unsync::mpsc::UnboundedReceiver<TcpTransportMessage>,
-    transport: PyTcpTransport,
+    transport: PyTcpTransportPtr,
 
     buf: Option<BytesMsg>,
     incoming_eof: bool,
@@ -371,7 +380,7 @@ impl<T> TcpTransport<T>
 
     fn new(socket: T,
            intake: mpsc::UnboundedReceiver<TcpTransportMessage>,
-           transport: PyTcpTransport) -> TcpTransport<T> {
+           transport: PyTcpTransportPtr) -> TcpTransport<T> {
 
         TcpTransport {
             fd: socket.as_raw_fd(),

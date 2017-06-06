@@ -9,7 +9,7 @@ use futures::{stream, Async, Future, Poll};
 use tokio_core::reactor::{Handle, PollEvented};
 
 use fut::Until;
-use handle::PyHandle;
+use handle::PyHandlePtr;
 
 
 pub struct PyFd (RawFd);
@@ -40,12 +40,12 @@ impl Evented for PyFd {
 pub struct PyFdHandle {
     ev: PollEvented<PyFd>,
     rx: oneshot::Receiver<()>,
-    reader: Option<PyHandle>,
-    writer: Option<PyHandle>,
+    reader: Option<PyHandlePtr>,
+    writer: Option<PyHandlePtr>,
 }
 
 impl PyFdHandle {
-    pub fn reader(fd: c_int, handle: &Handle, reader: PyHandle)
+    pub fn reader(fd: c_int, handle: &Handle, reader: PyHandlePtr)
                   -> io::Result<oneshot::Sender<()>> {
         let (tx, rx) = oneshot::channel();
         let ev = PollEvented::new(PyFd::new(fd), handle)?;
@@ -60,7 +60,7 @@ impl PyFdHandle {
         Ok(tx)
     }
 
-    pub fn writer(fd: c_int, handle: &Handle, writer: PyHandle)
+    pub fn writer(fd: c_int, handle: &Handle, writer: PyHandlePtr)
                   -> io::Result<oneshot::Sender<()>> {
         let (tx, rx) = oneshot::channel();
         let ev = PollEvented::new(PyFd::new(fd), handle)?;

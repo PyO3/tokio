@@ -6,18 +6,18 @@ use futures::{Async, Future, Poll, Stream};
 use tokio_signal::unix::Signal;
 use tokio_core::reactor::Handle;
 
-use handle::PyHandle;
+use handle::PyHandlePtr;
 
 
 pub enum SignalsMessage {
-    Add(c_int, Signal, PyHandle),
+    Add(c_int, Signal, PyHandlePtr),
     Remove(c_int),
 }
 
 
 pub struct Signals {
     rx: mpsc::UnboundedReceiver<SignalsMessage>,
-    signals: HashMap<c_int, (Signal, PyHandle)>,
+    signals: HashMap<c_int, (Signal, PyHandlePtr)>,
 }
 
 impl Signals {
@@ -34,7 +34,7 @@ impl Signals {
         tx
     }
 
-    fn add_signal_handler(&mut self, sig: c_int, signal: Signal, handler: PyHandle) {
+    fn add_signal_handler(&mut self, sig: c_int, signal: Signal, handler: PyHandlePtr) {
         self.signals.insert(sig, (signal, handler));
     }
 
