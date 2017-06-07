@@ -30,7 +30,7 @@ use client;
 use handle::PyHandle;
 use fd;
 use fut::{Until, UntilError};
-use http;
+//use http;
 use signals;
 use server;
 use utils::{self, with_py, ToPyErr, Classes};
@@ -218,6 +218,7 @@ impl TokioEventLoop {
             let h = PyHandle::new(py, &self,
                                   callback, PyTuple::new(py, &args.as_slice(py)[1..]))?;
             h.call_soon(py, &self);
+            py.release(args);
             Ok(h.into())
         }
     }
@@ -1878,9 +1879,10 @@ impl TokioEventLoop {
                 // Exception in the user set custom exception handler.
                 error!(
                     "Unhandled error in exception handler, exception: {:?}, context: {}",
-                    err, context);
+                    err, &context);
             }
         }
+        py.release(context);
         Ok(())
     }
 
@@ -1893,61 +1895,59 @@ impl TokioEventLoop {
                 py, "Event loop is running already"));
         }
 
-        let res = {
-            let evloop = self.to_inst_ptr();
+        let evloop = self.to_inst_ptr();
 
-            py.allow_threads(|| {
-                let ev = evloop.as_mut(GIL::python());
-                if let Some(ref mut core) = evloop.as_mut(GIL::python()).core {
-                    let rx = {
-                        let gil = Python::acquire_gil();
-                        let py = gil.python();
-
-                        // set cancel sender
-                        let (tx, rx) = oneshot::channel();
-                        evloop.as_mut(py).runner = Some(tx);
-                        rx
-                    };
-
-                    // SIGINT
-                    let ctrlc_f = tokio_signal::ctrl_c(ev.href());
-                    let ctrlc = core.0.run(ctrlc_f).unwrap().into_future();
-
-                    let fut = rx.select2(ctrlc).then(|res| {
-                        match res {
-                            Ok(future::Either::A((res, _))) => match res {
-                                Ok(_) => future::ok(RunStatus::Stopped),
-                                Err(err) => future::ok(RunStatus::PyRes(Err(err))),
-                            },
-                            Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
-                            Err(_) => future::err(()),
-                        }
-                    });
-
-                    // set ID for current thread
-                    let old = ID.with(|cell| cell.borrow().get());
-                    ID.with(|mut cell| cell.borrow_mut().set(ev.id));
-
-                    let result = match core.0.run(fut) {
-                        Ok(status) => status,
-                        Err(_) => RunStatus::Error,
-                    };
-                    if let Some(id) = old {
-                        ID.with(|cell| cell.set(Some(id)));
-                    }
-
-                    Ok(result)
-                } else {
+        let result = py.allow_threads(|| {
+            let ev = evloop.as_mut(GIL::python());
+            if let Some(ref mut core) = evloop.as_mut(GIL::python()).core {
+                let rx = {
                     let gil = Python::acquire_gil();
                     let py = gil.python();
-                    return Err(PyErr::new::<exc::RuntimeError, _>(py, "Event loop is closed"));
+
+                    // set cancel sender
+                    let (tx, rx) = oneshot::channel();
+                    evloop.as_mut(py).runner = Some(tx);
+                    rx
+                };
+
+                // SIGINT
+                let ctrlc_f = tokio_signal::ctrl_c(ev.href());
+                let ctrlc = core.0.run(ctrlc_f).unwrap().into_future();
+
+                let fut = rx.select2(ctrlc).then(|res| {
+                    match res {
+                        Ok(future::Either::A((res, _))) => match res {
+                            Ok(_) => future::ok(RunStatus::Stopped),
+                            Err(err) => future::ok(RunStatus::PyRes(Err(err))),
+                        },
+                        Ok(future::Either::B(_)) => future::ok(RunStatus::CtrlC),
+                        Err(_) => future::err(()),
+                    }
+                });
+
+                // set ID for current thread
+                let old = ID.with(|cell| cell.borrow().get());
+                ID.with(|mut cell| cell.borrow_mut().set(ev.id));
+
+                let result = match core.0.run(fut) {
+                    Ok(status) => status,
+                    Err(_) => RunStatus::Error,
+                };
+                if let Some(id) = old {
+                    ID.with(|cell| cell.set(Some(id)));
                 }
-            })?
-        };
+
+                Ok(result)
+            } else {
+                let gil = Python::acquire_gil();
+                let py = gil.python();
+                return Err(PyErr::new::<exc::RuntimeError, _>(py, "Event loop is closed"));
+            }
+        })?;
+        py.release(evloop);
 
         let _ = self.stop(py);
-
-        match res {
+        match result {
             RunStatus::Stopped => Ok(py.None()),
             RunStatus::CtrlC => Ok(py.None()),
             RunStatus::PyRes(res) => res,

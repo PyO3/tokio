@@ -123,7 +123,10 @@ impl _PyFuture {
                 self.schedule_callbacks(py, State::Cancelled, sender, false);
                 true
             }
-            _ => false
+            _ => {
+                py.release(sender);
+                false
+            }
         }
     }
 
@@ -322,17 +325,22 @@ impl _PyFuture {
     // InvalidStateError.
     //
     pub fn set_result(&mut self, py: Python,
-                      result: PyObject, sender: PyObject, inplace: bool) -> PyResult<PyObject> {
-        match self.state {
+                      result: PyObject, sender: PyObject, inplace: bool) -> PyResult<()> {
+        let res = match self.state {
             State::Pending => {
                 // set result
                 self.result = Some(result);
 
                 self.schedule_callbacks(py, State::Finished, sender, inplace);
-                Ok(py.None())
+                Ok(())
             },
-            _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
-        }
+            _ => {
+                py.release(result);
+                py.release(sender);
+                Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs))
+            }
+        };
+        res
     }
 
     //
@@ -342,7 +350,7 @@ impl _PyFuture {
     // InvalidStateError.
     //
     pub fn set_exception(&mut self, py: Python, exception: PyObject,
-                         sender: PyObject, inplace: bool) -> PyResult<PyObject>
+                         sender: PyObject, inplace: bool) -> PyResult<()>
     {
         match self.state {
             State::Pending => {
@@ -366,9 +374,13 @@ impl _PyFuture {
                 self.log_exc_tb.set(true);
 
                 self.schedule_callbacks(py, State::Finished, sender, inplace);
-                Ok(py.None())
+                Ok(())
             }
-            _ => Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs)),
+            _ => {
+                py.release(exception);
+                py.release(sender);
+                Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs))
+            }
         }
     }
 
@@ -411,7 +423,6 @@ impl _PyFuture {
         // schedule rust callbacks
         let result = self.result(py, false);
         let mut rcallbacks = self.rcallbacks.take();
-
         let send_rresults = move || {
             if let Some(ref mut rcallbacks) = rcallbacks {
                 with_py(move |py| {
@@ -427,6 +438,7 @@ impl _PyFuture {
                             None => break
                         };
                     }
+                    py.release_res(result);
                 });
             }
             future::ok(())
@@ -440,22 +452,26 @@ impl _PyFuture {
         // schedule python callbacks
         match self.callbacks.take() {
             Some(callbacks) => {
-                // call task callback
-                let send_callbacks = move|| {
-                    with_py(move |py| {
-                        // call python callback
-                        for cb in callbacks.iter() {
-                            cb.call(py, (owner.clone_ref(py),), None)
-                                .into_log(py, "future done callback error");
-                        }
-                    });
-                    future::ok(())
-                };
-
                 if inplace {
-                    let _ = send_callbacks();
+                    // call python callback
+                    for cb in callbacks.iter() {
+                        cb.call(py, (owner.clone_ref(py),), None)
+                            .into_log(py, "future done callback error");
+                    }
+                    py.release(owner);
                 } else {
-                    evloop.href().spawn_fn(|| send_callbacks());
+                    // call task callback
+                    evloop.href().spawn_fn(move|| {
+                        with_py(move |py| {
+                            // call python callback
+                            for cb in callbacks.iter() {
+                                cb.call(py, (owner.clone_ref(py),), None)
+                                    .into_log(py, "future done callback error");
+                            }
+                            py.release(owner);
+                        });
+                        future::ok(())
+                    });
                 }
             },
             _ => (),
@@ -473,21 +489,23 @@ impl _PyFuture {
 
 impl Drop for _PyFuture {
     fn drop(&mut self) {
+        let py = GIL::python();
         if self.log_exc_tb.get() {
-            let _: PyResult<()> = with_py(|py| {
-                let context = PyDict::new(py);
-                context.set_item(py, "message", "Future exception was never retrieved")?;
-                context.set_item(py, "future", "PyFuture")?;
-                if let Some(tb) = self.source_tb.take() {
-                    context.set_item(py, "source_traceback", tb)?;
-                }
-                if let Some(ref exc) = self.exception {
-                    context.set_item(py, "exception", exc.clone_ref(py))?;
-                }
-                self.evloop.as_ref(py).call_exception_handler(py, context)?;
-                Ok(())
-            });
-        }
+            let context = PyDict::new(py);
+            let _ = context.set_item(py, "message", "Future exception was never retrieved");
+            let _ = context.set_item(py, "future", "PyFuture");
+            if let Some(tb) = self.source_tb.take() {
+                let _ = context.set_item(py, "source_traceback", tb);
+            }
+            if let Some(ref exc) = self.exception {
+                let _ = context.set_item(py, "exception", exc.clone_ref(py));
+            }
+            let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
+        };
+        py.release(self.result.take());
+        py.release(self.exception.take());
+        py.release(self.source_tb.take());
+        unsafe {self.evloop.drop_ref()};
     }
 }
 
@@ -547,6 +565,7 @@ impl PyFuture {
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "cancel", NoArgs, None);
+            py.release(fut);
         }
 
         let ob = self.to_object(py);
@@ -635,11 +654,12 @@ impl PyFuture {
     /// If the future is already done when this method is called, raises
     /// InvalidStateError.
     ///
-    pub fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<PyObject> {
+    pub fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<()> {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "set_result", (result.clone_ref(py),), None);
+            py.release(fut);
         }
         let ob = self.to_inst_ptr().into();
         self.fut.set_result(py, result, ob, false)
@@ -651,11 +671,12 @@ impl PyFuture {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<PyObject> {
+    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<()> {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
             let _ = fut.call_method(py, "set_exception", (exception.clone_ref(py),), None);
+            py.release(fut);
         }
         let ob = self.to_object(py);
         self.fut.set_exception(py, exception, ob, false)
@@ -695,16 +716,14 @@ impl PyFuture {
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
             if !exc.is_none(py) {
                 let ob = self.to_object(py);
-                let _ = self.fut.set_exception(py, exc, ob, true);
-                return Ok(())
+                return self.fut.set_exception(py, exc, ob, true)
             }
         }
 
         // if fut completed with normal result
         if let Ok(result) = fut.call_method(py, "result", NoArgs, None) {
             let ob = self.to_object(py);
-            let _ = self.fut.set_result(py, result, ob, true);
-            return Ok(())
+            return self.fut.set_result(py, result, ob, true);
         }
 
         unreachable!();
@@ -774,7 +793,7 @@ impl PyIterProtocol for PyFuture {
 impl PyFuture {
 
     pub fn new(py: Python, evloop: TokioEventLoopPtr) -> PyResult<PyFuturePtr> {
-        py.init(|t| PyFuture { fut: _PyFuture::new(py, evloop.clone_ref(py)),
+        py.init(|t| PyFuture { fut: _PyFuture::new(py, evloop),
                                blocking: false,
                                pyfut: None,
                                token: t})

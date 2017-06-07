@@ -62,16 +62,49 @@ impl PyHandle {
             source_traceback: tb,
             token: t})
     }
+
+    pub fn run(&self, py: Python) {
+        // check if cancelled
+        if self.cancelled {
+            return
+        }
+
+        let result = self.callback.call(py, self.args.clone_ref(py), None);
+
+        // handle python exception
+        if let Err(err) = result {
+            if err.matches(py, &Classes.Exception) {
+                let context = PyDict::new(py);
+                let _ = context.set_item(
+                    py, "message", format!("Exception in callback {:?} {:?}",
+                                           self.callback, self.args));
+                let _ = context.set_item(py, "handle", format!("{:?}", self));
+                let _ = context.set_item(py, "exception", err.clone_ref(py).instance(py));
+
+                if let Some(ref tb) = self.source_traceback {
+                    let _ = context.set_item(py, "source_traceback", tb.clone_ref(py));
+                }
+                let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
+            } else {
+                // escalate to event loop
+                self.evloop.as_mut(py).stop_with_err(py, err);
+            }
+        }
+    }
 }
 
 impl PyHandlePtr {
+
+    pub fn run(&self) {
+        self.with(|py, h| h.run(py));
+    }
 
     pub fn call_soon(&self, py: Python, evloop: &TokioEventLoop) {
         let h = self.clone_ref(py);
 
         // schedule work
         evloop.get_handle().spawn_fn(move || {
-            h.run();
+            h.into_py(|py, h| h.run(py));
             future::ok(())
         });
     }
@@ -81,7 +114,7 @@ impl PyHandlePtr {
 
         // schedule work
         evloop.remote().spawn(move |_| {
-            h.run();
+            h.into_py(|py, h| h.run(py));
             future::ok(())
         });
     }
@@ -99,42 +132,10 @@ impl PyHandlePtr {
             .then(move |res| {
                 if let Ok(future::Either::A(_)) = res {
                     // timeout got fired, call callback
-                    h.run();
+                    h.into_py(|py, h| h.run(py));
                 }
                 future::ok(())
             });
         evloop.href().spawn(fut);
-    }
-
-    pub fn run(&self) {
-        let _: PyResult<()> = self.with(|py, h| {
-            // check if cancelled
-            if h.cancelled {
-                return Ok(())
-            }
-
-            let result = h.callback.call(py, h.args.clone_ref(py), None);
-
-            // handle python exception
-            if let Err(err) = result {
-                if err.matches(py, &Classes.Exception) {
-                    let context = PyDict::new(py);
-                    context.set_item(py, "message",
-                                     format!("Exception in callback {:?} {:?}",
-                                             h.callback, h.args))?;
-                    context.set_item(py, "handle", format!("{:?}", h))?;
-                    context.set_item(py, "exception", err.clone_ref(py).instance(py))?;
-
-                    if let Some(ref tb) = h.source_traceback {
-                        context.set_item(py, "source_traceback", tb.clone_ref(py))?;
-                    }
-                    h.evloop.as_ref(py).call_exception_handler(py, context)?;
-                } else {
-                    // escalate to event loop
-                    h.evloop.as_mut(py).stop_with_err(py, err);
-                }
-            }
-            Ok(())
-        });
     }
 }

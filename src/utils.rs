@@ -117,7 +117,7 @@ pub fn iscoroutine(ob: &PyObject) -> bool {
 
 pub trait PyLogger {
 
-    fn into_log(&self, py: Python, msg: &str);
+    fn into_log(self, py: Python, msg: &str);
 
     fn log_error(self, py: Python, msg: &str) -> Self;
 
@@ -125,10 +125,37 @@ pub trait PyLogger {
 
 impl<T> PyLogger for PyResult<T> {
 
-    fn into_log(&self, py: Python, msg: &str) {
-        if let &Err(ref err) = self {
-            error!("{} {:?}", msg, err);
-            err.clone_ref(py).print(py);
+    default fn into_log(self, py: Python, msg: &str) {
+        match self {
+            Ok(_) => (),
+            Err(err) => {
+                error!("{} {:?}", msg, err);
+                err.print(py);
+            }
+        }
+    }
+
+    default fn log_error(self, py: Python, msg: &str) -> Self {
+        match &self {
+            &Err(ref err) => {
+                error!("{} {:?}", msg, err);
+                err.clone_ref(py).print(py);
+            }
+            _ => (),
+        }
+        self
+    }
+}
+
+impl<T> PyLogger for PyResult<T> where T: IntoPyPointer {
+
+    fn into_log(self, py: Python, msg: &str) {
+        match self {
+            Ok(ob) => py.release(ob),
+            Err(err) => {
+                error!("{} {:?}", msg, err);
+                err.print(py);
+            }
         }
     }
 
@@ -147,7 +174,7 @@ impl<T> PyLogger for PyResult<T> {
 
 impl PyLogger for PyErr {
 
-    fn into_log(&self, py: Python, msg: &str) {
+    fn into_log(self, py: Python, msg: &str) {
         error!("{} {:?}", msg, self);
         self.clone_ref(py).print(py);
     }

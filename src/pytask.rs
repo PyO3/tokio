@@ -127,7 +127,7 @@ impl PyTask {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<PyObject> {
+    fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<()> {
         let ob = self.to_inst_ptr().into();
         self.fut.set_result(py, result, ob, false)
     }
@@ -138,7 +138,7 @@ impl PyTask {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<PyObject> {
+    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<()> {
         let ob = self.to_inst_ptr().into();
         self.fut.set_exception(py, exception, ob, false)
     }

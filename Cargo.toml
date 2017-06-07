@@ -37,8 +37,8 @@ tokio-uds = "0.1"
 # backtrace = "0.2"
 
 [dependencies.pyo3]
-#path = "../pyo3"
-git = "https://github.com/PyO3/PyO3.git"
+path = "../pyo3"
+#git = "https://github.com/PyO3/PyO3.git"
 features = ["nightly"]
 
 [dev-dependencies]
