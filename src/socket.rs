@@ -229,7 +229,8 @@ impl Socket {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "settimeout method is not supported."))
     }
 
-    fn setsockopt(&self, py: Python) -> PyResult<()> {
+    #[args(args="args", kw="kwargs")]
+    fn setsockopt(&self, py: Python, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<()> {
         // Err(PyErr::new::<exc::RuntimeError, _>(py, "setsockopt method is not supported."))
         Ok(())
     }

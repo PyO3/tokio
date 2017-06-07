@@ -332,8 +332,8 @@ impl PyTcpTransportPtr {
         self.with(|py, tr| {
             tr.evloop.as_ref(py).with(
                 py, "data_received error", |py| {
-                    // let bytes = pybytes::PyBytes::new(py, bytes)?;
-                    let bytes = PyBytes::new(py, bytes.as_ref());
+                    let bytes = pybytes::PyBytes::new(py, bytes)?;
+                    //let bytes = PyBytes::new(py, bytes.as_ref());
                     tr.data_received.call(py, (bytes,), None)
                 });
             !tr.paused
