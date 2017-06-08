@@ -11,7 +11,7 @@ use futures::{Async, Future, Poll};
 use {TokioEventLoop, PyFuture, PyFuturePtr, PyTask, PyTaskPtr, pybytes};
 use http::{self, pyreq, codec};
 use http::pyreq::{PyRequest, PyRequestPtr, StreamReader, StreamReaderPtr};
-use utils::{Classes, PyLogger, ToPyErr, with_py};
+use utils::{Classes, PyLogger, with_py};
 use pyunsafe::{GIL, Sender};
 
 
