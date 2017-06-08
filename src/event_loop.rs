@@ -33,7 +33,7 @@ use fut::{Until, UntilError};
 //use http;
 use signals;
 use server;
-use utils::{self, with_py, ToPyErr, Classes};
+use utils::{self, with_py, Classes};
 use pyunsafe::{GIL, Core, Handle, OneshotSender};
 use transport;
 

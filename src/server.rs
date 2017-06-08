@@ -11,7 +11,6 @@ use tokio_io::IoStream;
 
 use ::{PyFuture, PyFuturePtr, TokioEventLoop, TokioEventLoopPtr};
 use addrinfo;
-use utils::ToPyErr;
 use pyunsafe;
 use socket::Socket;
 use transport::{TransportFactory, tcp_transport_factory};
