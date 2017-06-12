@@ -2010,7 +2010,7 @@ impl TokioEventLoop {
     //
     // Event loop debug flag
     //
-    fn get_debug(&self, py: Python) -> PyResult<bool> {
+    pub fn get_debug(&self, py: Python) -> PyResult<bool> {
         Ok(self.debug)
     }
 

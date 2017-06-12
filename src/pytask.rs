@@ -1,3 +1,5 @@
+// Copyright (c) 2017-present PyO3 Project and Contributors
+
 use std::mem;
 use pyo3::*;
 use futures::{future, unsync, Poll};
@@ -9,7 +11,7 @@ use pyunsafe::GIL;
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
-#[py::class]
+#[py::class(freelist=250)]
 pub struct PyTask {
     fut: _PyFuture,
     waiter: Option<PyObject>,
@@ -264,7 +266,7 @@ impl PyTask {
     }
 }
 
-#[py::proto]
+/*#[py::proto]
 impl PyGCProtocol for PyTask {
     //
     // Python GC support
@@ -286,7 +288,7 @@ impl PyGCProtocol for PyTask {
             }
         }
     }
-}
+}*/
 
 #[py::proto]
 impl PyObjectProtocol for PyTask {
@@ -341,7 +343,7 @@ impl PyTaskIter {
     fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>, _tb: Option<PyObject>)
              -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp) {
+        if Classes.Exception.is_instance(py, &tp)? {
             let val = tp;
             let tp = val.get_type(py);
             PyErr::new_lazy_init(tp, Some(val)).restore(py);
@@ -404,7 +406,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     let mut exc = exc;
     if task.must_cancel {
         exc = if let Some(exc) = exc {
-            if Classes.CancelledError.is_instance(py, &exc) {
+            if Classes.CancelledError.is_instance(py, &exc).unwrap() {
                 Some(exc)
             } else {
                 Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())

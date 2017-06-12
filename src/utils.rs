@@ -125,6 +125,7 @@ pub trait PyLogger {
 
 impl<T> PyLogger for PyResult<T> {
 
+    #[inline]
     default fn into_log(self, py: Python, msg: &str) {
         match self {
             Ok(_) => (),
@@ -135,6 +136,7 @@ impl<T> PyLogger for PyResult<T> {
         }
     }
 
+    #[inline]
     default fn log_error(self, py: Python, msg: &str) -> Self {
         match &self {
             &Err(ref err) => {
@@ -149,6 +151,7 @@ impl<T> PyLogger for PyResult<T> {
 
 impl<T> PyLogger for PyResult<T> where T: IntoPyPointer {
 
+    #[inline]
     fn into_log(self, py: Python, msg: &str) {
         match self {
             Ok(ob) => py.release(ob),
@@ -159,6 +162,7 @@ impl<T> PyLogger for PyResult<T> where T: IntoPyPointer {
         }
     }
 
+    #[inline]
     fn log_error(self, py: Python, msg: &str) -> Self {
         match &self {
             &Err(ref err) => {
@@ -300,6 +304,6 @@ pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
         }
     } else {
         Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type", name)))
+            py, format!("'{}' must be int of float type: {:?}", name, value.get_type(py))))
     }
 }

@@ -1,3 +1,5 @@
+// Copyright (c) 2017-present PyO3 Project and Contributors
+
 use std::time::Duration;
 
 use pyo3::*;
@@ -7,7 +9,7 @@ use tokio_core::reactor::Timeout;
 
 use ::{TokioEventLoop, TokioEventLoopPtr, Classes};
 
-#[py::class]
+#[py::class(freelist=250)]
 pub struct PyHandle {
     evloop: TokioEventLoopPtr,
     cancelled: bool,
@@ -137,5 +139,18 @@ impl PyHandlePtr {
                 future::ok(())
             });
         evloop.href().spawn(fut);
+    }
+}
+
+impl Drop for PyHandle {
+    fn drop(&mut self) {
+        unsafe {
+            self.evloop.drop_ref();
+            self.callback.drop_ref();
+            self.args.drop_ref();
+            if let Some(mut tb) = self.source_traceback.take() {
+                tb.drop_ref();
+            }
+        };
     }
 }

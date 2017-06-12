@@ -1,3 +1,5 @@
+// Copyright (c) 2017-present PyO3 Project and Contributors
+
 use std::cell;
 use std::mem;
 use pyo3::*;
@@ -38,7 +40,8 @@ unsafe impl Send for _PyFuture {}
 impl _PyFuture {
 
     pub fn new(py: Python, ev: TokioEventLoopPtr) -> _PyFuture {
-        let tb = _PyFuture::extract_tb(py, &ev);
+        //let tb = _PyFuture::extract_tb(py, &ev);
+        let tb = None;
         let (tx, rx) = unsync::oneshot::channel();
 
         _PyFuture {
@@ -364,7 +367,7 @@ impl _PyFuture {
                 let exc = if let Some(exc) = exc { exc } else { exception };
 
                 // StopIteration cannot be raised into a Future - CPython issue26221
-                if Classes.StopIteration.is_instance(py, &exc) {
+                if Classes.StopIteration.is_instance(py, &exc)? {
                     return Err(PyErr::new::<exc::TypeError, _>(
                         py, "StopIteration interacts badly with generators \
                              and cannot be raised into a Future"));
@@ -529,7 +532,7 @@ impl future::Future for _PyFuture {
     }
 }
 
-#[py::class]
+#[py::class(freelist=500)]
 pub struct PyFuture {
     fut: _PyFuture,
     blocking: bool,
@@ -750,7 +753,7 @@ impl PyFuture {
     }
 }
 
-#[py::proto]
+/*#[py::proto]
 impl PyGCProtocol for PyFuture {
     //
     // Python GC support
@@ -772,7 +775,7 @@ impl PyGCProtocol for PyFuture {
             }
         }
     }
-}
+}*/
 
 #[py::proto]
 impl PyAsyncProtocol for PyFuture {
@@ -927,7 +930,7 @@ impl PyFutureIter {
     fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>,
              _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp) {
+        if Classes.Exception.is_instance(py, &tp)? {
             PyErr::from_instance(py, tp).restore(py);
         } else {
             if let Ok(tp) = PyType::downcast_into(py, tp) {

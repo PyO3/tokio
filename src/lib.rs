@@ -14,8 +14,8 @@ extern crate tokio_signal;
 extern crate tokio_uds;
 extern crate boxfnonce;
 extern crate env_logger;
+extern crate pyo3;
 #[macro_use] extern crate log;
-#[macro_use] extern crate pyo3;
 #[macro_use] extern crate lazy_static;
 
 pub mod fut;
@@ -46,7 +46,8 @@ pub use server::create_server;
 pub use client::create_connection;
 
 
-py_module_init!(tokio, PyInit__tokio, |py, m| {
+#[py::modinit(_tokio)]
+fn init_async_tokio(py: Python, m: &PyModule) -> PyResult<()> {
     let _ = env_logger::init();
 
     m.add(py, "__doc__", "Asyncio event loop based on tokio-rs")?;
@@ -54,7 +55,7 @@ py_module_init!(tokio, PyInit__tokio, |py, m| {
 
     register_classes(py, m)?;
     Ok(())
-});
+}
 
 
 pub fn register_classes(py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult<()> {
