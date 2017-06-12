@@ -341,7 +341,7 @@ impl PyTaskIter {
     fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>, _tb: Option<PyObject>)
              -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp) {
+        if Classes.Exception.is_instance(py, &tp)? {
             let val = tp;
             let tp = val.get_type(py);
             PyErr::new_lazy_init(tp, Some(val)).restore(py);
@@ -404,7 +404,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     let mut exc = exc;
     if task.must_cancel {
         exc = if let Some(exc) = exc {
-            if Classes.CancelledError.is_instance(py, &exc) {
+            if Classes.CancelledError.is_instance(py, &exc).unwrap() {
                 Some(exc)
             } else {
                 Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())

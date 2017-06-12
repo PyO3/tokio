@@ -364,7 +364,7 @@ impl _PyFuture {
                 let exc = if let Some(exc) = exc { exc } else { exception };
 
                 // StopIteration cannot be raised into a Future - CPython issue26221
-                if Classes.StopIteration.is_instance(py, &exc) {
+                if Classes.StopIteration.is_instance(py, &exc)? {
                     return Err(PyErr::new::<exc::TypeError, _>(
                         py, "StopIteration interacts badly with generators \
                              and cannot be raised into a Future"));
@@ -927,7 +927,7 @@ impl PyFutureIter {
     fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>,
              _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp) {
+        if Classes.Exception.is_instance(py, &tp)? {
             PyErr::from_instance(py, tp).restore(py);
         } else {
             if let Ok(tp) = PyType::downcast_into(py, tp) {
