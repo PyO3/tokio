@@ -36,7 +36,7 @@ mod client;
 mod signals;
 
 pub use pyo3::*;
-pub use utils::{Classes, PyLogger, ToPyErr, with_py};
+pub use utils::{Classes, PyLogger, with_py};
 pub use pybytes::PyBytes;
 pub use pyfuture::{PyFuture, PyFuturePtr};
 pub use pytask::{PyTask, PyTaskPtr};

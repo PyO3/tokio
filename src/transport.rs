@@ -13,7 +13,7 @@ use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
 use {TokioEventLoop, TokioEventLoopPtr};
-use utils::{Classes, PyLogger, ToPyErr};
+use utils::{Classes, PyLogger};
 use addrinfo::AddrInfo;
 use pybytes;
 use pyfuture::{PyFuture, PyFuturePtr};

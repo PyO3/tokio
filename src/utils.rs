@@ -2,10 +2,8 @@
 
 use pyo3;
 use pyo3::*;
-use std::io;
 use std::os::raw::c_long;
 use std::time::Duration;
-use std::error::Error;
 use std::fmt::Write;
 
 use pyfuture::PyFuture;
@@ -187,37 +185,6 @@ impl PyLogger for PyErr {
         error!("{} {:?}", msg, self);
         self.clone_ref(py).print(py);
         self
-    }
-}
-
-
-/// Converts into PyErr
-pub trait ToPyErr {
-
-    fn to_pyerr(&self, Python) -> PyErr;
-
-}
-
-/// Create OSError from io::Error
-impl ToPyErr for io::Error {
-
-    fn to_pyerr(&self, py: Python) -> PyErr {
-        let tp = match self.kind() {
-            io::ErrorKind::BrokenPipe => py.get_type::<exc::BrokenPipeError>(),
-            io::ErrorKind::ConnectionRefused => py.get_type::<exc::ConnectionRefusedError>(),
-            io::ErrorKind::ConnectionAborted => py.get_type::<exc::ConnectionAbortedError>(),
-            io::ErrorKind::ConnectionReset => py.get_type::<exc::ConnectionResetError>(),
-            io::ErrorKind::Interrupted => py.get_type::<exc::InterruptedError>(),
-            io::ErrorKind::NotFound => py.get_type::<exc::FileNotFoundError>(),
-            io::ErrorKind::WouldBlock => py.get_type::<exc::BlockingIOError>(),
-            io::ErrorKind::TimedOut => py.get_type::<exc::TimeoutError>(),
-            _ => py.get_type::<exc::OSError>(),
-        };
-
-        let errno = self.raw_os_error().unwrap_or(0);
-        let errdesc = self.description();
-
-        PyErr::new_err(py, &tp, (errno, errdesc))
     }
 }
 
