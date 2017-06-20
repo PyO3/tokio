@@ -39,9 +39,6 @@ pub struct PyHttpTransport {
     token: PyToken,
 }
 
-#[py::ptr(PyHttpTransport)]
-pub struct PyHttpTransportPtr(PyPtr);
-
 
 #[py::methods]
 impl PyHttpTransport {

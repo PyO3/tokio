@@ -21,11 +21,9 @@ pub struct Socket {
     token: PyToken,
 }
 
-#[py::ptr(Socket)]
-pub struct SocketPtr(PyPtr);
 
 impl Socket {
-    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<SocketPtr> {
+    pub fn new(py: Python, addr: &AddrInfo) -> PyResult<Py<Socket>> {
         py.init(
             |token| Socket{
                 fd: None,
@@ -39,7 +37,7 @@ impl Socket {
     }
 
     pub fn new_peer(py: Python, addr: &AddrInfo,
-                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<SocketPtr> {
+                    peer: SocketAddr, fd: Option<RawFd>) -> PyResult<Py<Socket>> {
         py.init(
             |token| Socket{
                 fd: fd,
@@ -229,7 +227,7 @@ impl Socket {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "settimeout method is not supported."))
     }
 
-    #[args(args="args", kw="kwargs")]
+    #[args(args="*", kwargs="**")]
     fn setsockopt(&self, py: Python, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<()> {
         // Err(PyErr::new::<exc::RuntimeError, _>(py, "setsockopt method is not supported."))
         Ok(())

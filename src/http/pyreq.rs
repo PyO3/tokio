@@ -29,8 +29,6 @@ pub struct PyRequest {
     _time_service: PyObject,
 }
 
-#[py::ptr(PyRequest)]
-pub struct PyRequestPtr(PyRequest);
 
 #[py::methods]
 impl PyRequest {
@@ -148,8 +146,6 @@ pub struct StreamReader {
     _exception: Option<PyObject>,
 }
 
-#[py::ptr(StreamReader)]
-pub struct StreamReaderPtr(PyPtr);
 
 #[py::methods]
 impl StreamReader {

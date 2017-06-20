@@ -38,20 +38,23 @@ mod signals;
 pub use pyo3::*;
 pub use utils::{Classes, PyLogger, with_py};
 pub use pybytes::PyBytes;
-pub use pyfuture::{PyFuture, PyFuturePtr};
-pub use pytask::{PyTask, PyTaskPtr};
+pub use pyfuture::{PyFut, PyFuture};
+pub use pytask::{PyTask, PyTaskFut};
 pub use handle::PyHandle;
-pub use event_loop::{TokioEventLoop, TokioEventLoopPtr, new_event_loop};
+pub use event_loop::{TokioEventLoop, new_event_loop};
 pub use server::create_server;
 pub use client::create_connection;
 
 
 #[py::modinit(_tokio)]
+/// Asyncio event loop based on tokio-rs
 fn init_async_tokio(py: Python, m: &PyModule) -> PyResult<()> {
     let _ = env_logger::init();
 
-    m.add(py, "__doc__", "Asyncio event loop based on tokio-rs")?;
-    m.add(py, "new_event_loop", py_fn!(py, new_event_loop()))?;
+    #[pyfn(m, "new_event_loop")]
+    fn _new_event_loop(py: Python) -> PyResult<Py<TokioEventLoop>> {
+        new_event_loop(py).into()
+    }
 
     register_classes(py, m)?;
     Ok(())

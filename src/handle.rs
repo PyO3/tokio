@@ -7,11 +7,11 @@ use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
 
-use ::{TokioEventLoop, TokioEventLoopPtr, Classes};
+use {TokioEventLoop, Classes};
 
 #[py::class(freelist=250)]
 pub struct PyHandle {
-    evloop: TokioEventLoopPtr,
+    evloop: Py<TokioEventLoop>,
     cancelled: bool,
     cancel_handle: Option<oneshot::Sender<()>>,
     callback: PyObject,
@@ -20,8 +20,8 @@ pub struct PyHandle {
     token: PyToken,
 }
 
-#[py::ptr(PyHandle)]
-pub struct PyHandlePtr(PyPtr);
+pub struct PyHandlePtr(Py<PyHandle>);
+
 
 #[py::methods]
 impl PyHandle {
@@ -55,14 +55,14 @@ impl PyHandle {
             None
         };
 
-        py.init(|t| PyHandle{
-            evloop: evloop.to_inst_ptr(),
+        Ok(PyHandlePtr(py.init(|t| PyHandle{
+            evloop: evloop.into(),
             cancelled: false,
             cancel_handle: None,
             callback: callback,
             args: args,
             source_traceback: tb,
-            token: t})
+            token: t})?))
     }
 
     pub fn run(&self, py: Python) {
@@ -97,12 +97,16 @@ impl PyHandle {
 
 impl PyHandlePtr {
 
+    pub fn into(self) -> PyObject {
+        self.0.into()
+    }
+
     pub fn run(&self) {
-        self.with(|py, h| h.run(py));
+        self.0.with(|py, h| h.run(py));
     }
 
     pub fn call_soon(&self, py: Python, evloop: &TokioEventLoop) {
-        let h = self.clone_ref(py);
+        let h = self.0.clone_ref(py);
 
         // schedule work
         evloop.get_handle().spawn_fn(move || {
@@ -112,7 +116,7 @@ impl PyHandlePtr {
     }
 
     pub fn call_soon_threadsafe(&self, py: Python, evloop: &TokioEventLoop) {
-        let h = self.clone_ref(py);
+        let h = self.0.clone_ref(py);
 
         // schedule work
         evloop.remote().spawn(move |_| {
@@ -124,10 +128,10 @@ impl PyHandlePtr {
     pub fn call_later(&mut self, py: Python, evloop: &TokioEventLoop, when: Duration) {
         // cancel onshot
         let (cancel, rx) = oneshot::channel::<()>();
-        self.as_mut(py).cancel_handle = Some(cancel);
+        self.0.as_mut(py).cancel_handle = Some(cancel);
 
         // we need to hold reference, otherwise python will release handle object
-        let h = self.clone_ref(py);
+        let h = self.0.clone_ref(py);
 
         // start timer
         let fut = Timeout::new(when, evloop.href()).unwrap().select2(rx)

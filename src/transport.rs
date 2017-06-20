@@ -12,11 +12,10 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_core::net::TcpStream;
 
-use {TokioEventLoop, TokioEventLoopPtr};
+use {PyFuture, TokioEventLoop};
 use utils::{Classes, PyLogger};
 use addrinfo::AddrInfo;
 use pybytes;
-use pyfuture::{PyFuture, PyFuturePtr};
 use pyunsafe::{GIL, Sender};
 use socket::Socket;
 
@@ -44,9 +43,9 @@ impl IntoPyTuple for InitializedTransport {
 
 // Transport factory
 pub type TransportFactory = fn(
-    TokioEventLoopPtr, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
+    Py<TokioEventLoop>, bool, &PyObject, &Option<PyObject>, Option<PyObject>,
     TcpStream, Option<&AddrInfo>, Option<SocketAddr>,
-    Option<PyFuturePtr>) -> io::Result<InitializedTransport>;
+    Option<Py<PyFuture>>) -> io::Result<InitializedTransport>;
 
 pub struct BytesMsg {
     pub buf: buffer::PyBuffer,
@@ -63,10 +62,10 @@ pub enum TcpTransportMessage {
 
 
 pub fn tcp_transport_factory<T>(
-    evloop: TokioEventLoopPtr, server: bool,
+    evloop: Py<TokioEventLoop>, server: bool,
     factory: &PyObject, ssl: &Option<PyObject>, server_hostname: Option<PyObject>,
     socket: T, addr: Option<&AddrInfo>,
-    peer: Option<SocketAddr>, waiter: Option<PyFuturePtr>) -> io::Result<InitializedTransport>
+    peer: Option<SocketAddr>, waiter: Option<Py<PyFuture>>) -> io::Result<InitializedTransport>
 
     where T: AsyncRead + AsyncWrite + AsRawFd + 'static
 {
@@ -111,7 +110,7 @@ pub fn tcp_transport_factory<T>(
             waiter.as_mut(py).set(py, Ok(py.None()));
         }
         let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &proto, info)?;
-        let wrp_tr = tr.clone_ref(py).into();
+        let wrp_tr = tr.0.clone_ref(py).into();
         (tr, wrp_tr)
     };
 
@@ -136,11 +135,11 @@ pub fn tcp_transport_factory<T>(
 
 #[py::class]
 pub struct PyTcpTransport {
-    evloop: TokioEventLoopPtr,
+    evloop: Py<TokioEventLoop>,
     connection_lost: PyObject,
     data_received: PyObject,
     transport: Sender<TcpTransportMessage>,
-    drain: Option<PyFuturePtr>,
+    drain: Option<Py<PyFuture>>,
     drained: bool,
     closing: bool,
     info: HashMap<&'static str, PyObject>,
@@ -148,8 +147,8 @@ pub struct PyTcpTransport {
     token: PyToken,
 }
 
-#[py::ptr(PyTcpTransport)]
-pub struct PyTcpTransportPtr(PyPtr);
+pub struct PyTcpTransportPtr(Py<PyTcpTransport>);
+
 
 #[py::methods]
 impl PyTcpTransport {
@@ -218,7 +217,7 @@ impl PyTcpTransport {
     //
     // write all data to socket
     //
-    fn drain(&mut self, py: Python) -> PyResult<PyFuturePtr> {
+    fn drain(&mut self, py: Python) -> PyResult<Py<PyFuture>> {
         if self.drained {
             Ok(PyFuture::done_fut(py, self.evloop.clone_ref(py), py.None())?)
         } else {
@@ -269,15 +268,16 @@ impl PyTcpTransportPtr {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
-               protocol: &PyObject, info: HashMap<&'static str, PyObject>) -> PyResult<PyTcpTransportPtr> {
-
+               protocol: &PyObject, info: HashMap<&'static str, PyObject>)
+               -> PyResult<PyTcpTransportPtr>
+    {
         // get protocol callbacks
         let connection_made = protocol.getattr(py, "connection_made")?;
         let connection_lost = protocol.getattr(py, "connection_lost")?;
         let data_received = protocol.getattr(py, "data_received")?;
 
         let transport = py.init(|token| PyTcpTransport {
-            evloop: evloop.to_inst_ptr(),
+            evloop: evloop.into(),
             connection_lost: connection_lost,
             data_received: data_received,
             transport: sender,
@@ -296,12 +296,16 @@ impl PyTcpTransportPtr {
                 evloop.log_error(py, err, "Protocol.connection_made error")
             });
 
-        Ok(transport)
+        Ok(PyTcpTransportPtr(transport))
+    }
+
+    pub fn clone_ref(&self, py: Python) -> PyTcpTransportPtr {
+        PyTcpTransportPtr(self.0.clone_ref(py))
     }
 
     pub fn connection_lost(&self) {
         trace!("Protocol.connection_lost(None)");
-        self.with(|py, transport| {
+        self.0.with(|py, transport| {
             transport.evloop.as_ref(py).with(
                 py, "Protocol.connection_made error",
                 |py| transport.connection_lost.call(py, (py.None(),), None))});
@@ -309,7 +313,7 @@ impl PyTcpTransportPtr {
 
     pub fn connection_error(&self, err: io::Error) {
         trace!("Protocol.connection_lost({:?})", err);
-        self.with_mut(|py, tr| {
+        self.0.with_mut(|py, tr| {
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
@@ -329,7 +333,7 @@ impl PyTcpTransportPtr {
     }
 
     pub fn data_received(&self, bytes: Bytes) -> bool {
-        self.with(|py, tr| {
+        self.0.with(|py, tr| {
             tr.evloop.as_ref(py).with(
                 py, "data_received error", |py| {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
@@ -341,7 +345,7 @@ impl PyTcpTransportPtr {
     }
 
     pub fn drained(&self) {
-        self.with_mut(|py, tr| {
+        self.0.with_mut(|py, tr| {
             tr.drained = true;
             match tr.drain.take() {
                 Some(fut) => {

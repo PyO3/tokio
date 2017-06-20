@@ -1,11 +1,11 @@
 // Copyright (c) 2017-present PyO3 Project and Contributors
 
-use std::mem;
+use std;
 use pyo3::*;
 use futures::{future, unsync, Poll};
 use boxfnonce::SendBoxFnOnce;
 
-use ::{TokioEventLoop, TokioEventLoopPtr};
+use TokioEventLoop;
 use utils::{Classes, PyLogger};
 use pyunsafe::GIL;
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
@@ -20,9 +20,6 @@ pub struct PyTask {
 
     token: PyToken,
 }
-
-#[py::ptr(PyTask)]
-pub struct PyTaskPtr(PyPtr);
 
 #[py::methods]
 impl PyTask {
@@ -110,7 +107,7 @@ impl PyTask {
     // scheduled with call_soon.
     //
     fn add_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<PyObject> {
-        let ob = self.to_inst_ptr().into();
+        let ob: PyObject = self.into();
         self.fut.add_done_callback(py, f, ob)
     }
 
@@ -130,7 +127,7 @@ impl PyTask {
     // InvalidStateError.
     //
     fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<()> {
-        let ob = self.to_inst_ptr().into();
+        let ob: PyObject = self.into();
         self.fut.set_result(py, result, ob, false)
     }
 
@@ -141,22 +138,22 @@ impl PyTask {
     // InvalidStateError.
     //
     fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<()> {
-        let ob = self.to_inst_ptr().into();
+        let ob: PyObject = self.into();
         self.fut.set_exception(py, exception, ob, false)
     }
 
     //
     // awaitable
     //
-    fn __iter__(&self, py: Python) -> PyResult<PyTaskIterPtr> {
+    fn __iter__(&self, py: Python) -> PyResult<Py<PyTaskIter>> {
         py.init(|t| PyTaskIter{
-            fut: self.to_inst_ptr(),
+            fut: self.into(),
             token: t})
     }
 
     // compatibility
     #[getter(_loop)]
-    fn get_loop(&self, py: Python) -> PyResult<TokioEventLoopPtr> {
+    fn get_loop(&self, py: Python) -> PyResult<Py<TokioEventLoop>> {
         Ok(self.fut.evloop.clone_ref(py))
     }
 
@@ -213,9 +210,9 @@ impl PyTask {
 
 impl PyTask {
 
-    pub fn new(py: Python, coro: PyObject, evloop: &TokioEventLoop) -> PyResult<PyTaskPtr> {
+    pub fn new(py: Python, coro: PyObject, evloop: &TokioEventLoop) -> PyResult<Py<PyTask>> {
         let task = py.init(|t| PyTask {
-            fut:  _PyFuture::new(py, evloop.to_inst_ptr()),
+            fut:  _PyFuture::new(py, evloop.into()),
             waiter: None,
             must_cancel: false,
             blocking: false,
@@ -293,44 +290,61 @@ impl PyGCProtocol for PyTask {
 #[py::proto]
 impl PyObjectProtocol for PyTask {
     fn __repr__(&self, py: Python) -> PyResult<PyObject> {
-        Classes.Helpers.call(py, "future_repr", ("Task", self.to_inst_ptr(),), None)
+        let ob: PyObject = self.into();
+        Classes.Helpers.call(py, "future_repr", ("Task", ob,), None)
     }
 }
 
 #[py::proto]
 impl PyAsyncProtocol for PyTask {
 
-    fn __await__(&self, py: Python) -> PyResult<PyTaskIterPtr> {
-        py.init(|t| PyTaskIter{fut: self.to_inst_ptr(), token: t})
+    fn __await__(&self, py: Python) -> PyResult<Py<PyTaskIter>> {
+        py.init(|t| PyTaskIter{fut: self.into(), token: t})
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyTask {
 
-    fn __iter__(&mut self, py: Python) -> PyResult<PyTaskIterPtr> {
-        py.init(|t| PyTaskIter{fut: self.to_inst_ptr(), token: t})
+    fn __iter__(&mut self, py: Python) -> PyResult<Py<PyTaskIter>> {
+        py.init(|t| PyTaskIter{fut: self.into(), token: t})
     }
 }
 
+pub struct PyTaskFut(Py<PyTask>);
 
-impl future::Future for PyTaskPtr {
+impl PyTaskFut {
+    #[inline]
+    fn as_mut(&self) -> &mut PyTask {
+        return self.0.as_mut(GIL::python())
+    }
+}
+
+impl std::convert::From<Py<PyTask>> for PyTaskFut {
+    fn from(ob: Py<PyTask>) -> Self {
+        PyTaskFut(ob)
+    }
+}
+impl<'a> std::convert::From<&'a PyTask> for PyTaskFut {
+    fn from(ob: &'a PyTask) -> Self {
+        PyTaskFut(ob.into())
+    }
+}
+
+impl future::Future for PyTaskFut {
     type Item = PyResult<PyObject>;
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.as_mut(GIL::python()).fut.poll()
+        self.as_mut().fut.poll()
     }
 }
 
 #[py::class]
 pub struct PyTaskIter {
-    fut: PyTaskPtr,
+    fut: Py<PyTask>,
     token: PyToken,
 }
-
-#[py::ptr(PyTaskIter)]
-pub struct PyTaskIterPtr(PyPtr);
 
 
 #[py::methods]
@@ -362,8 +376,8 @@ impl PyTaskIter {
 #[py::proto]
 impl PyIterProtocol for PyTaskIter {
 
-    fn __iter__(&mut self, _py: Python) -> PyResult<PyTaskIterPtr> {
-        Ok(self.to_inst_ptr())
+    fn __iter__(&mut self, _py: Python) -> PyResult<Py<PyTaskIter>> {
+        Ok(self.into())
     }
 
     fn __next__(&mut self, py: Python) -> PyResult<Option<PyObject>> {
@@ -385,7 +399,7 @@ const INPLACE_RETRY: usize = 5;
 //
 // wakeup task from future
 //
-fn wakeup_task(fut: PyTaskPtr, coro: PyObject, result: PyResult<PyObject>) {
+fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
     let gil = Python::acquire_gil();
     let py = gil.python();
 
@@ -420,7 +434,8 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     //let mut evloop = fut.evloop.as_mut(py);
 
     // set current task
-    task.fut.evloop.as_mut(py).set_current_task(py, task.to_inst_ptr().into());
+    let task_ob = task.into();
+    task.fut.evloop.as_mut(py).set_current_task(py, task_ob);
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
@@ -432,12 +447,12 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     match res {
         Err(mut err) => {
             if err.matches(py, &Classes.StopIteration) {
-                let ob = task.to_inst_ptr().into();
+                let ob = task.into();
                 let _ = task.fut.set_result(
                     py, err.instance(py).getattr(py, "value").unwrap(), ob, false);
             }
             else if err.matches(py, &Classes.CancelledError) {
-                let ob = task.to_inst_ptr().into();
+                let ob = task.into();
                 let _ = task.fut.cancel(py, ob);
             }
             else if err.matches(py, &Classes.BaseException) {
@@ -457,7 +472,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                             py, format!("yield was used instead of yield from \
                                          in task {:?} with {:?}", task, &result));
 
-                        let waiter_task = task.to_inst_ptr();
+                        let waiter_task: Py<PyTask> = task.into();
                         task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
                             let gil = Python::acquire_gil();
                             let py = gil.python();
@@ -478,9 +493,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
                                      in task {:?} with {:?}", task, res));
-                    let task2 = task.to_inst_ptr();
-                    task_step(py, task2.as_mut(py), coro, Some(err.instance(py)), 0);
-                    py.release(task2);
+                    task_step(py, task, coro, Some(err.instance(py)), 0);
                     return
                 }
                 res.set_blocking(false);
@@ -498,17 +511,15 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                         Err(ref mut err) => Some(err.instance(py)),
                     };
 
-                    let task2 = task.to_inst_ptr();
-                    task_step(py, task2.as_mut(py), coro, exc, retry+1);
-                    py.release(task2);
+                    task_step(py, task, coro, exc, retry+1);
                     return
                 }
 
                 // store ref to future
-                task.waiter = Some(res.to_inst_ptr().into());
+                task.waiter = Some(res.into());
 
                 // schedule wakeup on done
-                let waiter_task = task.to_inst_ptr();
+                let waiter_task = task.into();
                 let _ = res.add_callback(py, SendBoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
@@ -520,18 +531,16 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
                                      in task {:?} with {:?}", task, res));
-                    let task2 = task.to_inst_ptr();
-                    task_step(py, task2.as_mut(py), coro, Some(err.instance(py)), 0);
-                    py.release(task2);
+                    task_step(py, task, coro, Some(err.instance(py)), 0);
                     return
                 }
                 res.set_blocking(false);
 
                 // store ref to future
-                task.waiter = Some(res.to_inst_ptr().into());
+                task.waiter = Some(res.into());
 
                 // schedule wakeup on done
-                let waiter_task = task.to_inst_ptr();
+                let waiter_task = task.into();
                 let _ = res.add_callback(py, SendBoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
@@ -553,7 +562,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 task.waiter = Some(fut.clone_ref(py).into());
 
                 // schedule wakeup on done
-                let waiter_task = task.to_inst_ptr();
+                let waiter_task = task.into();
                 let _ = fut.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
@@ -568,13 +577,12 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
             if result.is_none(py) {
                 // call soon
-                let task2 = task.to_inst_ptr();
+                let task2: Py<PyTask> = task.into();
                 task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                    let gil = Python::acquire_gil();
-                    let py = gil.python();
-
                     // wakeup task
-                    task_step(py, task2.as_mut(py), coro, None, 0);
+                    task2.into_mut_py(|py, mut task| {
+                        task_step(py, task, coro, None, 0);
+                    });
 
                     future::ok(())
                 });
@@ -582,17 +590,15 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             }
 
             // Yielding something else is an error.
-            let task2 = task.to_inst_ptr();
+            let task2: Py<PyTask> = task.into();
             task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                let gil = Python::acquire_gil();
-                let py = gil.python();
+                task2.into_mut_py(|py, mut task| {
+                    let mut exc = PyErr::new::<exc::RuntimeError, _>(
+                        py, format!("Task got bad yield: {:?}", &result));
 
-                let mut exc = PyErr::new::<exc::RuntimeError, _>(
-                    py, format!("Task got bad yield: {:?}", &result));
-
-                // wakeup task
-                task_step(py, task2.as_mut(py), coro, Some(exc.instance(py)), 0);
-
+                    // wakeup task
+                    task_step(py, task, coro, Some(exc.instance(py)), 0);
+                });
                 future::ok(())
             });
         },

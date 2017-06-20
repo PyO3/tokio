@@ -6,7 +6,7 @@ from setuptools import setup
 from setuptools.command.test import test as TestCommand
 
 try:
-    from setuptools_rust import RustExtension
+    from setuptools_rust import Binding, RustExtension
 except ImportError:
     import subprocess
     import sys
@@ -74,7 +74,7 @@ setup(name='tokio',
       author_email='fafhrd91@gmail.com',
       url='https://github.com/PyO3/tokio/',
       packages=['tokio'],
-      rust_extensions=[RustExtension('tokio._tokio', 'Cargo.toml', pyo3=True)],
+      rust_extensions=[RustExtension('tokio._tokio', 'Cargo.toml', binding=Binding.PyO3)],
       install_requires=install_requires,
       tests_require=tests_require,
       setup_requires=setup_requires,

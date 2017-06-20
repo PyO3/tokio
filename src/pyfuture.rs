@@ -1,13 +1,13 @@
 // Copyright (c) 2017-present PyO3 Project and Contributors
 
+use std;
 use std::cell;
-use std::mem;
 use pyo3::*;
 use futures::{future, unsync, Async, Poll};
 use futures::unsync::oneshot;
 use boxfnonce::SendBoxFnOnce;
 
-use {TokioEventLoop, TokioEventLoopPtr};
+use TokioEventLoop;
 use utils::{Classes, PyLogger, with_py};
 use pyunsafe::GIL;
 
@@ -21,7 +21,7 @@ pub enum State {
 pub type Callback = SendBoxFnOnce<(PyResult<PyObject>,)>;
 
 pub struct _PyFuture {
-    pub evloop: TokioEventLoopPtr,
+    pub evloop: Py<TokioEventLoop>,
     sender: Option<oneshot::Sender<PyResult<PyObject>>>,
     receiver: Option<oneshot::Receiver<PyResult<PyObject>>>,
     state: State,
@@ -39,9 +39,8 @@ unsafe impl Send for _PyFuture {}
 
 impl _PyFuture {
 
-    pub fn new(py: Python, ev: TokioEventLoopPtr) -> _PyFuture {
-        //let tb = _PyFuture::extract_tb(py, &ev);
-        let tb = None;
+    pub fn new(py: Python, ev: Py<TokioEventLoop>) -> _PyFuture {
+        let tb = _PyFuture::extract_tb(py, &ev);
         let (tx, rx) = unsync::oneshot::channel();
 
         _PyFuture {
@@ -58,7 +57,7 @@ impl _PyFuture {
         }
     }
 
-    pub fn done_fut(py: Python, ev: TokioEventLoopPtr, result: PyObject) -> _PyFuture {
+    pub fn done_fut(py: Python, ev: Py<TokioEventLoop>, result: PyObject) -> _PyFuture {
         let tb = _PyFuture::extract_tb(py, &ev);
 
         _PyFuture {
@@ -75,7 +74,8 @@ impl _PyFuture {
         }
     }
 
-    pub fn done_res(py: Python, ev: TokioEventLoopPtr, result: PyResult<PyObject>) -> _PyFuture {
+    pub fn done_res(py: Python, ev: Py<TokioEventLoop>, result: PyResult<PyObject>) -> _PyFuture
+    {
         match result {
             Ok(result) => _PyFuture::done_fut(py, ev, result),
             Err(mut err) => {
@@ -97,7 +97,7 @@ impl _PyFuture {
         }
     }
 
-    fn extract_tb(py: Python, ev: &TokioEventLoopPtr) -> Option<PyObject> {
+    fn extract_tb(py: Python, ev: &Py<TokioEventLoop>) -> Option<PyObject> {
         if ev.as_ref(py).is_debug() {
             match Classes.ExtractStack.call(py, NoArgs, None) {
                 Ok(tb) => Some(tb),
@@ -543,16 +543,14 @@ pub struct PyFuture {
     token: PyToken,
 }
 
-#[py::ptr(PyFuture)]
-pub struct PyFuturePtr(PyPtr);
-
 
 #[py::methods]
 impl PyFuture {
 
     fn __repr__(&self, py: Python) -> PyResult<PyString> {
+        let f: Py<PyFuture> = self.into();
         let repr = Classes.Helpers.call(
-            py, "future_repr", ("Future", self.to_inst_ptr(),), None)?;
+            py, "future_repr", ("Future", f,), None)?;
         Ok(PyString::downcast_into(py, repr)?)
     }
 
@@ -664,7 +662,7 @@ impl PyFuture {
             let _ = fut.call_method(py, "set_result", (result.clone_ref(py),), None);
             py.release(fut);
         }
-        let ob = self.to_inst_ptr().into();
+        let ob = self.into();
         self.fut.set_result(py, result, ob, false)
     }
 
@@ -734,7 +732,7 @@ impl PyFuture {
 
     // compatibility
     #[getter(_loop)]
-    fn get_loop(&self, py: Python) -> PyResult<TokioEventLoopPtr> {
+    fn get_loop(&self, py: Python) -> PyResult<Py<TokioEventLoop>> {
         Ok(self.fut.evloop.clone_ref(py))
     }
 
@@ -780,30 +778,30 @@ impl PyGCProtocol for PyFuture {
 #[py::proto]
 impl PyAsyncProtocol for PyFuture {
 
-    fn __await__(&self, py: Python) -> PyResult<PyFutureIterPtr> {
-        py.init(|t| PyFutureIter {fut: self.to_inst_ptr(), token: t})
+    fn __await__(&self, py: Python) -> PyResult<Py<PyFutureIter>> {
+        py.init(|t| PyFutureIter {fut: self.into(), token: t})
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyFuture {
 
-    fn __iter__(&mut self, py: Python) -> PyResult<PyFutureIterPtr> {
-        py.init(|t| PyFutureIter {fut: self.to_inst_ptr(), token: t})
+    fn __iter__(&mut self, py: Python) -> PyResult<Py<PyFutureIter>> {
+        py.init(|t| PyFutureIter {fut: self.into(), token: t})
     }
 }
 
 impl PyFuture {
 
-    pub fn new(py: Python, evloop: TokioEventLoopPtr) -> PyResult<PyFuturePtr> {
+    pub fn new(py: Python, evloop: Py<TokioEventLoop>) -> PyResult<Py<PyFuture>> {
         py.init(|t| PyFuture { fut: _PyFuture::new(py, evloop),
                                blocking: false,
                                pyfut: None,
                                token: t})
     }
 
-    pub fn done_fut(py: Python, evloop: TokioEventLoopPtr, result: PyObject)
-                    -> PyResult<PyFuturePtr>
+    pub fn done_fut(py: Python, evloop: Py<TokioEventLoop>, result: PyObject)
+                    -> PyResult<Py<PyFuture>>
     {
         py.init(|t| PyFuture { fut: _PyFuture::done_fut(py, evloop.clone_ref(py), result),
                                blocking: false,
@@ -811,8 +809,8 @@ impl PyFuture {
                                token: t})
     }
 
-    pub fn done_res(py: Python, evloop: TokioEventLoopPtr, result: PyResult<PyObject>)
-                    -> PyResult<PyFuturePtr>
+    pub fn done_res(py: Python, evloop: Py<TokioEventLoop>, result: PyResult<PyObject>)
+                    -> PyResult<Py<PyFuture>>
     {
         py.init(|t| PyFuture { fut: _PyFuture::done_res(py, evloop.clone_ref(py), result),
                                blocking: false,
@@ -822,8 +820,8 @@ impl PyFuture {
 
     /// wrap asyncio.Future into PyFuture
     /// this method does not check if fut object is actually async.Future object
-    pub fn from_fut(py: Python, evloop: TokioEventLoopPtr, fut: PyObject)
-                    -> PyResult<PyFuturePtr>
+    pub fn from_fut(py: Python, evloop: Py<TokioEventLoop>, fut: PyObject)
+                    -> PyResult<Py<PyFuture>>
     {
         let f = py.init(|t| PyFuture {
             fut: _PyFuture::new(py, evloop),
@@ -899,26 +897,45 @@ impl PyFuture {
     pub fn is_cancelled(&self) -> bool {
         self.fut.cancelled()
     }
+
 }
 
-impl future::Future for PyFuturePtr {
+pub struct PyFut(Py<PyFuture>);
+
+impl PyFut {
+    #[inline]
+    fn as_mut(&self) -> &mut PyFuture {
+        return self.0.as_mut(GIL::python())
+    }
+}
+
+impl std::convert::From<Py<PyFuture>> for PyFut {
+    fn from(ob: Py<PyFuture>) -> Self {
+        PyFut(ob)
+    }
+}
+
+impl<'a> std::convert::From<&'a PyFuture> for PyFut {
+    fn from(ob: &'a PyFuture) -> Self {
+        PyFut(ob.into())
+    }
+}
+
+impl future::Future for PyFut {
     type Item = PyResult<PyObject>;
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.as_mut(GIL::python()).fut.poll()
+        self.as_mut().fut.poll()
     }
 }
 
-
 #[py::class]
 pub struct PyFutureIter {
-    fut: PyFuturePtr,
+    fut: Py<PyFuture>,
     token: PyToken,
 }
 
-#[py::ptr(PyFutureIter)]
-pub struct PyFutureIterPtr(PyPtr);
 
 #[py::methods]
 impl PyFutureIter {
@@ -947,8 +964,8 @@ impl PyFutureIter {
 #[py::proto]
 impl PyIterProtocol for PyFutureIter {
 
-    fn __iter__(&mut self, _py: Python) -> PyResult<PyFutureIterPtr> {
-        Ok(self.to_inst_ptr())
+    fn __iter__(&mut self, _py: Python) -> PyResult<Py<PyFutureIter>> {
+        Ok(self.into())
     }
 
     fn __next__(&mut self, py: Python) -> PyResult<Option<PyObject>> {

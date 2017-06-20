@@ -9,7 +9,7 @@ use tokio_core::net::{TcpListener, Incoming};
 use tokio_uds;
 use tokio_io::IoStream;
 
-use ::{PyFuture, PyFuturePtr, TokioEventLoop, TokioEventLoopPtr};
+use {PyFuture, TokioEventLoop};
 use addrinfo;
 use pyunsafe;
 use socket::Socket;
@@ -87,7 +87,7 @@ pub fn create_server(py: Python, evloop: &TokioEventLoop,
     }
 
     py.init(|token| TokioServer{
-        evloop: evloop.to_inst_ptr(),
+        evloop: evloop.into(),
         sockets: PyTuple::new(py, &sockets[..]),
         stop_handle: Some(handles),
         token: token}).map(|ptr| ptr.into())
@@ -113,7 +113,7 @@ pub fn create_sock_server(py: Python, evloop: &TokioEventLoop,
                           transport_factory, proto_factory, ssl, rx);
 
             py.init(|token| TokioServer {
-                evloop: evloop.to_inst_ptr(),
+                evloop: evloop.into(),
                 sockets: PyTuple::new(py, &[sock]),
                 stop_handle: Some(handles),
                 token: token}).map(|ptr| ptr.into())
@@ -134,7 +134,7 @@ pub fn create_uds_server(py: Python, evloop: &TokioEventLoop,
     UdsServer::serve(evloop, listener.incoming(), proto_factory, ssl, rx);
 
     py.init(|token| TokioServer{
-        evloop: evloop.to_inst_ptr(),
+        evloop: evloop.into(),
         sockets: PyTuple::empty(py),
         stop_handle: Some(handles),
         token: token}).map(|ptr| ptr.into())
@@ -143,14 +143,12 @@ pub fn create_uds_server(py: Python, evloop: &TokioEventLoop,
 
 #[py::class]
 pub struct TokioServer {
-    evloop: TokioEventLoopPtr,
+    evloop: Py<TokioEventLoop>,
     sockets: PyTuple,
     stop_handle: Option<Vec<pyunsafe::OneshotSender<()>>>,
     token: PyToken,
 }
 
-#[py::ptr(TokioServer)]
-pub struct TokioServerPtr(PyPtr);
 
 #[py::methods]
 impl TokioServer {
@@ -169,14 +167,14 @@ impl TokioServer {
         Ok(py.None())
     }
 
-    fn wait_closed(&self, py: Python) -> PyResult<PyFuturePtr> {
+    fn wait_closed(&self, py: Python) -> PyResult<Py<PyFuture>> {
         PyFuture::done_fut(py, self.evloop.clone_ref(py), true.to_object(py))
     }
 }
 
 
 struct Server {
-    evloop: TokioEventLoopPtr,
+    evloop: Py<TokioEventLoop>,
     addr: addrinfo::AddrInfo,
     stream: Incoming,
     stop: unsync::oneshot::Receiver<()>,
@@ -194,7 +192,7 @@ impl Server {
              stream: Incoming, transport: TransportFactory,
              factory: PyObject, ssl: Option<PyObject>, stop: unsync::oneshot::Receiver<()>) {
 
-        let srv = Server { evloop: evloop.to_inst_ptr(), addr: addr, stop: stop, stream: stream,
+        let srv = Server { evloop: evloop.into(), addr: addr, stop: stop, stream: stream,
                            transport: transport, factory: factory, ssl: ssl};
 
         evloop.get_handle().spawn(
@@ -243,7 +241,7 @@ impl Future for Server
 type UdsIncoming = IoStream<(tokio_uds::UnixStream, unix::net::SocketAddr)>;
 
 struct UdsServer {
-    evloop: TokioEventLoopPtr,
+    evloop: Py<TokioEventLoop>,
     stream: UdsIncoming,
     stop: unsync::oneshot::Receiver<()>,
     factory: PyObject,
@@ -258,7 +256,7 @@ impl UdsServer {
     fn serve(evloop: &TokioEventLoop, stream: UdsIncoming,
              factory: PyObject, ssl: Option<PyObject>, stop: unsync::oneshot::Receiver<()>) {
 
-        let srv = UdsServer { evloop: evloop.to_inst_ptr(), stop: stop,
+        let srv = UdsServer { evloop: evloop.into(), stop: stop,
                               stream: stream, factory: factory, ssl: ssl};
 
         evloop.get_handle().spawn(

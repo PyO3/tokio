@@ -5,7 +5,7 @@ use std::os::raw::{c_void, c_int};
 use twoway;
 use pyo3::{ffi, py};
 use pyo3::buffer::PyBuffer;
-use pyo3::{self, class, exc, Python, PyToken, PyPtr, PyClone, ToInstancePtr,
+use pyo3::{self, class, exc, Python, PyToken, Py, PyClone,
            ObjectProtocol, ToPyPointer, InstancePtr,
            PyResult, PyObject, PySlice, PyErr, PyDowncastFrom, PyDowncastInto, ToPyObject};
 use bytes::{Bytes, BytesMut, BufMut};
@@ -18,9 +18,6 @@ pub struct PyBytes {
     bytes: Bytes,
     token: PyToken,
 }
-
-#[py::ptr(PyBytes)]
-pub struct PyBytesPtr(PyPtr);
 
 
 #[py::methods]
@@ -52,7 +49,7 @@ impl PyBytes {
         }
     }
 
-    #[defaults(maxsplit="-1")]
+    #[args(maxsplit="-1")]
     fn split(&self, py: Python, sep: Option<PyObject>, maxsplit: i32) -> PyResult<pyo3::PyList> {
         let sep_len;
         let remove_empty;
@@ -117,7 +114,7 @@ impl PyBytes {
         Ok(pyo3::PyList::new(py, result.as_slice()))
     }
 
-    fn strip(&self, py: Python, sep: Option<PyObject>) -> PyResult<PyBytesPtr> {
+    fn strip(&self, py: Python, sep: Option<PyObject>) -> PyResult<Py<PyBytes>> {
         let sep = if let Some(sep) = sep {
             PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
         } else {
@@ -174,13 +171,15 @@ impl PyBytes {
 
 impl PyBytes {
 
-    pub fn new(py: Python, bytes: Bytes) -> PyResult<PyBytesPtr> {
+    pub fn new(py: Python, bytes: Bytes) -> PyResult<Py<PyBytes>> {
         py.init(|t| PyBytes {
             bytes: bytes,
             token: t})
     }
 
-    pub fn from(py: Python, src: &mut BytesMut, length: usize) -> Result<PyBytesPtr, io::Error> {
+    pub fn from(py: Python, src: &mut BytesMut, length: usize)
+                -> Result<Py<PyBytes>, io::Error>
+    {
         let bytes = src.split_to(length).freeze();
         match PyBytes::new(py, bytes) {
             Ok(bytes) => Ok(bytes),
@@ -198,12 +197,12 @@ impl PyBytes {
         self.bytes.len()
     }
 
-    pub fn slice_to(&self, py: Python, end: usize) -> PyResult<PyBytesPtr> {
+    pub fn slice_to(&self, py: Python, end: usize) -> PyResult<Py<PyBytes>> {
         let bytes = self.bytes.slice_to(end);
         py.init(|token| PyBytes {bytes: bytes, token: token})
     }
 
-    pub fn slice_from(&self, py: Python, begin: usize) -> PyResult<PyBytesPtr> {
+    pub fn slice_from(&self, py: Python, begin: usize) -> PyResult<Py<PyBytes>> {
         let bytes = self.bytes.slice_from(begin);
         py.init(|token| PyBytes {bytes: bytes, token: token})
     }

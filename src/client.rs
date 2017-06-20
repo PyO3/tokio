@@ -5,7 +5,7 @@ use futures::{future, Future};
 use net2::TcpBuilder;
 use tokio_core::net::TcpStream;
 
-use ::{PyFuturePtr, TokioEventLoopPtr};
+use {PyFut, PyFuture, TokioEventLoop};
 use addrinfo::AddrInfo;
 use fut::{for_each, Until, UntilError};
 use pyunsafe::{GIL, Handle};
@@ -13,9 +13,9 @@ use transport::{InitializedTransport, tcp_transport_factory};
 
 
 pub fn create_sock_connection(
-    factory: PyObject, evloop: TokioEventLoopPtr,
+    factory: PyObject, evloop: Py<TokioEventLoop>,
     stream: TcpStream, addr: AddrInfo,
-    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuturePtr)
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: Py<PyFuture>)
     -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
     let peer = stream.peer_addr().expect("should never happen");
@@ -24,6 +24,7 @@ pub fn create_sock_connection(
         evloop, false, &factory, &ssl,
         hostname, stream, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
 
+    let waiter: PyFut = waiter.into();
     Box::new(
         waiter.then(move |_| match result {
             Ok(transport) => future::ok(transport),
@@ -32,8 +33,8 @@ pub fn create_sock_connection(
 }
 
 pub fn create_connection(
-    factory: PyObject, evloop: TokioEventLoopPtr, addrs: Vec<AddrInfo>,
-    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: PyFuturePtr)
+    factory: PyObject, evloop: Py<TokioEventLoop>, addrs: Vec<AddrInfo>,
+    ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: Py<PyFuture>)
                          -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
 
     let handle = evloop.as_ref(GIL::python()).get_handle();
@@ -46,6 +47,7 @@ pub fn create_connection(
                 evloop, false, &factory, &ssl, hostname,
                 socket, Some(&addr), Some(peer), Some(waiter.clone_ref(GIL::python())));
 
+            let waiter: PyFut = waiter.into();
             waiter.then(move |_| match result {
                 Ok(transport) => future::ok(transport),
                 Err(err) => future::err(err)
