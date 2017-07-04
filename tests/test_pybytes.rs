@@ -12,7 +12,7 @@ use async_tokio::{PyBytes, PyLogger};
 macro_rules! py_run {
     ($py:expr, $val:ident, $code:expr) => {{
         let d = PyDict::new($py);
-        d.set_item($py, stringify!($val), &$val).unwrap();
+        d.set_item(stringify!($val), &$val).unwrap();
         $py.run($code, None, Some(&d)).expect($code);
     }}
 }
@@ -29,14 +29,14 @@ fn test_pybytes() {
 
     let bytestp = py.get_type::<PyBytes>();
     // creating instances from python is not allowed
-    assert!(bytestp.call(py, NoArgs, None).is_err());
+    assert!(bytestp.call(NoArgs, None).is_err());
 
     let bytes = Bytes::from("{\"test\": \"value\"}");
     let pb = PyBytes::new(py, bytes).unwrap();
     assert_eq!(pb.as_ref(py).len(), 17);
 
     let d = PyDict::new(py);
-    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+    d.set_item("pb", pb.clone_ref(py)).unwrap();
     py.run("assert len(pb) == 17", None, Some(&d)).unwrap();
     py.run("assert bytes(pb) == b'{\"test\": \"value\"}'", None, Some(&d)).unwrap();
 
@@ -73,7 +73,7 @@ fn test_pybytes_split() {
     let bytes = Bytes::from("1,2,,3,");
     let pb = PyBytes::new(py, bytes).unwrap();
     let d = PyDict::new(py);
-    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+    d.set_item("pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert [bytes(i) for i in pb.split(b',')] == [b'1', b'2', b'', b'3', b'']",
            None, Some(&d)).unwrap();
@@ -86,7 +86,7 @@ fn test_pybytes_split() {
 
     let bytes = Bytes::from("1 2 3");
     let pb = PyBytes::new(py, bytes).unwrap();
-    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+    d.set_item("pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert [bytes(i) for i in pb.split()] == [b'1', b'2', b'3']",
            None, Some(&d)).unwrap();
@@ -95,7 +95,7 @@ fn test_pybytes_split() {
 
     let bytes = Bytes::from("   1  \t 2  \r 3   ");
     let pb = PyBytes::new(py, bytes).unwrap();
-    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+    d.set_item("pb", pb.clone_ref(py)).unwrap();
 
     py.run("assert [bytes(i) for i in pb.split()] == [b'1', b'2', b'3']",
            None, Some(&d)).unwrap();
@@ -109,8 +109,8 @@ fn test_pybytes_strip() {
     let bytes = Bytes::from("   1   2   3   ");
     let pb = PyBytes::new(py, bytes).unwrap();
     let d = PyDict::new(py);
-    d.set_item(py, "pb", pb.clone_ref(py)).unwrap();
+    d.set_item("pb", pb.clone_ref(py)).unwrap();
 
-    py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).map_err(|e| e.print(py));
-    py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
+    let _ = py.run("assert pb.strip() == b'1   2   3'", None, Some(&d)).map_err(|e| e.print(py));
+    let _ = py.run("assert pb.strip(b' 1') == b'2   3'", None, Some(&d)).unwrap();
 }
