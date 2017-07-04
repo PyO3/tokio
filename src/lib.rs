@@ -56,22 +56,21 @@ fn init_async_tokio(py: Python, m: &PyModule) -> PyResult<()> {
         new_event_loop(py).into()
     }
 
-    register_classes(py, m)?;
-    Ok(())
+    register_classes(py, m)
 }
 
 
-pub fn register_classes(py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult<()> {
-    m.add_class::<event_loop::TokioEventLoop>(py)?;
-    m.add_class::<pytask::PyTask>(py)?;
-    m.add_class::<pytask::PyTaskIter>(py)?;
-    m.add_class::<pyfuture::PyFuture>(py)?;
-    m.add_class::<pyfuture::PyFutureIter>(py)?;
-    m.add_class::<pybytes::PyBytes>(py)?;
-    m.add_class::<handle::PyHandle>(py)?;
-    m.add_class::<server::TokioServer>(py)?;
-    m.add_class::<socket::Socket>(py)?;
-    m.add_class::<transport::PyTcpTransport>(py)?;
+pub fn register_classes(_py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult<()> {
+    m.add_class::<event_loop::TokioEventLoop>()?;
+    m.add_class::<pytask::PyTask>()?;
+    m.add_class::<pytask::PyTaskIter>()?;
+    m.add_class::<pyfuture::PyFuture>()?;
+    m.add_class::<pyfuture::PyFutureIter>()?;
+    m.add_class::<pybytes::PyBytes>()?;
+    m.add_class::<handle::PyHandle>()?;
+    m.add_class::<server::TokioServer>()?;
+    m.add_class::<socket::Socket>()?;
+    m.add_class::<transport::PyTcpTransport>()?;
 
     //m.add_class::<http::PyRequest>(py)?;
     //m.add_class::<http::StreamReader>(py)?;

@@ -15,7 +15,7 @@ pub struct PyHandle {
     cancelled: bool,
     cancel_handle: Option<oneshot::Sender<()>>,
     callback: PyObject,
-    args: PyTuple,
+    args: Py<PyTuple>,
     source_traceback: Option<PyObject>,
     token: PyToken,
 }
@@ -26,7 +26,7 @@ pub struct PyHandlePtr(Py<PyHandle>);
 #[py::methods]
 impl PyHandle {
 
-    fn cancel(&mut self, _py: Python) -> PyResult<()> {
+    fn cancel(&mut self) -> PyResult<()> {
         self.cancelled = true;
 
         if let Some(tx) = self.cancel_handle.take() {
@@ -37,7 +37,7 @@ impl PyHandle {
     }
 
     #[getter(_cancelled)]
-    fn get_cancelled(&self, _py: Python) -> PyResult<bool> {
+    fn get_cancelled(&self) -> PyResult<bool> {
         Ok(self.cancelled)
     }
 }
@@ -46,11 +46,11 @@ impl PyHandle {
 impl PyHandle {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
-               callback: PyObject, args: PyTuple) -> PyResult<PyHandlePtr> {
+               callback: PyObject, args: &PyTuple) -> PyResult<PyHandlePtr> {
 
         let tb = if evloop.is_debug() {
-            let frame = Classes.Sys.call(py, "_getframe", (0,), None)?;
-            Some(Classes.ExtractStack.call(py, (frame,), None)?)
+            let frame = Classes.Sys.as_ref(py).call("_getframe", (0,), None)?;
+            Some(Classes.ExtractStack.as_ref(py).call((frame,), None)?.into())
         } else {
             None
         };
@@ -60,7 +60,7 @@ impl PyHandle {
             cancelled: false,
             cancel_handle: None,
             callback: callback,
-            args: args,
+            args: args.into(),
             source_traceback: tb,
             token: t})?))
     }
@@ -78,13 +78,13 @@ impl PyHandle {
             if err.matches(py, &Classes.Exception) {
                 let context = PyDict::new(py);
                 let _ = context.set_item(
-                    py, "message", format!("Exception in callback {:?} {:?}",
-                                           self.callback, self.args));
-                let _ = context.set_item(py, "handle", format!("{:?}", self));
-                let _ = context.set_item(py, "exception", err.clone_ref(py).instance(py));
+                    "message", format!("Exception in callback {:?} {:?}",
+                                       self.callback, self.args));
+                let _ = context.set_item("handle", format!("{:?}", self));
+                let _ = context.set_item("exception", err.clone_ref(py).instance(py));
 
                 if let Some(ref tb) = self.source_traceback {
-                    let _ = context.set_item(py, "source_traceback", tb.clone_ref(py));
+                    let _ = context.set_item("source_traceback", tb.clone_ref(py));
                 }
                 let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
             } else {

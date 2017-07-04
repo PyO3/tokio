@@ -16,8 +16,8 @@ pub fn create_sock_connection(
     factory: PyObject, evloop: Py<TokioEventLoop>,
     stream: TcpStream, addr: AddrInfo,
     ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: Py<PyFuture>)
-    -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
-
+    -> Box<Future<Item=InitializedTransport, Error=io::Error>>
+{
     let peer = stream.peer_addr().expect("should never happen");
 
     let result = tcp_transport_factory(
@@ -35,8 +35,8 @@ pub fn create_sock_connection(
 pub fn create_connection(
     factory: PyObject, evloop: Py<TokioEventLoop>, addrs: Vec<AddrInfo>,
     ssl: Option<PyObject>, hostname: Option<PyObject>, waiter: Py<PyFuture>)
-                         -> Box<Future<Item=InitializedTransport, Error=io::Error>> {
-
+    -> Box<Future<Item=InitializedTransport, Error=io::Error>>
+{
     let handle = evloop.as_ref(GIL::python()).get_handle();
     let conn = connect(addrs, handle.clone());
 

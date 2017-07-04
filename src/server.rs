@@ -144,7 +144,7 @@ pub fn create_uds_server(py: Python, evloop: &TokioEventLoop,
 #[py::class]
 pub struct TokioServer {
     evloop: Py<TokioEventLoop>,
-    sockets: PyTuple,
+    sockets: Py<PyTuple>,
     stop_handle: Option<Vec<pyunsafe::OneshotSender<()>>>,
     token: PyToken,
 }
@@ -154,8 +154,8 @@ pub struct TokioServer {
 impl TokioServer {
 
     #[getter]
-    fn sockets(&self, py: Python) -> PyResult<PyObject> {
-        Ok(self.sockets.to_object(py))
+    fn sockets(&self) -> PyResult<PyObject> {
+        Ok(self.sockets.to_object(self.token()))
     }
 
     fn close(&mut self, py: Python) -> PyResult<PyObject> {

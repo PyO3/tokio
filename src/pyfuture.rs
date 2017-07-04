@@ -159,9 +159,9 @@ impl _PyFuture {
     pub fn result(&self, py: Python, reset_log: bool) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::new_err(py, &Classes.InvalidStateError, ("Result is not ready.",))),
+                Err(PyErr::new_err(py, Classes.InvalidStateError.as_ref(py), ("Result is not ready.",))),
             State::Cancelled =>
-                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
+                Err(PyErr::new_err(py, Classes.CancelledError.as_ref(py), NoArgs)),
             State::Finished => {
                 if reset_log {
                     self.log_exc_tb.set(false);
@@ -197,9 +197,9 @@ impl _PyFuture {
     pub fn exception(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::new_err(py, &Classes.InvalidStateError, "Exception is not set.")),
+                Err(PyErr::new_err(py, Classes.InvalidStateError.as_ref(py), "Exception is not set.")),
             State::Cancelled =>
-                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
+                Err(PyErr::new_err(py, Classes.CancelledError.as_ref(py), NoArgs)),
             State::Finished =>
                 match self.exception {
                     Some(ref err) => {
@@ -282,9 +282,9 @@ impl _PyFuture {
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
-                Err(PyErr::new_err(py, &Classes.InvalidStateError, ("Result is not ready.",))),
+                Err(PyErr::new_err(py, Classes.InvalidStateError.as_ref(py), ("Result is not ready.",))),
             State::Cancelled =>
-                Err(PyErr::new_err(py, &Classes.CancelledError, NoArgs)),
+                Err(PyErr::new_err(py, Classes.CancelledError.as_ref(py), NoArgs)),
             State::Finished => {
                 if let Some(ref exc) = self.exception {
                     self.log_exc_tb.set(false);
@@ -340,7 +340,7 @@ impl _PyFuture {
             _ => {
                 py.release(result);
                 py.release(sender);
-                Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs))
+                Err(PyErr::new_err(py, Classes.InvalidStateError.as_ref(py), NoArgs))
             }
         };
         res
@@ -352,28 +352,28 @@ impl _PyFuture {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    pub fn set_exception(&mut self, py: Python, exception: PyObject,
+    pub fn set_exception(&mut self, py: Python, exception: &PyObjectRef,
                          sender: PyObject, inplace: bool) -> PyResult<()>
     {
         match self.state {
             State::Pending => {
                 // check if exception is a type object
                 let exc =
-                    if let Ok(exception) = PyType::downcast_from(py, &exception) {
-                        Some(exception.call(py, NoArgs, None)?)
+                    if let Ok(exception) = PyType::downcast_from(exception) {
+                        Some(exception.call(NoArgs, None)?)
                     } else {
                         None
                     };
                 let exc = if let Some(exc) = exc { exc } else { exception };
 
                 // StopIteration cannot be raised into a Future - CPython issue26221
-                if Classes.StopIteration.is_instance(py, &exc)? {
+                if Classes.StopIteration.as_ref(py).is_instance(exc)? {
                     return Err(PyErr::new::<exc::TypeError, _>(
                         py, "StopIteration interacts badly with generators \
                              and cannot be raised into a Future"));
                 }
 
-                self.exception = Some(exc);
+                self.exception = Some(exc.into());
                 self.log_exc_tb.set(true);
 
                 self.schedule_callbacks(py, State::Finished, sender, inplace);
@@ -382,7 +382,7 @@ impl _PyFuture {
             _ => {
                 py.release(exception);
                 py.release(sender);
-                Err(PyErr::new_err(py, &Classes.InvalidStateError, NoArgs))
+                Err(PyErr::new_err(py, Classes.InvalidStateError.as_ref(py), NoArgs))
             }
         }
     }
@@ -495,13 +495,13 @@ impl Drop for _PyFuture {
         let py = GIL::python();
         if self.log_exc_tb.get() {
             let context = PyDict::new(py);
-            let _ = context.set_item(py, "message", "Future exception was never retrieved");
-            let _ = context.set_item(py, "future", "PyFuture");
+            let _ = context.set_item("message", "Future exception was never retrieved");
+            let _ = context.set_item("future", "PyFuture");
             if let Some(tb) = self.source_tb.take() {
-                let _ = context.set_item(py, "source_traceback", tb);
+                let _ = context.set_item("source_traceback", tb);
             }
             if let Some(ref exc) = self.exception {
-                let _ = context.set_item(py, "exception", exc.clone_ref(py));
+                let _ = context.set_item("exception", exc.clone_ref(py));
             }
             let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
         };
@@ -547,20 +547,20 @@ pub struct PyFuture {
 #[py::methods]
 impl PyFuture {
 
-    fn __repr__(&self, py: Python) -> PyResult<PyString> {
+    fn __repr__(&self, py: Python) -> PyResult<PyObject> {
         let f: Py<PyFuture> = self.into();
-        let repr = Classes.Helpers.call(
-            py, "future_repr", ("Future", f,), None)?;
-        Ok(PyString::downcast_into(py, repr)?)
+        let repr = Classes.Helpers.as_ref(py).call(
+            "future_repr", ("Future", f,), None)?;
+        Ok(repr.into())
     }
 
-    //
-    // Cancel the future and schedule callbacks.
-    //
-    // If the future is already done or cancelled, return False.  Otherwise,
-    // change the future's state to cancelled, schedule the callbacks and
-    // return True.
-    //
+    ///
+    /// Cancel the future and schedule callbacks.
+    ///
+    /// If the future is already done or cancelled, return False.  Otherwise,
+    /// change the future's state to cancelled, schedule the callbacks and
+    /// return True.
+    ///
     pub fn cancel(&mut self, py: Python) -> PyResult<bool> {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
@@ -576,7 +576,7 @@ impl PyFuture {
     //
     // Return True if the future was cancelled
     //
-    pub fn cancelled(&self, _py: Python) -> PyResult<bool> {
+    pub fn cancelled(&self) -> PyResult<bool> {
         Ok(self.fut.cancelled())
     }
 
@@ -585,7 +585,7 @@ impl PyFuture {
     // Done means either that a result / exception are available, or that the
     // future was cancelled.
     //
-    fn done(&self, _py: Python) -> PyResult<bool> {
+    fn done(&self) -> PyResult<bool> {
         Ok(self.fut.done())
     }
 
@@ -604,8 +604,8 @@ impl PyFuture {
     // asyncio.gather() uses protected attribute
     //
     #[getter(_result)]
-    fn get_result(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.get_result(py)
+    fn get_result(&self) -> PyResult<PyObject> {
+        self.fut.get_result(self.token())
     }
 
     //
@@ -616,16 +616,16 @@ impl PyFuture {
     // CancelledError.  If the future isn't done yet, raises
     // InvalidStateError.
     //
-    fn exception(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.exception(py)
+    fn exception(&self) -> PyResult<PyObject> {
+        self.fut.exception(self.token())
     }
 
     //
     // asyncio.gather() uses protected attribute
     //
     #[getter(_exception)]
-    fn get_exception(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.get_exception(py)
+    fn get_exception(&self) -> PyResult<PyObject> {
+        self.fut.get_exception(self.token())
     }
 
     //
@@ -680,23 +680,23 @@ impl PyFuture {
             py.release(fut);
         }
         let ob = self.to_object(py);
-        self.fut.set_exception(py, exception, ob, false)
+        self.fut.set_exception(py, exception.as_ref(py), ob, false)
     }
 
     //
     // isfuture support
     //
     #[getter(_asyncio_future_blocking)]
-    fn get_asyncio_future_blocking(&self, _py: Python) -> PyResult<bool> {
+    fn get_asyncio_future_blocking(&self) -> PyResult<bool> {
         Ok(self.blocking)
     }
     #[setter(_asyncio_future_blocking)]
-    fn set_asyncio_future_blocking(&mut self, _py: Python, value: bool) -> PyResult<()> {
+    fn set_asyncio_future_blocking(&mut self, value: bool) -> PyResult<()> {
         self.blocking = value;
         Ok(())
     }
 
-    // handler for asyncio.Future completion
+    /// handler for asyncio.Future completion
     fn _fut_done(&mut self, py: Python, fut: PyObject) -> PyResult<()> {
         // drop reference to wrapped asyncio.Future
         // if it is None, then self initiated _pyfut completion
@@ -715,9 +715,9 @@ impl PyFuture {
 
         // if fut completed with exception
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
-            if !exc.is_none(py) {
+            if !exc.is_none() {
                 let ob = self.to_object(py);
-                return self.fut.set_exception(py, exc, ob, true)
+                return self.fut.set_exception(py, exc.as_ref(py), ob, true)
             }
         }
 
@@ -732,22 +732,22 @@ impl PyFuture {
 
     // compatibility
     #[getter(_loop)]
-    fn get_loop(&self, py: Python) -> PyResult<Py<TokioEventLoop>> {
-        Ok(self.fut.evloop.clone_ref(py))
+    fn get_loop(&self) -> PyResult<Py<TokioEventLoop>> {
+        Ok(self.fut.evloop.clone_ref(self.token()))
     }
 
     #[getter(_callbacks)]
-    fn get_callbacks(&self, py: Python) -> PyResult<PyObject> {
+    fn get_callbacks(&self) -> PyResult<PyObject> {
         if let Some(ref cb) = self.fut.callbacks {
-            Ok(PyTuple::new(py, cb.as_slice()).into_object(py))
+            Ok(PyTuple::new(self.token(), cb.as_slice()).into_object(self.token()))
         } else {
-            Ok(py.None())
+            Ok(self.token().None())
         }
     }
 
     #[getter(_source_traceback)]
-    fn get_source_traceback(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.extract_traceback(py)
+    fn get_source_traceback(&self) -> PyResult<PyObject> {
+        self.fut.extract_traceback(self.token())
     }
 }
 
@@ -778,16 +778,18 @@ impl PyGCProtocol for PyFuture {
 #[py::proto]
 impl PyAsyncProtocol for PyFuture {
 
-    fn __await__(&self, py: Python) -> PyResult<Py<PyFutureIter>> {
-        py.init(|t| PyFutureIter {fut: self.into(), token: t})
+    fn __await__(&self) -> PyResult<Py<PyFutureIter>> {
+        let evloop = self.into();
+        self.token().init(|t| PyFutureIter {fut: evloop, token: t})
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyFuture {
 
-    fn __iter__(&mut self, py: Python) -> PyResult<Py<PyFutureIter>> {
-        py.init(|t| PyFutureIter {fut: self.into(), token: t})
+    fn __iter__(&mut self) -> PyResult<Py<PyFutureIter>> {
+        let evloop = self.into();
+        self.token().init(|t| PyFutureIter {fut: evloop, token: t})
     }
 }
 
@@ -820,24 +822,22 @@ impl PyFuture {
 
     /// wrap asyncio.Future into PyFuture
     /// this method does not check if fut object is actually async.Future object
-    pub fn from_fut(py: Python, evloop: Py<TokioEventLoop>, fut: PyObject)
+    pub fn from_fut(py: Python, evloop: Py<TokioEventLoop>, fut: &PyObjectRef)
                     -> PyResult<Py<PyFuture>>
     {
         let f = py.init(|t| PyFuture {
             fut: _PyFuture::new(py, evloop),
             blocking: false,
-            pyfut: Some(fut.clone_ref(py)),
+            pyfut: Some(fut.into()),
             token: t})?;
 
         // add done callback to fut
         let f_obj: PyObject = f.clone_ref(py).into();
         let meth = f_obj.getattr(py, "_fut_done")?;
-        fut.call_method(py, "add_done_callback", (meth,), None)?;
+        fut.call_method("add_done_callback", (meth,), None)?;
 
-        py.release(fut);
         Ok(f)
     }
-
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
         self.fut.get(py)
     }
@@ -900,6 +900,7 @@ impl PyFuture {
 
 }
 
+#[derive(Debug)]
 pub struct PyFut(Py<PyFuture>);
 
 impl PyFut {
@@ -940,35 +941,39 @@ pub struct PyFutureIter {
 #[py::methods]
 impl PyFutureIter {
 
-    fn send(&mut self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
-        self.__next__(py)
+    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+        self.__next__()
     }
 
-    fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>,
+    fn throw(&mut self, tp: &PyObjectRef, val: Option<PyObject>,
              _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp)? {
-            PyErr::from_instance(py, tp).restore(py);
-        } else {
-            if let Ok(tp) = PyType::downcast_into(py, tp) {
-                PyErr::new_lazy_init(tp, val).restore(py);
+        {
+            let py = self.token();
+            if Classes.Exception.as_ref(py).is_instance(tp)? {
+                PyErr::from_instance(py, tp).restore(py);
             } else {
-                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
+                if let Ok(tp) = PyType::downcast_from(tp) {
+                    PyErr::new_lazy_init(tp, val).restore(py);
+                } else {
+                    PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
+                }
             }
         }
 
-        self.__next__(py)
+        self.__next__()
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyFutureIter {
 
-    fn __iter__(&mut self, _py: Python) -> PyResult<Py<PyFutureIter>> {
+    fn __iter__(&mut self) -> PyResult<Py<PyFutureIter>> {
         Ok(self.into())
     }
 
-    fn __next__(&mut self, py: Python) -> PyResult<Option<PyObject>> {
+    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
+        let py = self.token();
         let fut = self.fut.as_mut(py);
         if !fut.fut.done() {
             fut.blocking = true;

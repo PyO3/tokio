@@ -46,7 +46,7 @@ impl Encoder for HttpTransportCodec {
                 dst.extend(bytes);
             },
             EncoderMessage::PyBytes(bytes) => {
-                dst.extend(bytes.data(GIL::python()));
+                dst.extend(bytes.data());
             },
         }
         Ok(())

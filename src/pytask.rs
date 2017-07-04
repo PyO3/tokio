@@ -75,8 +75,8 @@ impl PyTask {
     // asyncio.gather() uses attribute
     //
     #[getter(_result)]
-    fn get_result(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.get_result(py)
+    fn get_result(&self) -> PyResult<PyObject> {
+        self.fut.get_result(self.token())
     }
 
     //
@@ -95,8 +95,8 @@ impl PyTask {
     // asyncio.gather() uses attribute
     //
     #[getter(_exception)]
-    fn get_exception(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.get_exception(py)
+    fn get_exception(&self) -> PyResult<PyObject> {
+        self.fut.get_exception(self.token())
     }
 
     //
@@ -137,59 +137,50 @@ impl PyTask {
     // If the future is already done when this method is called, raises
     // InvalidStateError.
     //
-    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<()> {
+    fn set_exception(&mut self, py: Python, exception: &PyObjectRef) -> PyResult<()> {
         let ob: PyObject = self.into();
         self.fut.set_exception(py, exception, ob, false)
     }
 
-    //
-    // awaitable
-    //
-    fn __iter__(&self, py: Python) -> PyResult<Py<PyTaskIter>> {
-        py.init(|t| PyTaskIter{
-            fut: self.into(),
-            token: t})
-    }
-
     // compatibility
     #[getter(_loop)]
-    fn get_loop(&self, py: Python) -> PyResult<Py<TokioEventLoop>> {
-        Ok(self.fut.evloop.clone_ref(py))
+    fn get_loop(&self) -> PyResult<Py<TokioEventLoop>> {
+        Ok(self.fut.evloop.clone_ref(self.token()))
     }
 
     #[getter(_fut_waiter)]
-    fn get_fut_waiter(&self, py: Python) -> PyResult<PyObject> {
+    fn get_fut_waiter(&self) -> PyResult<PyObject> {
         match self.waiter {
-            Some(ref fut) => Ok(fut.clone_ref(py)),
-            None => Ok(py.None())
+            Some(ref fut) => Ok(fut.clone_ref(self.token())),
+            None => Ok(self.token().None())
         }
     }
 
     #[getter(_must_cancel)]
-    fn get_must_cancel(&self, _py: Python) -> PyResult<bool> {
+    fn get_must_cancel(&self) -> PyResult<bool> {
         Ok(self.must_cancel)
     }
 
     #[getter(_callbacks)]
-    fn get_callbacks(&self, py: Python) -> PyResult<PyObject> {
+    fn get_callbacks(&self) -> PyResult<PyObject> {
         if let Some(ref cb) = self.fut.callbacks {
-            Ok(PyTuple::new(py, cb.as_slice()).into())
+            Ok(PyTuple::new(self.token(), cb.as_slice()).into())
         } else {
-            Ok(py.None())
+            Ok(self.token().None())
         }
     }
 
     #[getter(_source_traceback)]
-    fn get_source_traceback(&self, py: Python) -> PyResult<PyObject> {
-        self.fut.extract_traceback(py)
+    fn get_source_traceback(&self) -> PyResult<PyObject> {
+        self.fut.extract_traceback(self.token())
     }
 
     #[getter(_log_destroy_pending)]
-    fn get_log_destroy_pending(&self, py: Python) -> PyResult<PyBool> {
-        Ok(py.False())
+    fn get_log_destroy_pending(&self) -> PyResult<bool> {
+        Ok(false)
     }
     #[setter(_log_destroy_pending)]
-    fn set_log_destroy_pending(&self, _py: Python, _value: &PyObject) -> PyResult<()> {
+    fn set_log_destroy_pending(&self, _value: &PyObjectRef) -> PyResult<()> {
         Ok(())
     }
 
@@ -197,11 +188,11 @@ impl PyTask {
     // isfuture support
     //
     #[getter(_asyncio_future_blocking)]
-    fn get_asyncio_future_blocking(&self, _py: Python) -> PyResult<bool> {
+    fn get_asyncio_future_blocking(&self) -> PyResult<bool> {
         Ok(self.blocking)
     }
     #[setter(_asyncio_future_blocking)]
-    fn set_asyncio_future_blocking(&mut self, _py: Python, value: bool) -> PyResult<()> {
+    fn set_asyncio_future_blocking(&mut self, value: bool) -> PyResult<()> {
         self.blocking = value;
         Ok(())
     }
@@ -289,25 +280,26 @@ impl PyGCProtocol for PyTask {
 
 #[py::proto]
 impl PyObjectProtocol for PyTask {
-    fn __repr__(&self, py: Python) -> PyResult<PyObject> {
+    fn __repr__(&self) -> PyResult<PyObject> {
         let ob: PyObject = self.into();
-        Classes.Helpers.call(py, "future_repr", ("Task", ob,), None)
+        Ok(Classes.Helpers.as_ref(self.token()).call("future_repr", ("Task", ob,), None)?.into())
     }
 }
 
 #[py::proto]
 impl PyAsyncProtocol for PyTask {
 
-    fn __await__(&self, py: Python) -> PyResult<Py<PyTaskIter>> {
-        py.init(|t| PyTaskIter{fut: self.into(), token: t})
+    fn __await__(&self) -> PyResult<Py<PyTaskIter>> {
+        self.token().init(|t| PyTaskIter{fut: self.into(), token: t})
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyTask {
 
-    fn __iter__(&mut self, py: Python) -> PyResult<Py<PyTaskIter>> {
-        py.init(|t| PyTaskIter{fut: self.into(), token: t})
+    fn __iter__(&mut self) -> PyResult<Py<PyTaskIter>> {
+        let evloop = self.into();
+        self.token().init(|t| PyTaskIter{fut: evloop, token: t})
     }
 }
 
@@ -350,45 +342,45 @@ pub struct PyTaskIter {
 #[py::methods]
 impl PyTaskIter {
 
-    fn send(&mut self, py: Python, _unused: PyObject) -> PyResult<Option<PyObject>> {
-        self.__next__(py)
+    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+        self.__next__()
     }
 
-    fn throw(&mut self, py: Python, tp: PyObject, val: Option<PyObject>, _tb: Option<PyObject>)
-             -> PyResult<Option<PyObject>>
+    fn throw(&mut self, py: Python, tp: &PyObjectRef,
+             val: Option<PyObject>, _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.is_instance(py, &tp)? {
+        if Classes.Exception.as_ref(py).is_instance(tp)? {
             let val = tp;
-            let tp = val.get_type(py);
-            PyErr::new_lazy_init(tp, Some(val)).restore(py);
+            let tp = val.get_type();
+            PyErr::new_lazy_init(tp, Some(val.into())).restore(py);
         } else {
-            if let Ok(tp) = PyType::downcast_into(py, tp) {
+            if let Ok(tp) = PyType::downcast_from(tp) {
                 PyErr::new_lazy_init(tp, val).restore(py);
             } else {
                 PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
             }
         }
 
-        self.__next__(py)
+        self.__next__()
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyTaskIter {
 
-    fn __iter__(&mut self, _py: Python) -> PyResult<Py<PyTaskIter>> {
+    fn __iter__(&mut self) -> PyResult<Py<PyTaskIter>> {
         Ok(self.into())
     }
 
-    fn __next__(&mut self, py: Python) -> PyResult<Option<PyObject>> {
-        let fut = self.fut.as_mut(py);
+    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
+        let fut = self.fut.as_mut(self.token());
 
         if !fut.fut.done() {
             fut.blocking = true;
-            Ok(Some(self.fut.clone_ref(py).into()))
+            Ok(Some(self.fut.clone_ref(self.token()).into()))
         } else {
-            let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
+            let res = fut.result(self.token())?;
+            Err(PyErr::new::<exc::StopIteration, _>(self.token(), (res,)))
         }
     }
 }
@@ -420,13 +412,13 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     let mut exc = exc;
     if task.must_cancel {
         exc = if let Some(exc) = exc {
-            if Classes.CancelledError.is_instance(py, &exc).unwrap() {
+            if Classes.CancelledError.as_ref(py).is_instance(exc.as_ref(py)).unwrap() {
                 Some(exc)
             } else {
-                Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+                Some(Classes.CancelledError.as_ref(py).call(NoArgs, None).unwrap().into())
             }
         } else {
-            Some(Classes.CancelledError.call(py, NoArgs, None).unwrap())
+            Some(Classes.CancelledError.as_ref(py).call(NoArgs, None).unwrap().into())
         };
     }
     task.waiter = None;
@@ -456,7 +448,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 let _ = task.fut.cancel(py, ob);
             }
             else if err.matches(py, &Classes.BaseException) {
-                task.set_exception(py, err.instance(py))
+                task.set_exception(py, err.instance(py).as_ref(py))
                     .into_log(py, "can not set task exception");
             }
             else {
@@ -464,13 +456,14 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 err.into_log(py, "error executing task step");
             }
         },
-        Ok(mut result) => {
-            if let Ok(true) = result.hasattr(py, "_asyncio_future_blocking") {
-                if let Ok(blocking) = result.getattr(py, "_asyncio_future_blocking") {
-                    if !blocking.is_true(py).unwrap() {
+        Ok(res) => {
+            let mut result = res.as_mut(py);
+            if let Ok(true) = result.hasattr("_asyncio_future_blocking") {
+                if let Ok(blocking) = result.getattr("_asyncio_future_blocking") {
+                    if !blocking.is_true().unwrap() {
                         let mut err = PyErr::new::<exc::RuntimeError, _>(
                             py, format!("yield was used instead of yield from \
-                                         in task {:?} with {:?}", task, &result));
+                                         in task {:?} with {:?}", task, result));
 
                         let waiter_task: Py<PyTask> = task.into();
                         task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
@@ -488,7 +481,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 }
             }
 
-            if let Ok(res) = PyFuture::downcast_mut_from(py, &mut result) {
+            if let Ok(res) = PyFuture::downcast_mut_from(&mut result) {
                 if !res.is_blocking() {
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
@@ -526,7 +519,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 return
             }
 
-            if let Ok(res) = PyTask::downcast_mut_from(py, &mut result) {
+            if let Ok(res) = PyTask::downcast_mut_from(&mut result) {
                 if !res.is_blocking() {
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
@@ -553,10 +546,11 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 return
             }
 
-            if result.hasattr(py, "_asyncio_future_blocking").unwrap() {
+            if result.hasattr("_asyncio_future_blocking").unwrap() {
                 // wrap into PyFuture, use unwrap because if it failes then whole
                 // processes is hosed
-                let fut = PyFuture::from_fut(py, task.fut.evloop.clone_ref(py), result).unwrap();
+                let fut = PyFuture::from_fut(
+                    py, task.fut.evloop.clone_ref(py), result).unwrap();
 
                 // store ref to future
                 task.waiter = Some(fut.clone_ref(py).into());
@@ -575,7 +569,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 return
             }
 
-            if result.is_none(py) {
+            if result.is_none() {
                 // call soon
                 let task2: Py<PyTask> = task.into();
                 task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
@@ -591,10 +585,11 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
             // Yielding something else is an error.
             let task2: Py<PyTask> = task.into();
+            let result: PyObject = result.into();
             task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
                 task2.into_mut_py(|py, mut task| {
                     let mut exc = PyErr::new::<exc::RuntimeError, _>(
-                        py, format!("Task got bad yield: {:?}", &result));
+                        py, format!("Task got bad yield: {:?}", result));
 
                     // wakeup task
                     task_step(py, task, coro, Some(exc.instance(py)), 0);

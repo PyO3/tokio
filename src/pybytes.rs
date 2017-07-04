@@ -5,9 +5,9 @@ use std::os::raw::{c_void, c_int};
 use twoway;
 use pyo3::{ffi, py};
 use pyo3::buffer::PyBuffer;
-use pyo3::{self, class, exc, Python, PyToken, Py, PyClone,
-           ObjectProtocol, ToPyPointer, InstancePtr,
-           PyResult, PyObject, PySlice, PyErr, PyDowncastFrom, PyDowncastInto, ToPyObject};
+use pyo3::{self, class, exc, Python, PyToken, Py,
+           ObjectProtocol, ToPyPointer, PyResult, PyObject, PyObjectRef,
+           PySlice, PyErr, PyDowncastFrom, ToPyObject, PyObjectWithToken};
 use bytes::{Bytes, BytesMut, BufMut};
 
 #[py::class]
@@ -23,22 +23,22 @@ pub struct PyBytes {
 #[py::methods]
 impl PyBytes {
 
-    fn find(&self, py: Python, sub: pyo3::PyBytes,
+    fn find(&self, sub: &pyo3::PyBytes,
             start: Option<isize>, end: Option<isize>) -> PyResult<isize> {
         let mut pre = 0;
         let pos = match (&start, &end) {
             (&None, &None) => {
-                twoway::find_bytes(self.bytes.as_ref(), sub.data(py))
+                twoway::find_bytes(self.bytes.as_ref(), sub.data())
             }
             _ => {
                 let start = if let Some(start) = start {start} else {0};
                 let end = if let Some(end) = end {end} else {-1};
 
-                let slice = PySlice::new(py, start, end, 1);
-                let indices = slice.indices(py, self.bytes.len() as i64)?;
+                let slice = PySlice::new(self.token(), start, end, 1);
+                let indices = slice.indices(self.bytes.len() as i64)?;
                 pre = indices.start as usize;
                 let end = (indices.stop+1) as usize;
-                twoway::find_bytes(&self.bytes[pre..end], sub.data(py))
+                twoway::find_bytes(&self.bytes[pre..end], sub.data())
             }
         };
 
@@ -50,12 +50,13 @@ impl PyBytes {
     }
 
     #[args(maxsplit="-1")]
-    fn split(&self, py: Python, sep: Option<PyObject>, maxsplit: i32) -> PyResult<pyo3::PyList> {
+    fn split(&self, sep: Option<&PyObjectRef>, maxsplit: i32) -> PyResult<&pyo3::PyList> {
+        let py = self.token();
         let sep_len;
         let remove_empty;
         let sep = if let Some(sep) = sep {
             remove_empty = false;
-            let v = PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?;
+            let v = PyBuffer::get(py, sep)?.to_vec::<u8>(py)?;
             sep_len = v.len();
             v
         } else {
@@ -114,9 +115,9 @@ impl PyBytes {
         Ok(pyo3::PyList::new(py, result.as_slice()))
     }
 
-    fn strip(&self, py: Python, sep: Option<PyObject>) -> PyResult<Py<PyBytes>> {
+    fn strip(&self, py: Python, sep: Option<&PyObjectRef>) -> PyResult<Py<PyBytes>> {
         let sep = if let Some(sep) = sep {
-            PyBuffer::get(py, &sep)?.to_vec::<u8>(py)?
+            PyBuffer::get(py, sep)?.to_vec::<u8>(py)?
         } else {
             vec![b' ', b'\t', b'\n', b'\r', b'\x0b', b'\x0c']
         };
@@ -148,22 +149,18 @@ impl PyBytes {
         py.init(|t| PyBytes{bytes: self.bytes.slice(start, end), token: t})
     }
 
-    fn decode(&self, py: Python, encoding: Option<pyo3::PyString>,
-              errors: Option<pyo3::PyString>) -> PyResult<pyo3::PyString> {
+    fn decode(&self, encoding: Option<&str>, errors: Option<&str>) -> PyResult<PyObject>
+    {
         let bytes = self.as_ref();
         match (encoding, errors) {
             (Some(enc), Some(err)) =>
-                Ok(pyo3::PyString::from_object(
-                    py, bytes,
-                    enc.to_string_lossy(py).as_ref(), err.to_string_lossy(py).as_ref())?),
+                Ok(pyo3::PyString::from_object(bytes, enc, err)?.into()),
             (Some(enc), None) =>
-                Ok(pyo3::PyString::from_object(
-                    py, bytes, enc.to_string_lossy(py).as_ref(), "strict")?),
+                Ok(pyo3::PyString::from_object(bytes, enc, "strict")?.into()),
             (None, Some(err)) =>
-                Ok(pyo3::PyString::from_object(
-                    py, bytes, "utf-8", err.to_string_lossy(py).as_ref())?),
+                Ok(pyo3::PyString::from_object(bytes, "utf-8", err)?.into()),
             (None, None) =>
-                Ok(pyo3::PyString::from_object(py, bytes, "utf-8", "strict")?),
+                Ok(pyo3::PyString::from_object(bytes, "utf-8", "strict")?.into()),
         }
     }
 }
@@ -209,17 +206,17 @@ impl PyBytes {
 }
 
 #[py::proto]
-impl pyo3::class::PyObjectProtocol for PyBytes {
+impl<'p> pyo3::class::PyObjectProtocol<'p> for PyBytes {
 
-    fn __richcmp__(&self, py: Python,
-                   other: PyObject, op: pyo3::CompareOp) -> PyResult<PyObject> {
+    fn __richcmp__(&self, other: &PyObjectRef, op: pyo3::CompareOp) -> PyResult<PyObject> {
+        let py = self.token();
         match op {
             pyo3::CompareOp::Eq => {
-                if let Ok(other) = PyBytes::downcast_from(py, &other) {
+                if let Ok(other) = PyBytes::downcast_from(other) {
                     Ok((self.bytes.as_ref() == other.bytes.as_ref()).to_object(py))
                 }
-                else if let Ok(other) = pyo3::PyBytes::downcast_from(py, &other) {
-                    Ok((self.bytes.as_ref() == other.data(py).as_ref()).to_object(py))
+                else if let Ok(other) = pyo3::PyBytes::downcast_from(other) {
+                    Ok((self.bytes.as_ref() == other.data().as_ref()).to_object(py))
                 }
                 else {
                     Err(PyErr::new::<exc::TypeError, _>(
@@ -234,16 +231,17 @@ impl pyo3::class::PyObjectProtocol for PyBytes {
 
 
 #[py::proto]
-impl pyo3::class::PyNumberProtocol for PyBytes {
+impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
 
-    fn __add__(&self, py: Python, rhs: PyObject) -> PyResult<PyObject> {
+    fn __add__(&self, rhs: &PyObjectRef) -> PyResult<PyObject> {
+        let py = self.token();
         let l = PyBuffer::get(py, self.as_ref())?;
-        let r = PyBuffer::get(py, &rhs)?;
+        let r = PyBuffer::get(py, rhs)?;
 
         match (l.as_slice::<u8>(py), r.as_slice::<u8>(py)) {
             (Some(lbuf), Some(rbuf)) => {
                 if lbuf.len() == 0 {
-                    return Ok(rhs.clone_ref(py))
+                    return Ok(rhs.into())
                 }
                 if rbuf.len() == 0 {
                     return Ok(self.to_object(py))
@@ -271,14 +269,14 @@ impl pyo3::class::PyNumberProtocol for PyBytes {
 #[py::proto]
 impl pyo3::class::PyMappingProtocol for PyBytes {
 
-    fn __len__(&self, _py: Python) -> PyResult<usize> {
+    fn __len__(&self) -> PyResult<usize> {
         Ok(self.bytes.len())
     }
 
-    fn __getitem__(&self, py: Python, key: PyObject) -> PyResult<PyObject> {
+    fn __getitem__(&self, key: &PyObjectRef) -> PyResult<PyObject> {
         // access by slice
-        if let Ok(slice) = PySlice::downcast_from(py, &key) {
-            let indices = slice.indices(py, self.bytes.len() as i64)?;
+        if let Ok(slice) = PySlice::downcast_from(key) {
+            let indices = slice.indices(self.bytes.len() as i64)?;
 
             let s = if indices.step == 1 {
                 // continuous chunk of memory
@@ -294,23 +292,23 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
                 }
                 buf.freeze()
             };
-            PyBytes::new(py, s).map(|ob| ob.into())
+            PyBytes::new(self.token(), s).map(|ob| ob.into())
         }
         // access by index
-        else if let Ok(idx) = key.extract::<isize>(py) {
+        else if let Ok(idx) = key.extract::<isize>() {
             if idx < 0 {
-                Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
+                Err(PyErr::new::<exc::IndexError, _>(self.token(), "Index out of range"))
             } else {
                 let idx = idx as usize;
 
                 if idx < self.bytes.len() {
-                    Ok(self.bytes[idx].to_object(py))
+                    Ok(self.bytes[idx].to_object(self.token()))
                 } else {
-                    Err(PyErr::new::<exc::IndexError, _>(py, "Index out of range"))
+                    Err(PyErr::new::<exc::IndexError, _>(self.token(), "Index out of range"))
                 }
             }
         } else {
-            Err(PyErr::new::<exc::TypeError, _>(py, "Index is not supported"))
+            Err(PyErr::new::<exc::TypeError, _>(self.token(), "Index is not supported"))
         }
     }
 }
@@ -319,7 +317,9 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
 #[py::proto]
 impl class::PyBufferProtocol for PyBytes {
 
-    fn bf_getbuffer(&self, py: Python, view: *mut ffi::Py_buffer, flags: c_int) -> PyResult<()> {
+    fn bf_getbuffer(&self, view: *mut ffi::Py_buffer, flags: c_int) -> PyResult<()> {
+        let py = self.token();
+
         if view == ptr::null_mut() {
             return Err(PyErr::new::<exc::BufferError, _>(py, "View is null"))
         }

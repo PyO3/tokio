@@ -56,17 +56,17 @@ impl Socket {
 impl Socket {
 
     #[getter]
-    fn get_family(&self, py: Python) -> PyResult<i32> {
+    fn get_family(&self) -> PyResult<i32> {
         Ok(self.family)
     }
 
     #[getter]
-    fn get_type(&self, py: Python) -> PyResult<i32> {
+    fn get_type(&self) -> PyResult<i32> {
         Ok(self.socktype)
     }
 
     #[getter]
-    fn get_proto(&self, py: Python) -> PyResult<i32> {
+    fn get_proto(&self) -> PyResult<i32> {
         Ok(self.proto)
     }
 
@@ -100,12 +100,12 @@ impl Socket {
         }
 
         if let Some(fd) = self.fd {
-            let sock = Classes.Socket.call(
-                py, "socket", (self.family, self.socktype, self.proto, fd), None)?;
+            let sock = Classes.Socket.as_ref(py).call(
+                "socket", (self.family, self.socktype, self.proto, fd), None)?;
 
-            let res = sock.call_method(py, "dup", NoArgs, None);
-            self.socket = Some(sock);
-            res
+            let res = sock.call_method("dup", NoArgs, None);
+            self.socket = Some(sock.into());
+            Ok(res?.into())
         } else {
             Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
         }
@@ -119,29 +119,29 @@ impl Socket {
         Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
     }
 
-    pub fn getpeername(&self, py: Python) -> PyResult<PyTuple> {
+    pub fn getpeername(&self, py: Python) -> PyResult<PyObject> {
         match self.peername {
             None => Err(PyErr::new::<exc::OSError, _>(py, "Socket is not connected")),
             Some(ref addr) => match addr {
                 &SocketAddr::V4(addr) => {
-                    Ok((format!("{}", addr.ip()), addr.port()).into_tuple(py))
+                    Ok((format!("{}", addr.ip()), addr.port()).into_object(py))
                 }
                 &SocketAddr::V6(addr) => {
                     Ok((format!("{}", addr.ip()),
-                        addr.port(), addr.flowinfo(), addr.scope_id(),).into_tuple(py))
+                        addr.port(), addr.flowinfo(), addr.scope_id(),).into_object(py))
                 },
             }
         }
     }
 
-    pub fn getsockname(&self, py: Python) -> PyResult<PyTuple> {
+    pub fn getsockname(&self, py: Python) -> PyResult<PyObject> {
         match self.sockaddr {
             SocketAddr::V4(ref addr) => {
-                Ok((format!("{}", addr.ip()), addr.port()).into_tuple(py))
+                Ok((format!("{}", addr.ip()), addr.port()).into_object(py))
             }
             SocketAddr::V6(ref addr) => {
                 Ok((format!("{}", addr.ip()),
-                    addr.port(), addr.flowinfo(), addr.scope_id(),).into_tuple(py))
+                    addr.port(), addr.flowinfo(), addr.scope_id(),).into_object(py))
             },
         }
     }
@@ -228,7 +228,7 @@ impl Socket {
     }
 
     #[args(args="*", kwargs="**")]
-    fn setsockopt(&self, py: Python, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<()> {
+    fn setsockopt(&self, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<()> {
         // Err(PyErr::new::<exc::RuntimeError, _>(py, "setsockopt method is not supported."))
         Ok(())
     }

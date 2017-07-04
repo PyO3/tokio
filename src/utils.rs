@@ -12,35 +12,35 @@ use addrinfo::LookupError;
 
 #[allow(non_snake_case)]
 pub struct WorkingClasses {
-    pub Future: PyType,
+    pub Future: Py<PyType>,
 
-    pub Asyncio: PyModule,
-    pub CancelledError: PyType,
-    pub InvalidStateError: PyType,
-    pub TimeoutError: PyType,
-    pub SSLProto: PyType,
-    pub Coroutines: PyModule,
-    pub UnixEvents: PyModule,
+    pub Asyncio: Py<PyModule>,
+    pub CancelledError: Py<PyType>,
+    pub InvalidStateError: Py<PyType>,
+    pub TimeoutError: Py<PyType>,
+    pub SSLProto: Py<PyType>,
+    pub Coroutines: Py<PyModule>,
+    pub UnixEvents: Py<PyModule>,
 
-    pub Helpers: PyModule,
+    pub Helpers: Py<PyModule>,
 
-    pub Exception: PyType,
-    pub BaseException: PyType,
-    pub StopIteration: PyType,
+    pub Exception: Py<PyType>,
+    pub BaseException: Py<PyType>,
+    pub StopIteration: Py<PyType>,
 
-    pub Socket: PyModule,
-    pub GaiError: PyType,
-    pub SocketTimeout: PyType,
+    pub Socket: Py<PyModule>,
+    pub GaiError: Py<PyType>,
+    pub SocketTimeout: Py<PyType>,
     pub GetNameInfo: PyObject,
 
-    pub Sys: PyModule,
-    pub Traceback: PyModule,
+    pub Sys: Py<PyModule>,
+    pub Traceback: Py<PyModule>,
     pub ExtractStack: PyObject,
 }
 
 impl WorkingClasses {
     pub fn print_stack(&self, py: Python) {
-        let _ = Classes.Traceback.call(py, "print_stack", NoArgs, None);
+        let _ = Classes.Traceback.as_ref(py).call("print_stack", NoArgs, None);
     }
 }
 
@@ -56,40 +56,40 @@ lazy_static! {
 
         WorkingClasses {
             // asyncio types
-            Future: py.get_type::<PyFuture>(),
+            Future: py.get_type::<PyFuture>().into(),
 
-            Asyncio: asyncio.clone_ref(py),
-            CancelledError: PyType::extract(
-                py, &asyncio.get(py, "CancelledError").unwrap()).unwrap(),
-            InvalidStateError: PyType::extract(
-                py, &asyncio.get(py, "InvalidStateError").unwrap()).unwrap(),
-            TimeoutError: PyType::extract(
-                py, &asyncio.get(py, "TimeoutError").unwrap()).unwrap(),
-            SSLProto: PyType::extract(
-                py, &sslproto.get(py, "SSLProtocol").unwrap()).unwrap(),
-            Coroutines: py.import("asyncio.coroutines").unwrap(),
-            UnixEvents: py.import("asyncio.unix_events").unwrap(),
+            Asyncio: asyncio.into(),
+            CancelledError: PyType::downcast_from(
+                asyncio.get("CancelledError").unwrap()).unwrap().into(),
+            InvalidStateError: PyType::downcast_from(
+                asyncio.get("InvalidStateError").unwrap()).unwrap().into(),
+            TimeoutError: PyType::downcast_from(
+                asyncio.get("TimeoutError").unwrap()).unwrap().into(),
+            SSLProto: PyType::downcast_from(
+                &sslproto.get("SSLProtocol").unwrap()).unwrap().into(),
+            Coroutines: py.import("asyncio.coroutines").unwrap().into(),
+            UnixEvents: py.import("asyncio.unix_events").unwrap().into(),
 
-            Helpers: py.import("tokio.helpers").unwrap(),
+            Helpers: py.import("tokio.helpers").unwrap().into(),
 
             // general purpose types
-            StopIteration: PyType::extract(
-                py, &builtins.get(py, "StopIteration").unwrap()).unwrap(),
-            Exception: PyType::extract(
-                py, &builtins.get(py, "Exception").unwrap()).unwrap(),
-            BaseException: PyType::extract(
-                py, &builtins.get(py, "BaseException").unwrap()).unwrap(),
+            StopIteration: PyType::downcast_from(
+                builtins.get("StopIteration").unwrap()).unwrap().into(),
+            Exception: PyType::downcast_from(
+                builtins.get("Exception").unwrap()).unwrap().into(),
+            BaseException: PyType::downcast_from(
+                builtins.get("BaseException").unwrap()).unwrap().into(),
 
-            SocketTimeout: PyType::extract(
-                py, &socket.get(py, "timeout").unwrap()).unwrap(),
-            GaiError: PyType::extract(
-                py, &socket.get(py, "gaierror").unwrap()).unwrap(),
-            GetNameInfo: socket.get(py, "getnameinfo").unwrap(),
-            Socket: socket,
+            SocketTimeout: PyType::downcast_from(
+                socket.get("timeout").unwrap()).unwrap().into(),
+            GaiError: PyType::downcast_from(
+                socket.get("gaierror").unwrap()).unwrap().into(),
+            GetNameInfo: socket.get("getnameinfo").unwrap().into(),
+            Socket: socket.into(),
 
-            Sys: py.import("sys").unwrap(),
-            Traceback: tb.clone_ref(py),
-            ExtractStack: tb.get(py, "extract_stack").unwrap(),
+            Sys: py.import("sys").unwrap().into(),
+            Traceback: tb.into(),
+            ExtractStack: tb.get("extract_stack").unwrap().into(),
         }
     };
 }
@@ -102,7 +102,7 @@ pub fn with_py<T, F>(f: F) -> T where F: FnOnce(Python) -> T {
     f(py)
 }
 
-pub fn iscoroutine(ob: &PyObject) -> bool {
+pub fn iscoroutine(ob: &PyObjectRef) -> bool {
     unsafe {
         (pyo3::ffi::PyCoro_Check(ob.as_ptr()) != 0 ||
          pyo3::ffi::PyCoroWrapper_Check(ob.as_ptr()) != 0 ||
@@ -195,11 +195,11 @@ impl ToPyErr for LookupError {
         match self {
             &LookupError::IOError(ref err) => err.to_pyerr(py),
             &LookupError::Other(ref err_str) =>
-                PyErr::new_err(py, &Classes.GaiError, (err_str.to_object(py),)),
+                PyErr::new_err(py, Classes.GaiError.as_ref(py), (err_str.to_object(py),)),
             &LookupError::NulError(_) =>
-                PyErr::new_err(py, &Classes.GaiError, ("nil pointer",)),
+                PyErr::new_err(py, Classes.GaiError.as_ref(py), ("nil pointer",)),
             &LookupError::Generic =>
-                PyErr::new_err(py, &Classes.GaiError, ("generic error",)),
+                PyErr::new_err(py, Classes.GaiError.as_ref(py), ("generic error",)),
         }
     }
 }
@@ -209,12 +209,12 @@ impl ToPyErr for LookupError {
 // Format exception
 //
 pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
-    let res = Classes.Traceback.call(py, "format_exception",
-                                     (err.ptype, err.pvalue, err.ptraceback), None);
+    let res = Classes.Traceback.as_ref(py).call(
+        "format_exception", (err.ptype, err.pvalue, err.ptraceback), None);
     if let Ok(lines) = res {
-        if let Ok(lines) = PyList::downcast_from(py, &lines) {
-            for idx in 0..lines.len(py) {
-                let _ = write!(w, "{}", lines.get_item(py, idx as isize));
+        if let Ok(lines) = PyList::downcast_from(lines) {
+            for idx in 0..lines.len() {
+                let _ = write!(w, "{}", lines.get_item(idx as isize));
             }
         }
     }
@@ -223,16 +223,16 @@ pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
 //
 // convert PyFloat or PyInt into Duration
 //
-pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option<Duration>> {
-    if let Ok(f) = PyFloat::downcast_from(py, &value) {
-        let val = f.value(py);
+pub fn parse_seconds(py: Python, name: &str, value: &PyObjectRef) -> PyResult<Option<Duration>> {
+    if let Ok(f) = PyFloat::downcast_from(value) {
+        let val = f.value();
         if val < 0.0 {
             Ok(None)
         } else {
             Ok(Some(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32)))
         }
-    } else if let Ok(i) = PyLong::downcast_from(py, &value) {
-        if let Ok(val) = i.as_ref().extract::<c_long>(py) {
+    } else if let Ok(i) = PyLong::downcast_from(value) {
+        if let Ok(val) = i.extract::<c_long>() {
             if val < 0 {
                 Ok(None)
             } else {
@@ -251,16 +251,16 @@ pub fn parse_seconds(py: Python, name: &str, value: PyObject) -> PyResult<Option
 //
 // convert PyFloat or PyInt into u64 (milliseconds)
 //
-pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
-    if let Ok(f) = PyFloat::downcast_from(py, &value) {
-        let val = f.value(py);
+pub fn parse_millis(py: Python, name: &str, value: &PyObjectRef) -> PyResult<u64> {
+    if let Ok(f) = PyFloat::downcast_from(value) {
+        let val = f.value();
         if val > 0.0 {
             Ok((val * 1000.0) as u64)
         } else {
             Ok(0)
         }
-    } else if let Ok(i) = PyLong::downcast_from(py, &value) {
-        if let Ok(val) = i.as_ref().extract::<c_long>(py) {
+    } else if let Ok(i) = PyLong::downcast_from(value) {
+        if let Ok(val) = i.extract::<c_long>() {
             if val < 0 {
                 Ok(0)
             } else {
@@ -271,6 +271,6 @@ pub fn parse_millis(py: Python, name: &str, value: PyObject) -> PyResult<u64> {
         }
     } else {
         Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type: {:?}", name, value.get_type(py))))
+            py, format!("'{}' must be int of float type: {:?}", name, value.get_type())))
     }
 }

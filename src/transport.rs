@@ -35,7 +35,7 @@ impl InitializedTransport {
 }
 
 impl IntoPyTuple for InitializedTransport {
-    fn into_tuple(self, py: Python) -> PyTuple {
+    fn into_tuple(self, py: Python) -> Py<PyTuple> {
         (self.transport.clone_ref(py), self.protocol.clone_ref(py)).into_tuple(py)
     }
 }
@@ -84,32 +84,33 @@ pub fn tcp_transport_factory<T>(
     }
 
     // create protocol
-    let proto = factory.call(py, NoArgs, None)
+    let proto = factory.as_ref(py).call(NoArgs, None)
         .log_error(py, "Protocol factory failure")?;
 
     // create py transport
     let (tx, rx) = mpsc::unbounded();
 
-    let (tr, wrp_tr) = if let Some(ref ssl) = *ssl {
+    let (tr, wrp_tr): (_, PyObject) = if let Some(ref ssl) = *ssl {
         // create SSLProtocol and wrpped transport
         let kwargs = PyDict::new(py);
         info.insert("sslcontext", ssl.clone_ref(py));
-        let _ = kwargs.set_item(py, "server_side", server);
+        let _ = kwargs.set_item("server_side", server);
         if let Some(hostname) = server_hostname {
-            let _ = kwargs.set_item(py, "server_hostname", hostname);
+            let _ = kwargs.set_item("server_hostname", hostname);
         }
-        let ssl_proto = Classes.SSLProto.call(py, (
-            evloop.clone_ref(py), proto.clone_ref(py), ssl.clone_ref(py), waiter), Some(&kwargs))?;
+        let ssl_proto = Classes.SSLProto.as_ref(py).call(
+            (evloop.clone_ref(py), proto, ssl.clone_ref(py), waiter),
+            Some(&kwargs))?;
 
         let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &ssl_proto, info)?;
-        let wrp_tr = ssl_proto.getattr(py, "_app_transport")?;
-        (tr, wrp_tr)
+        let wrp_tr = ssl_proto.getattr("_app_transport")?;
+        (tr, wrp_tr.into())
     } else {
         // normal transport
         if let Some(waiter) = waiter {
             waiter.as_mut(py).set(py, Ok(py.None()));
         }
-        let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &proto, info)?;
+        let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), proto, info)?;
         let wrp_tr = tr.0.clone_ref(py).into();
         (tr, wrp_tr)
     };
@@ -129,7 +130,7 @@ pub fn tcp_transport_factory<T>(
         })
     );
 
-    Ok(InitializedTransport::new(wrp_tr.into(), proto))
+    Ok(InitializedTransport::new(wrp_tr.into(), proto.into()))
 }
 
 
@@ -153,12 +154,12 @@ pub struct PyTcpTransportPtr(Py<PyTcpTransport>);
 #[py::methods]
 impl PyTcpTransport {
 
-    fn is_closing(&self, py: Python) -> PyResult<bool> {
+    fn is_closing(&self) -> PyResult<bool> {
         Ok(self.closing)
     }
 
-    fn get_extra_info(&self, py: Python,
-                      name: PyString, default: Option<PyObject>) -> PyResult<PyObject> {
+    fn get_extra_info(&self, py: Python, name: &str, default: Option<PyObject>)
+                      -> PyResult<PyObject> {
         if self.closing {
             return match default {
                 Some(val) => Ok(val),
@@ -166,7 +167,7 @@ impl PyTcpTransport {
             };
         }
 
-        if let Some(val) = self.info.get(name.to_string(py)?.as_ref()) {
+        if let Some(val) = self.info.get(name) {
             Ok(val.clone_ref(py))
         } else {
             match default {
@@ -179,8 +180,8 @@ impl PyTcpTransport {
     //
     // write bytes to transport
     //
-    fn write(&mut self, py: Python, data: PyObject) -> PyResult<()> {
-        let data = buffer::PyBuffer::get(py, &data)?;
+    fn write(&mut self, py: Python, data: &PyObjectRef) -> PyResult<()> {
+        let data = buffer::PyBuffer::get(py, data)?;
         let len = if let Some(slice) = data.as_slice::<u8>(py) {
             slice.len() as usize
         } else {
@@ -197,8 +198,8 @@ impl PyTcpTransport {
     //
     // write bytes to transport
     //
-    fn writelines(&mut self, py: Python, data: PyObject) -> PyResult<()> {
-        let iter = data.iter(py)?;
+    fn writelines(&mut self, py: Python, data: &PyObjectRef) -> PyResult<()> {
+        let iter = data.iter()?;
 
         for item in iter {
             let _ = self.write(py, item?)?;
@@ -210,7 +211,7 @@ impl PyTcpTransport {
     //
     // write eof, close tx part of socket
     //
-    fn write_eof(&self, _py: Python) -> PyResult<()> {
+    fn write_eof(&self) -> PyResult<()> {
         Ok(())
     }
 
@@ -231,13 +232,13 @@ impl PyTcpTransport {
         }
     }
 
-    fn pause_reading(&mut self, py: Python) -> PyResult<()> {
+    fn pause_reading(&mut self) -> PyResult<()> {
         self.paused = true;
         let _ = self.transport.send(TcpTransportMessage::Pause);
         Ok(())
     }
 
-    fn resume_reading(&mut self, py: Python) -> PyResult<()> {
+    fn resume_reading(&mut self) -> PyResult<()> {
         self.paused = false;
         let _ = self.transport.send(TcpTransportMessage::Resume);
         Ok(())
@@ -246,7 +247,7 @@ impl PyTcpTransport {
     //
     // close transport
     //
-    fn close(&mut self, py: Python) -> PyResult<()> {
+    fn close(&mut self) -> PyResult<()> {
         if !self.closing {
             self.closing = true;
             let _ = self.transport.send(TcpTransportMessage::Close);
@@ -257,7 +258,7 @@ impl PyTcpTransport {
     //
     // abort transport
     //
-    fn abort(&mut self, py: Python) -> PyResult<()> {
+    fn abort(&mut self) -> PyResult<()> {
         self.closing = true;
         let _ = self.transport.send(TcpTransportMessage::Shutdown);
         Ok(())
@@ -268,18 +269,18 @@ impl PyTcpTransportPtr {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
                sender: Sender<TcpTransportMessage>,
-               protocol: &PyObject, info: HashMap<&'static str, PyObject>)
+               protocol: &PyObjectRef, info: HashMap<&'static str, PyObject>)
                -> PyResult<PyTcpTransportPtr>
     {
         // get protocol callbacks
-        let connection_made = protocol.getattr(py, "connection_made")?;
-        let connection_lost = protocol.getattr(py, "connection_lost")?;
-        let data_received = protocol.getattr(py, "data_received")?;
+        let connection_made = protocol.getattr("connection_made")?;
+        let connection_lost = protocol.getattr("connection_lost")?;
+        let data_received = protocol.getattr("data_received")?;
 
         let transport = py.init(|token| PyTcpTransport {
             evloop: evloop.into(),
-            connection_lost: connection_lost,
-            data_received: data_received,
+            connection_lost: connection_lost.into(),
+            data_received: data_received.into(),
             transport: sender,
             drain: None,
             drained: true,
@@ -289,7 +290,7 @@ impl PyTcpTransportPtr {
             token: token})?;
 
         // connection made
-        let _ = connection_made.call(py, (transport.clone_ref(py),), None)
+        let _ = connection_made.call((transport.clone_ref(py),), None)
             .map_err(|err| {
                 transport.as_mut(py).closing = true;
                 let _ = transport.as_mut(py).transport.send(TcpTransportMessage::Close);
@@ -317,7 +318,7 @@ impl PyTcpTransportPtr {
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
-                    let e = Classes.SocketTimeout.call(py, NoArgs, None).unwrap();
+                    let e = Classes.SocketTimeout.as_ref(py).call(NoArgs, None).unwrap();
 
                     tr.connection_lost.call(py, (e,), None)
                         .into_log(py, "connection_lost error");
@@ -564,5 +565,4 @@ impl Encoder for TcpTransportCodec {
 
         Ok(())
     }
-
 }

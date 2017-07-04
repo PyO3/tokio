@@ -260,7 +260,7 @@ def test_create_server_6(loop, port):
 
 def test_create_connection_1(loop):
     CNT = 0
-    TOTAL_CNT = 100
+    TOTAL_CNT = 1
 
     def server():
         data = yield tb.read(4)

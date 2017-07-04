@@ -15,7 +15,7 @@ except ImportError:
         print("Please install setuptools-rust package")
         raise SystemExit(errno)
     else:
-        from setuptools_rust import RustExtension
+        from setuptools_rust import Binding, RustExtension
 
 
 class PyTest(TestCommand):

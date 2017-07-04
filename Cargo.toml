@@ -36,6 +36,10 @@ tokio-uds = "0.1"
 # tokio-tls = "0.1"
 # backtrace = "0.2"
 
+# [replace]
+# "mio:0.6.9" = { path = '../mio' }
+# "tokio-core:0.1.8" = { path = '../tokio-core' }
+
 [dependencies.pyo3]
 #path = "../pyo3"
 git = "https://github.com/PyO3/PyO3.git"
