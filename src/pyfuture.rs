@@ -441,7 +441,6 @@ impl _PyFuture {
                             None => break
                         };
                     }
-                    py.release_res(result);
                 });
             }
             future::ok(())
@@ -508,7 +507,6 @@ impl Drop for _PyFuture {
         py.release(self.result.take());
         py.release(self.exception.take());
         py.release(self.source_tb.take());
-        unsafe {self.evloop.drop_ref()};
     }
 }
 

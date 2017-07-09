@@ -813,7 +813,7 @@ impl TokioEventLoop {
                     if let Ok(result) = PyTuple::downcast_from(result.as_ref(py)) {
                         let _ = result.get_item(0).call_method("setblocking", (false,), None);
                     }
-                    
+
                     fut.set(py, Ok(result.into()));
                     future::ok(Some(()))
                 }

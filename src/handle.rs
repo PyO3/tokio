@@ -145,16 +145,3 @@ impl PyHandlePtr {
         evloop.href().spawn(fut);
     }
 }
-
-impl Drop for PyHandle {
-    fn drop(&mut self) {
-        unsafe {
-            self.evloop.drop_ref();
-            self.callback.drop_ref();
-            self.args.drop_ref();
-            if let Some(mut tb) = self.source_traceback.take() {
-                tb.drop_ref();
-            }
-        };
-    }
-}
