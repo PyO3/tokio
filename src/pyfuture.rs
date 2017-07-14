@@ -603,7 +603,7 @@ impl PyFuture {
     //
     #[getter(_result)]
     fn get_result(&self) -> PyResult<PyObject> {
-        self.fut.get_result(self.token())
+        self.fut.get_result(self.py())
     }
 
     //
@@ -615,7 +615,7 @@ impl PyFuture {
     // InvalidStateError.
     //
     fn exception(&self) -> PyResult<PyObject> {
-        self.fut.exception(self.token())
+        self.fut.exception(self.py())
     }
 
     //
@@ -623,7 +623,7 @@ impl PyFuture {
     //
     #[getter(_exception)]
     fn get_exception(&self) -> PyResult<PyObject> {
-        self.fut.get_exception(self.token())
+        self.fut.get_exception(self.py())
     }
 
     //
@@ -731,21 +731,21 @@ impl PyFuture {
     // compatibility
     #[getter(_loop)]
     fn get_loop(&self) -> PyResult<Py<TokioEventLoop>> {
-        Ok(self.fut.evloop.clone_ref(self.token()))
+        Ok(self.fut.evloop.clone_ref(self.py()))
     }
 
     #[getter(_callbacks)]
     fn get_callbacks(&self) -> PyResult<PyObject> {
         if let Some(ref cb) = self.fut.callbacks {
-            Ok(PyTuple::new(self.token(), cb.as_slice()).into_object(self.token()))
+            Ok(PyTuple::new(self.py(), cb.as_slice()).into_object(self.py()))
         } else {
-            Ok(self.token().None())
+            Ok(self.py().None())
         }
     }
 
     #[getter(_source_traceback)]
     fn get_source_traceback(&self) -> PyResult<PyObject> {
-        self.fut.extract_traceback(self.token())
+        self.fut.extract_traceback(self.py())
     }
 }
 
@@ -777,8 +777,8 @@ impl PyGCProtocol for PyFuture {
 impl PyAsyncProtocol for PyFuture {
 
     fn __await__(&self) -> PyResult<Py<PyFutureIter>> {
-        let evloop = self.into();
-        self.token().init(|t| PyFutureIter {fut: evloop, token: t})
+        let fut = self.into();
+        self.py().init(|t| PyFutureIter {fut: fut, token: t})
     }
 }
 
@@ -786,8 +786,8 @@ impl PyAsyncProtocol for PyFuture {
 impl PyIterProtocol for PyFuture {
 
     fn __iter__(&mut self) -> PyResult<Py<PyFutureIter>> {
-        let evloop = self.into();
-        self.token().init(|t| PyFutureIter {fut: evloop, token: t})
+        let fut = self.into();
+        self.py().init(|t| PyFutureIter {fut: fut, token: t})
     }
 }
 
@@ -947,7 +947,7 @@ impl PyFutureIter {
              _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
         {
-            let py = self.token();
+            let py = self.py();
             if Classes.Exception.as_ref(py).is_instance(tp)? {
                 PyErr::from_instance(py, tp).restore(py);
             } else {
@@ -971,7 +971,7 @@ impl PyIterProtocol for PyFutureIter {
     }
 
     fn __next__(&mut self) -> PyResult<Option<PyObject>> {
-        let py = self.token();
+        let py = self.py();
         let fut = self.fut.as_mut(py);
         if !fut.fut.done() {
             fut.blocking = true;

@@ -155,7 +155,7 @@ impl TokioServer {
 
     #[getter]
     fn sockets(&self) -> PyResult<PyObject> {
-        Ok(self.sockets.to_object(self.token()))
+        Ok(self.sockets.to_object(self.py()))
     }
 
     fn close(&mut self, py: Python) -> PyResult<PyObject> {

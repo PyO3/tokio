@@ -34,7 +34,7 @@ impl PyBytes {
                 let start = if let Some(start) = start {start} else {0};
                 let end = if let Some(end) = end {end} else {-1};
 
-                let slice = PySlice::new(self.token(), start, end, 1);
+                let slice = PySlice::new(self.py(), start, end, 1);
                 let indices = slice.indices(self.bytes.len() as i64)?;
                 pre = indices.start as usize;
                 let end = (indices.stop+1) as usize;
@@ -51,7 +51,7 @@ impl PyBytes {
 
     #[args(maxsplit="-1")]
     fn split(&self, sep: Option<&PyObjectRef>, maxsplit: i32) -> PyResult<&pyo3::PyList> {
-        let py = self.token();
+        let py = self.py();
         let sep_len;
         let remove_empty;
         let sep = if let Some(sep) = sep {
@@ -209,7 +209,7 @@ impl PyBytes {
 impl<'p> pyo3::class::PyObjectProtocol<'p> for PyBytes {
 
     fn __richcmp__(&self, other: &PyObjectRef, op: pyo3::CompareOp) -> PyResult<PyObject> {
-        let py = self.token();
+        let py = self.py();
         match op {
             pyo3::CompareOp::Eq => {
                 if let Ok(other) = PyBytes::downcast_from(other) {
@@ -234,7 +234,7 @@ impl<'p> pyo3::class::PyObjectProtocol<'p> for PyBytes {
 impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
 
     fn __add__(&self, rhs: &PyObjectRef) -> PyResult<PyObject> {
-        let py = self.token();
+        let py = self.py();
         let l = PyBuffer::get(py, self.as_ref())?;
         let r = PyBuffer::get(py, rhs)?;
 
@@ -292,23 +292,23 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
                 }
                 buf.freeze()
             };
-            PyBytes::new(self.token(), s).map(|ob| ob.into())
+            PyBytes::new(self.py(), s).map(|ob| ob.into())
         }
         // access by index
         else if let Ok(idx) = key.extract::<isize>() {
             if idx < 0 {
-                Err(PyErr::new::<exc::IndexError, _>(self.token(), "Index out of range"))
+                Err(PyErr::new::<exc::IndexError, _>(self.py(), "Index out of range"))
             } else {
                 let idx = idx as usize;
 
                 if idx < self.bytes.len() {
-                    Ok(self.bytes[idx].to_object(self.token()))
+                    Ok(self.bytes[idx].to_object(self.py()))
                 } else {
-                    Err(PyErr::new::<exc::IndexError, _>(self.token(), "Index out of range"))
+                    Err(PyErr::new::<exc::IndexError, _>(self.py(), "Index out of range"))
                 }
             }
         } else {
-            Err(PyErr::new::<exc::TypeError, _>(self.token(), "Index is not supported"))
+            Err(PyErr::new::<exc::TypeError, _>(self.py(), "Index is not supported"))
         }
     }
 }
@@ -318,7 +318,7 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
 impl class::PyBufferProtocol for PyBytes {
 
     fn bf_getbuffer(&self, view: *mut ffi::Py_buffer, flags: c_int) -> PyResult<()> {
-        let py = self.token();
+        let py = self.py();
 
         if view == ptr::null_mut() {
             return Err(PyErr::new::<exc::BufferError, _>(py, "View is null"))

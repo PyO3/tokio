@@ -2026,7 +2026,7 @@ impl TokioEventLoop {
     }
     #[setter]
     fn set_slow_callback_duration(&mut self, value: &PyObjectRef) -> PyResult<()> {
-        let millis = utils::parse_millis(self.token(), "slow_callback_duration", value)?;
+        let millis = utils::parse_millis(self.py(), "slow_callback_duration", value)?;
         self.slow_callback_duration = millis;
         Ok(())
     }

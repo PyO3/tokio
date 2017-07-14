@@ -76,7 +76,7 @@ impl PyTask {
     //
     #[getter(_result)]
     fn get_result(&self) -> PyResult<PyObject> {
-        self.fut.get_result(self.token())
+        self.fut.get_result(self.py())
     }
 
     //
@@ -96,7 +96,7 @@ impl PyTask {
     //
     #[getter(_exception)]
     fn get_exception(&self) -> PyResult<PyObject> {
-        self.fut.get_exception(self.token())
+        self.fut.get_exception(self.py())
     }
 
     //
@@ -145,14 +145,14 @@ impl PyTask {
     // compatibility
     #[getter(_loop)]
     fn get_loop(&self) -> PyResult<Py<TokioEventLoop>> {
-        Ok(self.fut.evloop.clone_ref(self.token()))
+        Ok(self.fut.evloop.clone_ref(self.py()))
     }
 
     #[getter(_fut_waiter)]
     fn get_fut_waiter(&self) -> PyResult<PyObject> {
         match self.waiter {
-            Some(ref fut) => Ok(fut.clone_ref(self.token())),
-            None => Ok(self.token().None())
+            Some(ref fut) => Ok(fut.clone_ref(self.py())),
+            None => Ok(self.py().None())
         }
     }
 
@@ -164,15 +164,15 @@ impl PyTask {
     #[getter(_callbacks)]
     fn get_callbacks(&self) -> PyResult<PyObject> {
         if let Some(ref cb) = self.fut.callbacks {
-            Ok(PyTuple::new(self.token(), cb.as_slice()).into())
+            Ok(PyTuple::new(self.py(), cb.as_slice()).into())
         } else {
-            Ok(self.token().None())
+            Ok(self.py().None())
         }
     }
 
     #[getter(_source_traceback)]
     fn get_source_traceback(&self) -> PyResult<PyObject> {
-        self.fut.extract_traceback(self.token())
+        self.fut.extract_traceback(self.py())
     }
 
     #[getter(_log_destroy_pending)]
@@ -282,7 +282,7 @@ impl PyGCProtocol for PyTask {
 impl PyObjectProtocol for PyTask {
     fn __repr__(&self) -> PyResult<PyObject> {
         let ob: PyObject = self.into();
-        Ok(Classes.Helpers.as_ref(self.token()).call("future_repr", ("Task", ob,), None)?.into())
+        Ok(Classes.Helpers.as_ref(self.py()).call("future_repr", ("Task", ob,), None)?.into())
     }
 }
 
@@ -290,7 +290,7 @@ impl PyObjectProtocol for PyTask {
 impl PyAsyncProtocol for PyTask {
 
     fn __await__(&self) -> PyResult<Py<PyTaskIter>> {
-        self.token().init(|t| PyTaskIter{fut: self.into(), token: t})
+        self.py().init(|t| PyTaskIter{fut: self.into(), token: t})
     }
 }
 
@@ -298,8 +298,8 @@ impl PyAsyncProtocol for PyTask {
 impl PyIterProtocol for PyTask {
 
     fn __iter__(&mut self) -> PyResult<Py<PyTaskIter>> {
-        let evloop = self.into();
-        self.token().init(|t| PyTaskIter{fut: evloop, token: t})
+        let fut = self.into();
+        self.py().init(|t| PyTaskIter{fut: fut, token: t})
     }
 }
 
@@ -373,14 +373,14 @@ impl PyIterProtocol for PyTaskIter {
     }
 
     fn __next__(&mut self) -> PyResult<Option<PyObject>> {
-        let fut = self.fut.as_mut(self.token());
+        let fut = self.fut.as_mut(self.py());
 
         if !fut.fut.done() {
             fut.blocking = true;
-            Ok(Some(self.fut.clone_ref(self.token()).into()))
+            Ok(Some(self.fut.clone_ref(self.py()).into()))
         } else {
-            let res = fut.result(self.token())?;
-            Err(PyErr::new::<exc::StopIteration, _>(self.token(), (res,)))
+            let res = fut.result(self.py())?;
+            Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
         }
     }
 }
