@@ -340,6 +340,7 @@ impl PyTcpTransportPtr {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
                     //let bytes = PyBytes::new(py, bytes.as_ref());
                     tr.data_received.call(py, (bytes,), None)
+                        .log_error(py, "data_received error")
                 });
             !tr.paused
         })

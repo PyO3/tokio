@@ -34,7 +34,7 @@ tokio-uds = "0.1"
 
 # native-tls = "0.1"
 # tokio-tls = "0.1"
-# backtrace = "0.2"
+# backtrace = "0.3"
 
 # [replace]
 # "mio:0.6.9" = { path = '../mio' }

@@ -233,9 +233,9 @@ impl<'p> pyo3::class::PyObjectProtocol<'p> for PyBytes {
 #[py::proto]
 impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
 
-    fn __add__(&self, rhs: &PyObjectRef) -> PyResult<PyObject> {
-        let py = self.py();
-        let l = PyBuffer::get(py, self.as_ref())?;
+    fn __add__(lhs: &PyObjectRef, rhs: &PyObjectRef) -> PyResult<PyObject> {
+        let py = lhs.py();
+        let l = PyBuffer::get(py, lhs)?;
         let r = PyBuffer::get(py, rhs)?;
 
         match (l.as_slice::<u8>(py), r.as_slice::<u8>(py)) {
@@ -244,7 +244,7 @@ impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
                     return Ok(rhs.into())
                 }
                 if rbuf.len() == 0 {
-                    return Ok(self.to_object(py))
+                    return Ok(lhs.to_object(py))
                 }
                 let len = lbuf.len() + rbuf.len();
                 let mut buf = BytesMut::with_capacity(len);
@@ -261,7 +261,7 @@ impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
                 Ok(PyBytes::new(py, buf.freeze())?.into())
             },
             _ => Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("Can not sum {:?} and {:?}", self.as_ref(), rhs)))
+                py, format!("Can not sum {:?} and {:?}", lhs, rhs)))
         }
     }
 }
