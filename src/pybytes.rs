@@ -5,7 +5,7 @@ use std::os::raw::{c_void, c_int};
 use twoway;
 use pyo3::{ffi, py};
 use pyo3::buffer::PyBuffer;
-use pyo3::{self, class, exc, Python, PyToken, Py,
+use pyo3::{self, class, exc, Python, PyToken, Py, AsPyRef,
            ObjectProtocol, ToPyPointer, PyResult, PyObject, PyObjectRef,
            PySlice, PyErr, PyDowncastFrom, ToPyObject, PyObjectWithToken};
 use bytes::{Bytes, BytesMut, BufMut};
@@ -313,7 +313,6 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
     }
 }
 
-
 #[py::proto]
 impl class::PyBufferProtocol for PyBytes {
 
@@ -360,5 +359,40 @@ impl class::PyBufferProtocol for PyBytes {
         }
 
         Ok(())
+    }
+}
+
+#[py::proto]
+impl pyo3::PyIterProtocol for PyBytes {
+
+    fn __iter__(&mut self) -> PyResult<Py<PyBytesIter>> {
+        let b = self.into();
+        self.py().init(|t| PyBytesIter {pos: 0, bytes: b, token: t})
+    }
+}
+
+#[py::class]
+pub struct PyBytesIter {
+    pos: usize,
+    bytes: Py<PyBytes>,
+    token: PyToken,
+}
+
+#[py::proto]
+impl pyo3::PyIterProtocol for PyBytesIter {
+
+    fn __iter__(&mut self) -> PyResult<Py<PyBytesIter>> {
+        Ok(self.into())
+    }
+
+    fn __next__(&mut self) -> PyResult<Option<u8>> {
+        let b = self.bytes.as_mut(self.py());
+        if self.pos < b.bytes.len() {
+            let result = Some(b.bytes[self.pos]);
+            self.pos += 1;
+            Ok(result)
+        } else {
+            Ok(None)
+        }
     }
 }
