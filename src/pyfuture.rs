@@ -436,11 +436,10 @@ impl _PyFuture {
                                     Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
                                     Err(ref err) => cb.call(Err(err.clone_ref(py))),
                                 }
-
                             }
                             None => break
                         };
-                    }
+                                            }
                 });
             }
             future::ok(())
@@ -546,8 +545,8 @@ impl PyFuture {
 
     fn __repr__(&self, py: Python) -> PyResult<PyObject> {
         let f: Py<PyFuture> = self.into();
-        let repr = Classes.Helpers.as_ref(py).call(
-            "future_repr", ("Future", f,), None)?;
+        let repr = Classes.Helpers.as_ref(py)
+            .call("future_repr", ("Future", f), None)?;
         Ok(repr.into())
     }
 
@@ -566,33 +565,33 @@ impl PyFuture {
             py.release(fut);
         }
 
-        let ob = self.to_object(py);
+        let ob = self.into();
         Ok(self.fut.cancel(py, ob))
     }
 
-    //
-    // Return True if the future was cancelled
-    //
+    ///
+    /// Return True if the future was cancelled
+    ///
     pub fn cancelled(&self) -> PyResult<bool> {
         Ok(self.fut.cancelled())
     }
 
-    // Return True if the future is done.
-    //
-    // Done means either that a result / exception are available, or that the
-    // future was cancelled.
-    //
+    /// Return True if the future is done.
+    ///
+    /// Done means either that a result / exception are available, or that the
+    /// future was cancelled.
+    ///
     fn done(&self) -> PyResult<bool> {
         Ok(self.fut.done())
     }
 
-    //
-    // Return the result this future represents.
-    //
-    // If the future has been cancelled, raises CancelledError.  If the
-    // future's result isn't yet available, raises InvalidStateError.  If
-    // the future is done and has an exception set, this exception is raised.
-    //
+    ///
+    /// Return the result this future represents.
+    ///
+    /// If the future has been cancelled, raises CancelledError.  If the
+    /// future's result isn't yet available, raises InvalidStateError.  If
+    /// the future is done and has an exception set, this exception is raised.
+    ///
     fn result(&self, py: Python) -> PyResult<PyObject> {
         self.fut.result(py, true)
     }
@@ -605,14 +604,14 @@ impl PyFuture {
         self.fut.get_result(self.py())
     }
 
-    //
-    // Return the exception that was set on this future.
-    //
-    // The exception (or None if no exception was set) is returned only if
-    // the future is done.  If the future has been cancelled, raises
-    // CancelledError.  If the future isn't done yet, raises
-    // InvalidStateError.
-    //
+    ///
+    /// Return the exception that was set on this future.
+    ///
+    /// The exception (or None if no exception was set) is returned only if
+    /// the future is done.  If the future has been cancelled, raises
+    /// CancelledError.  If the future isn't done yet, raises
+    /// InvalidStateError.
+    ///
     fn exception(&self) -> PyResult<PyObject> {
         self.fut.exception(self.py())
     }
@@ -625,23 +624,23 @@ impl PyFuture {
         self.fut.get_exception(self.py())
     }
 
-    //
-    // Add a callback to be run when the future becomes done.
-    //
-    // The callback is called with a single argument - the future object. If
-    // the future is already done when this is called, the callback is
-    // scheduled with call_soon.
-    //
+    ///
+    /// Add a callback to be run when the future becomes done.
+    ///
+    /// The callback is called with a single argument - the future object. If
+    /// the future is already done when this is called, the callback is
+    /// scheduled with call_soon.
+    ///
     fn add_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<PyObject> {
-        let ob = self.to_object(py);
+        let ob = self.into();
         self.fut.add_done_callback(py, f, ob)
     }
 
-    //
-    // Remove all instances of a callback from the "call when done" list.
-    //
-    // Returns the number of callbacks removed.
-    //
+    ///
+    /// Remove all instances of a callback from the "call when done" list.
+    ///
+    /// Returns the number of callbacks removed.
+    ///
     fn remove_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<u32> {
         self.fut.remove_done_callback(py, f)
     }
@@ -663,21 +662,22 @@ impl PyFuture {
         self.fut.set_result(py, result, ob, false)
     }
 
-    //
-    // Mark the future done and set an exception.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
-    fn set_exception(&mut self, py: Python, exception: PyObject) -> PyResult<()> {
+    ///
+    /// Mark the future done and set an exception.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
+    fn set_exception(&mut self, py: Python, exception: &PyObjectRef) -> PyResult<()> {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
-            let _ = fut.call_method(py, "set_exception", (exception.clone_ref(py),), None);
+            let exc: PyObject = exception.into();
+            let _ = fut.call_method(py, "set_exception", (exc,), None);
             py.release(fut);
         }
-        let ob = self.to_object(py);
-        self.fut.set_exception(py, exception.as_ref(py), ob, false)
+        let ob = self.into();
+        self.fut.set_exception(py, exception, ob, false)
     }
 
     //
@@ -694,6 +694,7 @@ impl PyFuture {
     }
 
     /// handler for asyncio.Future completion
+    /// this method is used by PyFuture, if it is wraps asyncio.Future
     fn _fut_done(&mut self, py: Python, fut: PyObject) -> PyResult<()> {
         // drop reference to wrapped asyncio.Future
         // if it is None, then self initiated _pyfut completion
@@ -704,7 +705,7 @@ impl PyFuture {
         // check fut is cancelled
         if let Ok(cancelled) = fut.call_method(py, "cancelled", NoArgs, None) {
             if cancelled.is_true(py)? {
-                let ob = self.to_object(py);
+                let ob = self.into();
                 let _ = self.fut.cancel(py, ob);
                 return Ok(())
             }
@@ -713,14 +714,14 @@ impl PyFuture {
         // if fut completed with exception
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
             if !exc.is_none() {
-                let ob = self.to_object(py);
+                let ob = self.into();
                 return self.fut.set_exception(py, exc.as_ref(py), ob, true)
             }
         }
 
         // if fut completed with normal result
         if let Ok(result) = fut.call_method(py, "result", NoArgs, None) {
-            let ob = self.to_object(py);
+            let ob = self.into();
             return self.fut.set_result(py, result, ob, true);
         }
 
@@ -736,7 +737,7 @@ impl PyFuture {
     #[getter(_callbacks)]
     fn get_callbacks(&self) -> PyResult<PyObject> {
         if let Some(ref cb) = self.fut.callbacks {
-            Ok(PyTuple::new(self.py(), cb.as_slice()).into_object(self.py()))
+            Ok(PyTuple::new(self.py(), cb.as_slice()).into())
         } else {
             Ok(self.py().None())
         }
@@ -748,7 +749,7 @@ impl PyFuture {
     }
 
     // generator support
-    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+    fn send(&mut self) -> PyResult<Option<PyObject>> {
         self.__next__()
     }
 
@@ -818,9 +819,8 @@ impl PyIterProtocol for PyFuture {
             self.blocking = true;
             Ok(Some(self.into()))
         } else {
-            let py = self.py();
-            let res = self.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
+            let res = self.result(self.py())?;
+            Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
         }
     }
 }
@@ -907,10 +907,12 @@ impl PyFuture {
     //
     // bloking
     //
+    #[inline]
     pub fn is_blocking(&self) -> bool {
         self.blocking
     }
 
+    #[inline]
     pub fn set_blocking(&mut self, value: bool) {
         self.blocking = value
     }
