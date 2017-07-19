@@ -159,7 +159,7 @@ impl TokioEventLoop {
             }
         }
 
-        if let Ok(fut) = PyFuture::downcast_from(coro) {
+        if let Some(fut) = PyFuture::try_downcast_from(coro) {
             return Ok(fut.into())
         }
         Ok(PyTask::new(py, coro.into(), &self)?.into())
@@ -213,10 +213,8 @@ impl TokioEventLoop {
             // get params
             let callback = args.get_item(0).into();
 
-            let h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[1..]).as_ref(py))?;
+            let h = PyHandle::new(py, &self, callback, args.split_from(1))?;
             h.call_soon(py, &self);
-            py.release(args);
             Ok(h.into())
         }
     }
@@ -237,9 +235,7 @@ impl TokioEventLoop {
             let callback = args.get_item(0).into();
 
             // create handle and schedule work
-            let h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[1..]).as_ref(py))?;
-
+            let h = PyHandle::new(py, &self, callback, args.split_from(1))?;
             h.call_soon_threadsafe(py, &self);
 
             Ok(h.into())
@@ -282,9 +278,7 @@ impl TokioEventLoop {
             let delay = utils::parse_millis(py, "delay", args.get_item(0))?;
 
             // create handle and schedule work
-            let mut h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[2..]).as_ref(py))?;
-
+            let mut h = PyHandle::new(py, &self, callback, args.split_from(2))?;
             if delay == 0 {
                 h.call_soon(py, &self);
             } else {
@@ -317,14 +311,11 @@ impl TokioEventLoop {
             let callback = args.get_item(1).into();
 
             // create handle and schedule work
-            let mut h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[2..]).as_ref(py))?;
+            let mut h = PyHandle::new(py, &self, callback, args.split_from(2))?;
 
             // calculate delay
             if let Some(when) = utils::parse_seconds(py, "when", args.get_item(0).into())? {
-                let time = when - self.instant.elapsed();
-
-                h.call_later(py, self, time);
+                h.call_later(py, self, when - self.instant.elapsed());
             } else {
                 h.call_soon(py, self);
             }
@@ -376,8 +367,7 @@ impl TokioEventLoop {
             };
 
             // create handle and schedule work
-            let h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[2..]).as_ref(py))?;
+            let h = PyHandle::new(py, &self, callback, args.split_from(2))?;
 
             // register signal handler
             let _ = self.signals.send(signals::SignalsMessage::Add(sig, signal, h));
@@ -410,8 +400,7 @@ impl TokioEventLoop {
             let callback = args.get_item(1).into();
 
             // create handle
-            let h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[2..]).as_ref(py))?;
+            let h = PyHandle::new(py, &self, callback, args.split_from(2))?;
             match fd::PyFdHandle::reader(fd, self.href(), h) {
                 Ok(tx) => {
                     self.readers.insert(fd, OneshotSender::new(tx));
@@ -444,8 +433,7 @@ impl TokioEventLoop {
             let callback = args.get_item(1).into();
 
             // create handle
-            let h = PyHandle::new(
-                py, &self, callback, PyTuple::new(py, &args.as_slice()[2..]).as_ref(py))?;
+            let h = PyHandle::new(py, &self, callback, args.split_from(2))?;
             match fd::PyFdHandle::writer(fd, self.href(), h) {
                 Ok(tx) => {
                     self.writers.insert(fd, OneshotSender::new(tx));
@@ -579,7 +567,7 @@ impl TokioEventLoop {
         let _ = self.is_socket_nonblocking(py, sock)?;
 
         // data is empty, nothing to do
-        if ! data.is_true(py).unwrap() {
+        if ! data.is_true(py)? {
             return Ok(PyFuture::done_res(py, self.into(), Ok(py.None()))?)
         }
 
@@ -810,7 +798,7 @@ impl TokioEventLoop {
                     }
                 }
                 Ok(result) => {
-                    if let Ok(result) = PyTuple::downcast_from(result.as_ref(py)) {
+                    if let Some(result) = PyTuple::try_downcast_from(result.as_ref(py)) {
                         let _ = result.get_item(0).call_method("setblocking", (false,), None);
                     }
 
@@ -913,7 +901,7 @@ impl TokioEventLoop {
 
         let evloop: PyObject = self.into();
         let executor = args.get_item(0);
-        let args = PyTuple::new(py, &args.as_slice()[1..]);
+        let args = args.split_from(1);
 
         // get or create default executor
         let fut = if executor.is_none() {
@@ -963,7 +951,7 @@ impl TokioEventLoop {
         let host_arg = args.get_item(0);
         let host = if host_arg.is_none() {
             None
-        } else if let Ok(host) = PyString::downcast_from(host_arg) {
+        } else if let Some(host) = PyString::try_downcast_from(host_arg) {
             Some(String::from(host.to_string_lossy()))
         } else {
             if let Ok(host) = PyString::from_object(host_arg, "utf-8\0", "strict\0") {
@@ -978,7 +966,7 @@ impl TokioEventLoop {
         let port_arg = args.get_item(1);
         let port = if port_arg.is_none() {
             None
-        } else if let Ok(port) = PyString::downcast_from(port_arg) {
+        } else if let Some(port) = PyString::try_downcast_from(port_arg) {
             Some(String::from(port.to_string_lossy()))
         } else if let Ok(port) = port_arg.extract::<u16>() {
             Some(port.to_string())
@@ -1389,8 +1377,7 @@ impl TokioEventLoop {
             return Err(PyErr::new::<exc::ValueError, _>(py, "bufsize must be 0"))
         }
 
-        let popen_args = PyTuple::new(py, &args.as_slice()[1..]);
-
+        let popen_args = args.split_from(1);
         let protocol: PyObject = protocol_factory.call(NoArgs, None)?.into();
 
         let ev = Classes.UnixEvents.as_ref(py).get("_UnixSelectorEventLoop")?;
@@ -1968,7 +1955,7 @@ impl TokioEventLoop {
         let ptr = self.into();
 
         // PyTask
-        if let Ok(fut) = PyTask::downcast_from(fut) {
+        if let Some(fut) = PyTask::try_exact_downcast_from(fut) {
             if !fut.is_same_loop(&self) {
                 return Err(PyErr::new::<exc::ValueError, _>(
                     py, "loop argument must agree with Future"))
@@ -1977,7 +1964,7 @@ impl TokioEventLoop {
             py.allow_threads(|| TokioEventLoop::run_future(ptr, Box::new(fut)))
 
         // PyFuture
-        } else if let Ok(fut) = PyFuture::downcast_from(fut) {
+        } else if let Some(fut) = PyFuture::try_exact_downcast_from(fut) {
             if !fut.is_same_loop(&self) {
                 return Err(PyErr::new::<exc::ValueError, _>(
                     py, "loop argument must agree with Future"))

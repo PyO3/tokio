@@ -46,7 +46,7 @@ impl PyHandle {
 impl PyHandle {
 
     pub fn new(py: Python, evloop: &TokioEventLoop,
-               callback: PyObject, args: &PyTuple) -> PyResult<PyHandlePtr> {
+               callback: PyObject, args: Py<PyTuple>) -> PyResult<PyHandlePtr> {
 
         let tb = if evloop.is_debug() {
             let frame = Classes.Sys.as_ref(py).call("_getframe", (0,), None)?;
@@ -60,7 +60,7 @@ impl PyHandle {
             cancelled: false,
             cancel_handle: None,
             callback: callback,
-            args: args.into(),
+            args: args,
             source_traceback: tb,
             token: t})?))
     }

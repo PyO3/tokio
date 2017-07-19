@@ -408,9 +408,8 @@ fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
 //
 fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject>, retry: usize) {
     // cancel if needed
-    let mut exc = exc;
-    if task.must_cancel {
-        exc = if let Some(exc) = exc {
+    let exc = if task.must_cancel {
+        if let Some(exc) = exc {
             if Classes.CancelledError.as_ref(py).is_instance(exc.as_ref(py)).unwrap() {
                 Some(exc)
             } else {
@@ -418,8 +417,10 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             }
         } else {
             Some(Classes.CancelledError.as_ref(py).call(NoArgs, None).unwrap().into())
-        };
-    }
+        }
+    } else {
+        exc
+    };
     task.waiter = None;
 
     //let mut evloop = fut.evloop.as_mut(py);
@@ -457,25 +458,25 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
         },
         Ok(res) => {
             let mut result = res.as_mut(py);
-            if let Ok(res) = PyFuture::downcast_mut_from(&mut result) {
-                if !res.is_blocking() {
+            if let Some(fut) = PyFuture::try_mut_exact_downcast_from(&mut result) {
+                if !fut.is_blocking() {
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
-                                     in task {:?} with {:?}", task, res));
+                                     in task {:?} with {:?}", task, fut));
                     task_step(py, task, coro, Some(err.instance(py)), 0);
                     return
                 }
-                res.set_blocking(false);
+                fut.set_blocking(false);
 
                 // cancel if needed
                 if task.must_cancel {
-                    let _ = res.cancel(py);
+                    let _ = fut.cancel(py);
                     task.must_cancel = false;
                 }
 
                 // fast path
-                if res.state() != State::Pending && retry < INPLACE_RETRY {
-                    let exc = match res.get(py) {
+                if fut.state() != State::Pending && retry < INPLACE_RETRY {
+                    let exc = match fut.get(py) {
                         Ok(_) => None,
                         Err(ref mut err) => Some(err.instance(py)),
                     };
@@ -485,17 +486,17 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 }
 
                 // store ref to future
-                task.waiter = Some(res.into());
+                task.waiter = Some(fut.into());
 
                 // schedule wakeup on done
                 let waiter_task = task.into();
-                let _ = res.add_callback(py, SendBoxFnOnce::from(move |result| {
+                let _ = fut.add_callback(py, SendBoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
                 return
             }
 
-            if let Ok(res) = PyTask::downcast_mut_from(&mut result) {
+            if let Some(res) = PyTask::try_mut_exact_downcast_from(&mut result) {
                 if !res.is_blocking() {
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
                         py, format!("yield was used instead of yield from \
