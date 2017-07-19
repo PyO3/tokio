@@ -890,7 +890,7 @@ impl PyFuture {
         }
 
         let ob = self.into();
-        self.fut.set(py, result, ob)
+        self.fut.set(py, result, ob);
     }
 
     pub fn state(&self) -> State {
