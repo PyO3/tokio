@@ -259,7 +259,7 @@ impl PyGCProtocol for PyTask {
     //
     // Python GC support
     //
-    fn __traverse__(&self, _py: Python, visit: PyVisit) -> Result<(), PyTraverseError> {
+    fn __traverse__(&self, visit: PyVisit) -> Result<(), PyTraverseError> {
         if let Some(ref callbacks) = self.fut.callbacks {
             for callback in callbacks.iter() {
                 let _ = visit.call(callback);
@@ -268,11 +268,10 @@ impl PyGCProtocol for PyTask {
         Ok(())
     }
 
-    fn __clear__(&mut self, py: Python) {
-        let callbacks = mem::replace(&mut self.fut.callbacks, None);
-        if let Some(callbacks) = callbacks {
+    fn __clear__(&mut self) {
+        if let Some(callbacks) = self.fut.callbacks.take() {
             for cb in callbacks {
-                py.release(cb);
+                self.py().release(cb);
             }
         }
     }
@@ -458,29 +457,6 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
         },
         Ok(res) => {
             let mut result = res.as_mut(py);
-            if let Ok(true) = result.hasattr("_asyncio_future_blocking") {
-                if let Ok(blocking) = result.getattr("_asyncio_future_blocking") {
-                    if !blocking.is_true().unwrap() {
-                        let mut err = PyErr::new::<exc::RuntimeError, _>(
-                            py, format!("yield was used instead of yield from \
-                                         in task {:?} with {:?}", task, result));
-
-                        let waiter_task: Py<PyTask> = task.into();
-                        task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                            let gil = Python::acquire_gil();
-                            let py = gil.python();
-
-                            // wakeup task
-                            task_step(py, waiter_task.as_mut(py),
-                                      coro, Some(err.instance(py)), 0);
-
-                            future::ok(())
-                        });
-                        return
-                    }
-                }
-            }
-
             if let Ok(res) = PyFuture::downcast_mut_from(&mut result) {
                 if !res.is_blocking() {
                     let mut err = PyErr::new::<exc::RuntimeError, _>(
@@ -546,7 +522,28 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 return
             }
 
-            if result.hasattr("_asyncio_future_blocking").unwrap() {
+            if let Ok(true) = result.hasattr("_asyncio_future_blocking") {
+                if let Ok(blocking) = result.getattr("_asyncio_future_blocking") {
+                    if !blocking.is_true().unwrap() {
+                        let mut err = PyErr::new::<exc::RuntimeError, _>(
+                            py, format!("yield was used instead of yield from \
+                                         in task {:?} with {:?}", task, result));
+
+                        let waiter_task: Py<PyTask> = task.into();
+                        task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
+                            let gil = Python::acquire_gil();
+                            let py = gil.python();
+
+                            // wakeup task
+                            task_step(py, waiter_task.as_mut(py),
+                                      coro, Some(err.instance(py)), 0);
+
+                            future::ok(())
+                        });
+                        return
+                    }
+                }
+
                 // wrap into PyFuture, use unwrap because if it failes then whole
                 // processes is hosed
                 let fut = PyFuture::from_fut(

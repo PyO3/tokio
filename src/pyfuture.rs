@@ -541,7 +541,6 @@ pub struct PyFuture {
     token: PyToken,
 }
 
-
 #[py::methods]
 impl PyFuture {
 
@@ -747,6 +746,30 @@ impl PyFuture {
     fn get_source_traceback(&self) -> PyResult<PyObject> {
         self.fut.extract_traceback(self.py())
     }
+
+    // generator support
+    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+        self.__next__()
+    }
+
+    fn throw(&mut self, tp: &PyObjectRef, val: Option<PyObject>,
+             _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
+    {
+        {
+            let py = self.py();
+            if Classes.Exception.as_ref(py).is_instance(tp)? {
+                PyErr::from_instance(py, tp).restore(py);
+            } else {
+                if let Ok(tp) = PyType::downcast_from(tp) {
+                    PyErr::new_lazy_init(tp, val).restore(py);
+                } else {
+                    PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
+                }
+            }
+        }
+
+        self.__next__()
+    }
 }
 
 /*#[py::proto]
@@ -754,7 +777,7 @@ impl PyGCProtocol for PyFuture {
     //
     // Python GC support
     //
-    fn __traverse__(&self, _py: Python, visit: PyVisit) -> Result<(), PyTraverseError> {
+    fn __traverse__(&self, visit: PyVisit) -> Result<(), PyTraverseError> {
         if let Some(ref callbacks) = self.fut.callbacks {
             for callback in callbacks.iter() {
                 visit.call(callback)?;
@@ -763,9 +786,9 @@ impl PyGCProtocol for PyFuture {
         Ok(())
     }
 
-    fn __clear__(&mut self, py: Python) {
-        let callbacks = mem::replace(&mut self.fut.callbacks, None);
-        if let Some(callbacks) = callbacks {
+    fn __clear__(&mut self) {
+        if let Some(callbacks) = self.fut.callbacks.take() {
+            let py = self.py();
             for cb in callbacks {
                 py.release(cb);
             }
@@ -776,18 +799,29 @@ impl PyGCProtocol for PyFuture {
 #[py::proto]
 impl PyAsyncProtocol for PyFuture {
 
-    fn __await__(&self) -> PyResult<Py<PyFutureIter>> {
-        let fut = self.into();
-        self.py().init(|t| PyFutureIter {fut: fut, token: t})
+    fn __await__(&self) -> PyResult<PyObject> {
+        Ok(self.into())
     }
 }
+
 
 #[py::proto]
 impl PyIterProtocol for PyFuture {
 
-    fn __iter__(&mut self) -> PyResult<Py<PyFutureIter>> {
-        let fut = self.into();
-        self.py().init(|t| PyFutureIter {fut: fut, token: t})
+    fn __iter__(&mut self) -> PyResult<PyObject> {
+        Ok(self.into())
+    }
+
+    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
+        let done = self.fut.done();
+        if !done {
+            self.blocking = true;
+            Ok(Some(self.into()))
+        } else {
+            let py = self.py();
+            let res = self.result(py)?;
+            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
+        }
     }
 }
 
@@ -855,8 +889,8 @@ impl PyFuture {
             }
         }
 
-        let ob = self.to_object(py);
-        self.fut.set(py, result, ob);
+        let ob = self.into();
+        self.fut.set(py, result, ob)
     }
 
     pub fn state(&self) -> State {
@@ -895,8 +929,8 @@ impl PyFuture {
     pub fn is_cancelled(&self) -> bool {
         self.fut.cancelled()
     }
-
 }
+
 
 #[derive(Debug)]
 pub struct PyFut(Py<PyFuture>);
@@ -926,59 +960,5 @@ impl future::Future for PyFut {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.as_mut().fut.poll()
-    }
-}
-
-#[py::class]
-pub struct PyFutureIter {
-    fut: Py<PyFuture>,
-    token: PyToken,
-}
-
-
-#[py::methods]
-impl PyFutureIter {
-
-    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
-        self.__next__()
-    }
-
-    fn throw(&mut self, tp: &PyObjectRef, val: Option<PyObject>,
-             _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
-    {
-        {
-            let py = self.py();
-            if Classes.Exception.as_ref(py).is_instance(tp)? {
-                PyErr::from_instance(py, tp).restore(py);
-            } else {
-                if let Ok(tp) = PyType::downcast_from(tp) {
-                    PyErr::new_lazy_init(tp, val).restore(py);
-                } else {
-                    PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
-                }
-            }
-        }
-
-        self.__next__()
-    }
-}
-
-#[py::proto]
-impl PyIterProtocol for PyFutureIter {
-
-    fn __iter__(&mut self) -> PyResult<Py<PyFutureIter>> {
-        Ok(self.into())
-    }
-
-    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
-        let py = self.py();
-        let fut = self.fut.as_mut(py);
-        if !fut.fut.done() {
-            fut.blocking = true;
-            Ok(Some(self.fut.to_object(py)))
-        } else {
-            let res = fut.result(py)?;
-            Err(PyErr::new::<exc::StopIteration, _>(py, (res,)))
-        }
     }
 }

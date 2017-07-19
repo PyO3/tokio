@@ -205,7 +205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "pyo3"
 version = "0.1.0"
-source = "git+https://github.com/PyO3/pyo3.git#69963d75ece674c4501ac46b724691dd6ca4b0b2"
+source = "git+https://github.com/PyO3/pyo3.git#9cecfc0ec9909182e5132004f107cb71e5b1a175"
 dependencies = [
  "libc 0.2.26 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "pyo3cls"
 version = "0.1.0"
-source = "git+https://github.com/PyO3/pyo3.git#69963d75ece674c4501ac46b724691dd6ca4b0b2"
+source = "git+https://github.com/PyO3/pyo3.git#9cecfc0ec9909182e5132004f107cb71e5b1a175"
 dependencies = [
  "env_logger 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
