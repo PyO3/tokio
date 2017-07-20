@@ -123,7 +123,7 @@ impl _PyFuture {
     pub fn cancel(&mut self, py: Python, sender: PyObject) -> bool {
         match self.state {
             State::Pending => {
-                self.schedule_callbacks(py, State::Cancelled, sender, false);
+                self.schedule_callbacks(py, State::Cancelled, sender);
                 true
             }
             _ => {
@@ -234,9 +234,9 @@ impl _PyFuture {
                 }
             },
             _ => {
-                self.evloop.as_ref(py).href().spawn_fn(move || with_py(|py| {
+                self.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                    let py = GIL::python();
                     f.call(py, (owner,), None).into_log(py, "future callback error");
-                    future::ok(())
                 }));
             },
         }
@@ -310,7 +310,7 @@ impl _PyFuture {
                         self.log_exc_tb.set(true);
                     }
                 }
-                self.schedule_callbacks(py, State::Finished, sender, false);
+                self.schedule_callbacks(py, State::Finished, sender);
                 true
             },
             _ => false
@@ -323,13 +323,13 @@ impl _PyFuture {
     /// InvalidStateError.
     ///
     pub fn set_result(&mut self, py: Python,
-                      result: PyObject, sender: PyObject, inplace: bool) -> PyResult<()> {
+                      result: PyObject, sender: PyObject) -> PyResult<()> {
         let res = match self.state {
             State::Pending => {
                 // set result
                 self.result = Some(result);
 
-                self.schedule_callbacks(py, State::Finished, sender, inplace);
+                self.schedule_callbacks(py, State::Finished, sender);
                 Ok(())
             },
             _ => {
@@ -346,8 +346,8 @@ impl _PyFuture {
     /// If the future is already done when this method is called, raises
     /// InvalidStateError.
     ///
-    pub fn set_exception(&mut self, py: Python, exception: &PyObjectRef,
-                         sender: PyObject, inplace: bool) -> PyResult<()>
+    pub fn set_exception(&mut self, py: Python,
+                         exception: &PyObjectRef, sender: PyObject) -> PyResult<()>
     {
         match self.state {
             State::Pending => {
@@ -370,7 +370,7 @@ impl _PyFuture {
                 self.exception = Some(exc.into());
                 self.log_exc_tb.set(true);
 
-                self.schedule_callbacks(py, State::Finished, sender, inplace);
+                self.schedule_callbacks(py, State::Finished, sender);
                 Ok(())
             }
             _ => {
@@ -401,10 +401,8 @@ impl _PyFuture {
         }
     }
 
-    //
-    //
-    pub fn schedule_callbacks(&mut self, py: Python,
-                              state: State, owner: PyObject, inplace: bool)
+    /// change future state and schedule callbacks
+    pub fn schedule_callbacks(&mut self, py: Python, state: State, owner: PyObject)
     {
         let evloop = self.evloop.as_ref(py);
 
@@ -420,54 +418,28 @@ impl _PyFuture {
         // schedule rust callbacks
         if let Some(rcallbacks) = self.rcallbacks.take() {
             let result = self.result(py, false);
-            if inplace {
+            evloop.schedule_callback(SendBoxFnOnce::from(move || {
+                let py = GIL::python();
                 for cb in rcallbacks {
                     match result {
                         Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
                         Err(ref err) => cb.call(Err(err.clone_ref(py))),
                     }
                 }
-            } else {
-                evloop.href().spawn_fn(move || {
-                    with_py(move |py| {
-                        for cb in rcallbacks {
-                            match result {
-                                Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
-                                Err(ref err) => cb.call(Err(err.clone_ref(py))),
-                            }
-                        }
-                    });
-                    future::ok(())
-                });
-            }
+            }));
         }
 
         // schedule python callbacks
-        match self.callbacks.take() {
-            Some(callbacks) => {
-                if inplace {
-                    // call python callback
-                    for cb in callbacks.iter() {
-                        cb.call(py, (owner.clone_ref(py),), None)
-                            .into_log(py, "future done callback error");
-                    }
-                    py.release(owner);
-                } else {
-                    // call task callback
-                    evloop.href().spawn_fn(move|| {
-                        with_py(move |py| {
-                            // call python callback
-                            for cb in callbacks.iter() {
-                                cb.call(py, (owner.clone_ref(py),), None)
-                                    .into_log(py, "future done callback error");
-                            }
-                            py.release(owner);
-                        });
-                        future::ok(())
-                    });
+        if let Some(callbacks) = self.callbacks.take() {
+            evloop.schedule_callback(SendBoxFnOnce::from(move || {
+                let py = GIL::python();
+                // call python callback
+                for cb in callbacks.iter() {
+                    cb.call(py, (owner.clone_ref(py),), None)
+                        .into_log(py, "future done callback error");
                 }
-            },
-            _ => (),
+                py.release(owner);
+            }));
         }
     }
 
@@ -651,7 +623,7 @@ impl PyFuture {
             py.release(fut);
         }
         let ob = self.into();
-        self.fut.set_result(py, result, ob, false)
+        self.fut.set_result(py, result, ob)
     }
 
     ///
@@ -669,7 +641,7 @@ impl PyFuture {
             py.release(fut);
         }
         let ob = self.into();
-        self.fut.set_exception(py, exception, ob, false)
+        self.fut.set_exception(py, exception, ob)
     }
 
     //
@@ -707,14 +679,14 @@ impl PyFuture {
         if let Ok(exc) = fut.call_method(py, "exception", NoArgs, None) {
             if !exc.is_none() {
                 let ob = self.into();
-                return self.fut.set_exception(py, exc.as_ref(py), ob, true)
+                return self.fut.set_exception(py, exc.as_ref(py), ob)
             }
         }
 
         // if fut completed with normal result
         if let Ok(result) = fut.call_method(py, "result", NoArgs, None) {
             let ob = self.into();
-            return self.fut.set_result(py, result, ob, true);
+            return self.fut.set_result(py, result, ob);
         }
 
         unreachable!();

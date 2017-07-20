@@ -48,6 +48,9 @@ pub fn new_event_loop(py: Python) -> PyResult<Py<TokioEventLoop>> {
     let handle = core.handle();
     let remote = core.remote();
     let signals = signals::Signals::new(&handle);
+    let cbs = Box::new(callbacks::Callbacks::new());
+    let cbs_ptr: *mut callbacks::Callbacks = cbs.as_ref() as *const _ as *mut _;
+    handle.spawn(cbs);
 
     py.init(|t| TokioEventLoop{
         token: t,
@@ -66,7 +69,7 @@ pub fn new_event_loop(py: Python) -> PyResult<Py<TokioEventLoop>> {
         signals: signals,
         readers: HashMap::new(),
         writers: HashMap::new(),
-        callbacks: callbacks::Callbacks::new(),
+        callbacks: cbs_ptr,
     })
 }
 
@@ -118,7 +121,7 @@ pub struct TokioEventLoop {
     signals: sync::mpsc::UnboundedSender<signals::SignalsMessage>,
     readers: HashMap<c_int, OneshotSender<()>>,
     writers: HashMap<c_int, OneshotSender<()>>,
-    callbacks: callbacks::Callbacks,
+    callbacks: *mut callbacks::Callbacks,
 }
 
 #[py::methods]
@@ -2062,8 +2065,8 @@ impl TokioEventLoop {
         self.current_task = Some(task)
     }
 
-    pub fn schedule_callback(&mut self, cb: callbacks::Callback)  {
-        self.callbacks.call_soon(cb)
+    pub fn schedule_callback(&self, cb: callbacks::Callback)  {
+        unsafe {(&mut *self.callbacks).call_soon(cb)}
     }
 
     /// Linux's socket.type is a bitmask that can include extra info

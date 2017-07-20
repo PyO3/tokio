@@ -6,8 +6,10 @@ use pyo3::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
+use boxfnonce::SendBoxFnOnce;
 
 use {TokioEventLoop, Classes};
+use pyunsafe::GIL;
 
 #[py::class(freelist=250)]
 pub struct PyHandle {
@@ -109,10 +111,11 @@ impl PyHandlePtr {
         let h = self.0.clone_ref(py);
 
         // schedule work
-        evloop.get_handle().spawn_fn(move || {
-            h.into_py(|py, h| h.run(py));
-            future::ok(())
-        });
+        evloop.schedule_callback(SendBoxFnOnce::from(move || {
+            let py = GIL::python();
+            h.as_ref(py).run(py);
+            py.release(h);
+        }));
     }
 
     pub fn call_soon_threadsafe(&self, py: Python, evloop: &TokioEventLoop) {

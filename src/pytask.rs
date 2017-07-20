@@ -127,8 +127,8 @@ impl PyTask {
     // InvalidStateError.
     //
     fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<()> {
-        let ob: PyObject = self.into();
-        self.fut.set_result(py, result, ob, false)
+        let ob = self.into();
+        self.fut.set_result(py, result, ob)
     }
 
     //
@@ -138,8 +138,8 @@ impl PyTask {
     // InvalidStateError.
     //
     fn set_exception(&mut self, py: Python, exception: &PyObjectRef) -> PyResult<()> {
-        let ob: PyObject = self.into();
-        self.fut.set_exception(py, exception, ob, false)
+        let ob = self.into();
+        self.fut.set_exception(py, exception, ob)
     }
 
     // compatibility
@@ -211,15 +211,11 @@ impl PyTask {
 
         let fut = task.clone_ref(py);
 
-        evloop.href().spawn_fn(move|| {
-            let gil = Python::acquire_gil();
-            let py = gil.python();
-
-            // execute one step
+        // execute one step
+        evloop.schedule_callback(SendBoxFnOnce::from(move || {
+            let py = GIL::python();
             task_step(py, fut.as_mut(py), coro, None, 0);
-
-            future::ok(())
-        });
+        }));
 
         Ok(task)
     }
@@ -438,7 +434,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             if err.matches(py, &Classes.StopIteration) {
                 let ob = task.into();
                 let _ = task.fut.set_result(
-                    py, err.instance(py).getattr(py, "value").unwrap(), ob, false);
+                    py, err.instance(py).getattr(py, "value").unwrap(), ob);
             }
             else if err.matches(py, &Classes.CancelledError) {
                 let ob = task.into();
@@ -527,17 +523,13 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                             py, format!("yield was used instead of yield from \
                                          in task {:?} with {:?}", task, result));
 
+                        // wakeup task
                         let waiter_task: Py<PyTask> = task.into();
-                        task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                            let gil = Python::acquire_gil();
-                            let py = gil.python();
-
-                            // wakeup task
+                        task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                            let py = GIL::python();
                             task_step(py, waiter_task.as_mut(py),
                                       coro, Some(err.instance(py)), 0);
-
-                            future::ok(())
-                        });
+                        }));
                         return
                     }
                 }
@@ -567,30 +559,26 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             if result.is_none() {
                 // call soon
                 let task2: Py<PyTask> = task.into();
-                task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                    // wakeup task
-                    task2.into_mut_py(|py, mut task| {
-                        task_step(py, task, coro, None, 0);
-                    });
-
-                    future::ok(())
-                });
+                task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                    let py = GIL::python();
+                    task_step(py, task2.as_mut(py), coro, None, 0);
+                    py.release(task2);
+                }));
                 return
             }
 
             // Yielding something else is an error.
             let task2: Py<PyTask> = task.into();
             let result: PyObject = result.into();
-            task.fut.evloop.as_mut(py).href().spawn_fn(move|| {
-                task2.into_mut_py(|py, mut task| {
-                    let mut exc = PyErr::new::<exc::RuntimeError, _>(
-                        py, format!("Task got bad yield: {:?}", result));
+            task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                let py = GIL::python();
+                let mut exc = PyErr::new::<exc::RuntimeError, _>(
+                    py, format!("Task got bad yield: {:?}", result));
 
-                    // wakeup task
-                    task_step(py, task, coro, Some(exc.instance(py)), 0);
-                });
-                future::ok(())
-            });
+                // wakeup task
+                task_step(py, task2.as_mut(py), coro, Some(exc.instance(py)), 0);
+                py.release(task2);
+            }));
         },
     }
 }
