@@ -294,7 +294,7 @@ impl PyTcpTransportPtr {
             .map_err(|err| {
                 transport.as_mut(py).closing = true;
                 let _ = transport.as_mut(py).transport.send(TcpTransportMessage::Close);
-                evloop.log_error(py, err, "Protocol.connection_made error")
+                evloop.log_error(err, "Protocol.connection_made error")
             });
 
         Ok(PyTcpTransportPtr(transport))
@@ -308,8 +308,8 @@ impl PyTcpTransportPtr {
         trace!("Protocol.connection_lost(None)");
         self.0.with(|py, transport| {
             transport.evloop.as_ref(py).with(
-                py, "Protocol.connection_made error",
-                |py| transport.connection_lost.call(py, (py.None(),), None))});
+                "Protocol.connection_made error",
+                || transport.connection_lost.call(py, (py.None(),), None))});
     }
 
     pub fn connection_error(&self, err: io::Error) {
@@ -336,7 +336,7 @@ impl PyTcpTransportPtr {
     pub fn data_received(&self, bytes: Bytes) -> bool {
         self.0.with(|py, tr| {
             tr.evloop.as_ref(py).with(
-                py, "data_received error", |py| {
+                "data_received error", || {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
                     //let bytes = PyBytes::new(py, bytes.as_ref());
                     tr.data_received.call(py, (bytes,), None)

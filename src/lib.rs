@@ -34,6 +34,7 @@ mod socket;
 mod server;
 mod client;
 mod signals;
+mod callbacks;
 
 pub use pyo3::*;
 pub use utils::{Classes, PyLogger, with_py};

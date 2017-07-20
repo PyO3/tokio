@@ -89,7 +89,7 @@ impl PyHandle {
                 let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
             } else {
                 // escalate to event loop
-                self.evloop.as_mut(py).stop_with_err(py, err);
+                self.evloop.as_mut(py).stop_with_err(err);
             }
         }
     }

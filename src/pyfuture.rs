@@ -113,13 +113,13 @@ impl _PyFuture {
         self.state
     }
 
-    //
-    // Cancel the future and schedule callbacks.
-    //
-    // If the future is already done or cancelled, return False.  Otherwise,
-    // change the future's state to cancelled, schedule the callbacks and
-    // return True.
-    //
+    ///
+    /// Cancel the future and schedule callbacks.
+    ///
+    /// If the future is already done or cancelled, return False.  Otherwise,
+    /// change the future's state to cancelled, schedule the callbacks and
+    /// return True.
+    ///
     pub fn cancel(&mut self, py: Python, sender: PyObject) -> bool {
         match self.state {
             State::Pending => {
@@ -133,29 +133,28 @@ impl _PyFuture {
         }
     }
 
-    //
-    // Return True if the future was cancelled
-    //
+    ///
+    /// Return True if the future was cancelled
+    ///
     pub fn cancelled(&self) -> bool {
         self.state == State::Cancelled
     }
 
-    // Return True if the future is done.
-    //
-    // Done means either that a result / exception are available, or that the
-    // future was cancelled.
-    //
+    /// Return True if the future is done.
+    ///
+    /// Done means either that a result / exception are available, or that the
+    /// future was cancelled.
+    ///
     pub fn done(&self) -> bool {
         self.state != State::Pending
     }
 
-    //
-    // Return the result this future represents.
-    //
-    // If the future has been cancelled, raises CancelledError.  If the
-    // future's result isn't yet available, raises InvalidStateError.  If
-    // the future is done and has an exception set, this exception is raised.
-    //
+    /// Return the result this future represents.
+    ///
+    /// If the future has been cancelled, raises CancelledError.  If the
+    /// future's result isn't yet available, raises InvalidStateError.  If
+    /// the future is done and has an exception set, this exception is raised.
+    ///
     pub fn result(&self, py: Python, reset_log: bool) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
@@ -186,14 +185,13 @@ impl _PyFuture {
         }
     }
 
-    //
-    // Return the exception that was set on this future.
-    //
-    // The exception (or None if no exception was set) is returned only if
-    // the future is done.  If the future has been cancelled, raises
-    // CancelledError.  If the future isn't done yet, raises
-    // InvalidStateError.
-    //
+    /// Return the exception that was set on this future.
+    ///
+    /// The exception (or None if no exception was set) is returned only if
+    /// the future is done.  If the future has been cancelled, raises
+    /// CancelledError.  If the future isn't done yet, raises
+    /// InvalidStateError.
+    ///
     pub fn exception(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
@@ -218,13 +216,12 @@ impl _PyFuture {
         }
     }
 
-    //
-    // Add a callback to be run when the future becomes done.
-    //
-    // The callback is called with a single argument - the future object. If
-    // the future is already done when this is called, the callback is
-    // scheduled with call_soon.
-    //
+    /// Add a callback to be run when the future becomes done.
+    ///
+    /// The callback is called with a single argument - the future object. If
+    /// the future is already done when this is called, the callback is
+    /// scheduled with call_soon.
+    ///
     pub fn add_done_callback(&mut self, py: Python,
                              f: PyObject, owner: PyObject) -> PyResult<PyObject> {
         match self.state {
@@ -246,11 +243,10 @@ impl _PyFuture {
         Ok(py.None())
     }
 
-    //
-    // Remove all instances of a callback from the "call when done" list.
-    //
-    // Returns the number of callbacks removed.
-    //
+    /// Remove all instances of a callback from the "call when done" list.
+    ///
+    /// Returns the number of callbacks removed.
+    ///
     pub fn remove_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<u32> {
         let (callbacks, removed) =
             if let Some(callbacks) = self.callbacks.take() {
@@ -276,9 +272,9 @@ impl _PyFuture {
         Ok(removed)
     }
 
-    //
-    // Return result or exception
-    //
+    ///
+    /// Return result or exception
+    ///
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
         match self.state {
             State::Pending =>
@@ -300,9 +296,9 @@ impl _PyFuture {
         }
     }
     
-    //
-    // Mark the future done and set its result.
-    //
+    ///
+    /// Mark the future done and set its result.
+    ///
     pub fn set(&mut self, py: Python, result: PyResult<PyObject>, sender: PyObject) -> bool {
         match self.state {
             State::Pending => {
@@ -321,12 +317,11 @@ impl _PyFuture {
         }
     }
 
-    //
-    // Mark the future done and set its result.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
+    /// Mark the future done and set its result.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
     pub fn set_result(&mut self, py: Python,
                       result: PyObject, sender: PyObject, inplace: bool) -> PyResult<()> {
         let res = match self.state {
@@ -346,12 +341,11 @@ impl _PyFuture {
         res
     }
 
-    //
-    // Mark the future done and set an exception.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
+    /// Mark the future done and set an exception.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
     pub fn set_exception(&mut self, py: Python, exception: &PyObjectRef,
                          sender: PyObject, inplace: bool) -> PyResult<()>
     {

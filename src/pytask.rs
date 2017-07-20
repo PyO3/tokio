@@ -424,7 +424,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
     // set current task
     let task_ob = task.into();
-    task.fut.evloop.as_mut(py).set_current_task(py, task_ob);
+    task.fut.evloop.as_mut(py).set_current_task(task_ob);
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {

@@ -36,6 +36,7 @@ use server;
 use utils::{self, with_py, Classes};
 use pyunsafe::{GIL, Core, Handle, OneshotSender};
 use transport;
+use callbacks;
 
 
 thread_local!(
@@ -65,6 +66,7 @@ pub fn new_event_loop(py: Python) -> PyResult<Py<TokioEventLoop>> {
         signals: signals,
         readers: HashMap::new(),
         writers: HashMap::new(),
+        callbacks: callbacks::Callbacks::new(),
     })
 }
 
@@ -116,6 +118,7 @@ pub struct TokioEventLoop {
     signals: sync::mpsc::UnboundedSender<signals::SignalsMessage>,
     readers: HashMap<c_int, OneshotSender<()>>,
     writers: HashMap<c_int, OneshotSender<()>>,
+    callbacks: callbacks::Callbacks,
 }
 
 #[py::methods]
@@ -491,11 +494,11 @@ impl TokioEventLoop {
     /// This method is a coroutine.
     fn sock_recv(&self, py: Python, sock: &PyObjectRef, n: PyObject) -> PyResult<Py<PyFuture>>
     {
-        let _ = self.is_socket_nonblocking(py, sock)?;
+        let _ = self.is_socket_nonblocking(sock)?;
 
         // create readiness stream
         let fd = {
-            let fd = self.get_socket_fd(py, sock)?;
+            let fd = self.get_socket_fd(sock)?;
             match fd::PyFdReadable::new(fd, self.href()) {
                 Ok(fd) => fd,
                 Err(err) => return Ok(
@@ -564,7 +567,7 @@ impl TokioEventLoop {
     fn sock_sendall(&self, py: Python, sock: &PyObjectRef, data: PyObject)
                     -> PyResult<Py<PyFuture>>
     {
-        let _ = self.is_socket_nonblocking(py, sock)?;
+        let _ = self.is_socket_nonblocking(sock)?;
 
         // data is empty, nothing to do
         if ! data.is_true(py)? {
@@ -573,7 +576,7 @@ impl TokioEventLoop {
 
         // create readyness stream for write operation
         let fd = {
-            let fd = self.get_socket_fd(py, sock)?;
+            let fd = self.get_socket_fd(sock)?;
             match fd::PyFdWritable::new(fd, self.href()) {
                 Ok(fd) => fd,
                 Err(err) => return Ok(
@@ -659,7 +662,7 @@ impl TokioEventLoop {
     fn sock_connect(&self, py: Python, sock: &PyObjectRef, address: &PyObjectRef)
                     -> PyResult<Py<PyFuture>>
     {
-        let _ = self.is_socket_nonblocking(py, sock)?;
+        let _ = self.is_socket_nonblocking(sock)?;
 
         //if not hasattr(socket, 'AF_UNIX') or sock.family != socket.AF_UNIX:
         //resolved = base_events._ensure_resolved(
@@ -681,7 +684,7 @@ impl TokioEventLoop {
                                       py.get_type::<exc::InterruptedError>())) {
                     return Ok(PyFuture::done_res(py, self.into(), Err(err))?);
                 }
-                let fd = self.get_socket_fd(py, &sock)?;
+                let fd = self.get_socket_fd(&sock)?;
                 match fd::PyFdWritable::new(fd, self.href()) {
                     Err(err) => return Ok(
                         PyFuture::done_res(py, self.into(), Err(err.to_pyerr(py)))?),
@@ -757,11 +760,11 @@ impl TokioEventLoop {
     ///
     /// This method is a coroutine.
     fn sock_accept(&self, py: Python, sock: &PyObjectRef) -> PyResult<Py<PyFuture>> {
-        let _ = self.is_socket_nonblocking(py, sock)?;
+        let _ = self.is_socket_nonblocking(sock)?;
 
         // create readiness stream
         let fd = {
-            let fd = self.get_socket_fd(py, sock)?;
+            let fd = self.get_socket_fd(sock)?;
             match fd::PyFdReadable::new(fd, self.href()) {
                 Ok(fd) => fd,
                 Err(err) => return Ok(
@@ -1035,7 +1038,7 @@ impl TokioEventLoop {
                                                   info.socktype.to_int(),
                                                   info.protocol.to_int(),
                                                   cname, addr).into_tuple(py).into();
-                            list.insert_item(list.len() as isize, item)
+                            list.insert(list.len() as isize, item)
                                 .expect("Except to succeed");
                         }
                         fut.set(py, Ok(list.into()));
@@ -1514,7 +1517,7 @@ impl TokioEventLoop {
         let conn = if let (&None, &None) = (&host, &port) {
             let sock = if let Some(sock) = sock {
                 // Try to use supplied python connected socket object
-                if ! self.is_stream_socket(py, &sock)? {
+                if ! self.is_stream_socket(sock)? {
                     return Ok(PyFuture::done_res(
                         py, self.into(),
                         Err(PyErr::new::<exc::ValueError, _>(
@@ -1522,7 +1525,7 @@ impl TokioEventLoop {
                 }
 
                 // check if socket is UNIX domain socket
-                if self.is_uds_socket(py, &sock)? {
+                if self.is_uds_socket(sock)? {
                     return self.create_unix_connection(
                         py, protocol_factory, None, ssl, Some(sock), server_hostname);
                 }
@@ -1533,8 +1536,8 @@ impl TokioEventLoop {
                     py, "host and port was not specified and no sock specified"));
             };
 
-            let fileno = self.get_socket_fd(py, sock)?;
-            let sockaddr = self.addr_from_socket(py, sock)?;
+            let fileno = self.get_socket_fd(sock)?;
+            let sockaddr = self.addr_from_socket(sock)?;
 
             // create TcpStream object
             let stream = unsafe {
@@ -1627,7 +1630,7 @@ impl TokioEventLoop {
             UnixListener::bind(Path::new(path), self.href()).map_err(|e| e.to_pyerr(py))?
         } else {
             let sock = if let Some(sock) = sock {
-                if ! self.is_uds_socket(py, &sock)? {
+                if ! self.is_uds_socket(sock)? {
                     return Err(PyErr::new::<exc::ValueError, _>(
                         py, format!("A UNIX Domain Stream Socket was expected, got {:?}", sock)))
                 }
@@ -1640,7 +1643,7 @@ impl TokioEventLoop {
             // listen
             sock.call_method("listen", (backlog,), None)?;
 
-            let fileno = self.get_socket_fd(py, sock)?;
+            let fileno = self.get_socket_fd(sock)?;
 
             // create UnixListener object
             let lst = unsafe {
@@ -1684,7 +1687,7 @@ impl TokioEventLoop {
             UnixStream::connect(Path::new(path), self.href()).map_err(|e| e.to_pyerr(py))?
         } else {
             let sock = if let Some(sock) = sock {
-                if ! self.is_uds_socket(py, sock)? {
+                if ! self.is_uds_socket(sock)? {
                     return Err(PyErr::new::<exc::ValueError, _>(
                         py, format!("A UNIX Domain Stream Socket was expected, got {:?}", sock)))
                 }
@@ -1694,7 +1697,7 @@ impl TokioEventLoop {
                     py, "no path and sock were specified"))
             };
 
-            let fileno = self.get_socket_fd(py, sock)?;
+            let fileno = self.get_socket_fd(sock)?;
 
             // create UnixStream object
             let stream = unsafe {
@@ -1746,13 +1749,13 @@ impl TokioEventLoop {
                                protocol_factory: PyObject,
                                sock: &PyObjectRef,
                                ssl: Option<PyObject>) -> PyResult<Py<PyFuture>> {
-        if ! self.is_stream_socket(py, &sock)? {
+        if ! self.is_stream_socket(sock)? {
             return Err(PyErr::new::<exc::ValueError, _>(
                 py, format!("A Stream Socket was expected, got {:?}", sock)))
         }
 
-        let fileno = self.clone_socket_fd(py, &sock)?;
-        let addr = self.addr_from_socket(py, sock)?;
+        let fileno = self.clone_socket_fd(sock)?;
+        let addr = self.addr_from_socket(sock)?;
 
         // create TcpStream object
         let stream = unsafe {
@@ -1995,11 +1998,11 @@ impl TokioEventLoop {
     ///
     /// Event loop debug flag
     ///
-    pub fn get_debug(&self, py: Python) -> PyResult<bool> {
+    pub fn get_debug(&self) -> PyResult<bool> {
         Ok(self.debug)
     }
 
-    fn set_debug(&mut self, py: Python, enabled: bool) -> PyResult<()> {
+    fn set_debug(&mut self, enabled: bool) -> PyResult<()> {
         self.debug = enabled;
         Ok(())
     }
@@ -2043,7 +2046,7 @@ impl TokioEventLoop {
     }
 
     /// Stop with py exception
-    pub fn stop_with_err(&mut self, py: Python, err: PyErr) {
+    pub fn stop_with_err(&mut self, err: PyErr) {
         let runner = self.runner.take();
 
         match runner  {
@@ -2055,21 +2058,25 @@ impl TokioEventLoop {
     }
 
     /// set current executing task (for asyncio.Task.current_task api)
-    pub fn set_current_task(&mut self, py: Python, task: PyObject) {
+    pub fn set_current_task(&mut self, task: PyObject) {
         self.current_task = Some(task)
     }
 
-    // Linux's socket.type is a bitmask that can include extra info
-    // about socket, therefore we can't do simple
-    // `sock_type == socket.SOCK_STREAM`.
-    fn is_stream_socket(&self, py: Python, sock: &PyObjectRef) -> PyResult<bool> {
+    pub fn schedule_callback(&mut self, cb: callbacks::Callback)  {
+        self.callbacks.call_soon(cb)
+    }
+
+    /// Linux's socket.type is a bitmask that can include extra info
+    /// about socket, therefore we can't do simple
+    /// `sock_type == socket.SOCK_STREAM`.
+    fn is_stream_socket(&self, sock: &PyObjectRef) -> PyResult<bool> {
         let stream = addrinfo::SocketType::Stream.to_int() as i32;
         let socktype: i32 = sock.getattr("type")?.extract()?;
         Ok((socktype & stream) == stream)
     }
 
-    fn is_uds_socket(&self, py: Python, sock: &PyObjectRef) -> PyResult<bool> {
-        if self.is_stream_socket(py, sock)? {
+    fn is_uds_socket(&self, sock: &PyObjectRef) -> PyResult<bool> {
+        if self.is_stream_socket(sock)? {
             let unix = addrinfo::Family::Unix.to_int() as i32;
             let family: i32 = sock.getattr("family")?.extract()?;
             Ok((family & unix) == unix)
@@ -2078,40 +2085,40 @@ impl TokioEventLoop {
         }
     }
 
-    // Linux's socket.type is a bitmask that can include extra info
-    // about socket, therefore we can't do simple
-    // `sock_type == socket.SOCK_DGRAM`.
-    fn _is_dgram_socket(&self, py: Python, sock: &PyObjectRef) -> PyResult<bool> {
+    /// Linux's socket.type is a bitmask that can include extra info
+    /// about socket, therefore we can't do simple
+    /// `sock_type == socket.SOCK_DGRAM`.
+    fn _is_dgram_socket(&self, sock: &PyObjectRef) -> PyResult<bool> {
         let dgram = addrinfo::SocketType::DGram.to_int() as i32;
         let socktype: i32 = sock.getattr("type")?.extract()?;
         Ok((socktype & dgram) == dgram)
     }
 
-    // opened sockets only
-    fn get_socket_fd(&self, py: Python, sock: &PyObjectRef) -> PyResult<c_int> {
+    /// opened sockets only
+    fn get_socket_fd(&self, sock: &PyObjectRef) -> PyResult<c_int> {
         let fileno: c_int = sock.call_method("fileno", NoArgs, None)?.extract()?;
         if fileno == -1 {
-            Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+            Err(PyErr::new::<exc::OSError, _>(self.py(), "Bad file"))
         } else {
             Ok(fileno)
         }
     }
 
-    // clone socket
-    fn clone_socket_fd(&self, py: Python, sock: &PyObjectRef) -> PyResult<c_int> {
-        let fd = self.get_socket_fd(py, sock)?;
+    /// clone socket fd
+    fn clone_socket_fd(&self, sock: &PyObjectRef) -> PyResult<c_int> {
+        let fd = self.get_socket_fd(sock)?;
         let fd = unsafe {
             libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0)
         };
         if fd == -1 {
-            Err(PyErr::new::<exc::OSError, _>(py, "Bad file"))
+            Err(PyErr::new::<exc::OSError, _>(self.py(), "Bad file"))
         } else {
             Ok(fd)
         }
     }
 
-    // check if socket is blocked
-    fn is_socket_nonblocking(&self, py: Python, sock: &PyObjectRef) -> PyResult<()> {
+    /// check if socket is blocked
+    fn is_socket_nonblocking(&self, sock: &PyObjectRef) -> PyResult<()> {
         if self.debug {
             let timeout = sock.call_method("gettimeout", NoArgs, None)?;
             if let Ok(timeout) = timeout.extract::<c_int>() {
@@ -2119,14 +2126,14 @@ impl TokioEventLoop {
                     return Ok(())
                 }
             }
-            Err(PyErr::new::<exc::ValueError, _>(py, "the socket must be non-blocking"))
+            Err(PyErr::new::<exc::ValueError, _>(self.py(), "the socket must be non-blocking"))
         } else {
             return Ok(())
         }
     }
 
     /// Extract AddrInfo from python native socket object
-    fn addr_from_socket(&self, py: Python, sock: &PyObjectRef) -> PyResult<addrinfo::AddrInfo> {
+    fn addr_from_socket(&self, sock: &PyObjectRef) -> PyResult<addrinfo::AddrInfo> {
         let family: i32 = sock.getattr("family")?.extract()?;
         let socktype: i32 = sock.getattr("type")?.extract()?;
         let proto: i32 = sock.getattr("proto")?.extract()?;
@@ -2140,7 +2147,7 @@ impl TokioEventLoop {
                 ip
             } else {
                 return Err(PyErr::new::<exc::ValueError, _>(
-                    py, "Can not parse ip address"))
+                    self.py(), "Can not parse ip address"))
             };
             let port: u16 = addr.get_item(1).extract()?;
 
@@ -2153,7 +2160,7 @@ impl TokioEventLoop {
                 ip
             } else {
                 return Err(PyErr::new::<exc::ValueError, _>(
-                    py, "Can not parse ip address"))
+                    self.py(), "Can not parse ip address"))
             };
             let port: u16 = addr.get_item(1).extract()?;
             let flowinfo: u32 = addr.get_item(2).extract()?;
@@ -2164,7 +2171,7 @@ impl TokioEventLoop {
 
         } else {
             return Err(PyErr::new::<exc::ValueError, _>(
-                py, "Unknown address type"))
+                self.py(), "Unknown address type"))
         };
 
         Ok(addrinfo::AddrInfo::new(
@@ -2185,13 +2192,13 @@ impl TokioEventLoop {
         if let (&None, &None) = (&host, &port) {
             if let Some(sock) = sock {
                 // only stream sockets
-                if ! self.is_stream_socket(py, sock)? {
+                if ! self.is_stream_socket(sock)? {
                     return Err(PyErr::new::<exc::ValueError, _>(
                         py, format!("A Stream Socket was expected, got {:?}", sock)))
                 }
 
                 // check if socket is UNIX domain socket
-                if self.is_uds_socket(py, sock)? {
+                if self.is_uds_socket(sock)? {
                     return self.create_unix_server(
                         py, protocol_factory, None, Some(sock), backlog, ssl);
                 }
@@ -2200,8 +2207,8 @@ impl TokioEventLoop {
                 sock.call_method("listen", (backlog,), None)?;
 
                 // opened sockets only
-                let fileno = self.get_socket_fd(py, sock)?;
-                let sockaddr = self.addr_from_socket(py, sock)?;
+                let fileno = self.get_socket_fd(sock)?;
+                let sockaddr = self.addr_from_socket(sock)?;
 
                 // create TcpListener object
                 let listener = unsafe {
@@ -2268,40 +2275,37 @@ impl TokioEventLoop {
         Ok(fut)
     }
 
-    pub fn with<T, F>(&self, py: Python, message: &str, f: F)
-        where F: FnOnce(Python) -> PyResult<T> {
+    pub fn with<T, F>(&self, message: &str, f: F)
+        where F: FnOnce() -> PyResult<T> {
 
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-
-        if let Err(err) = f(py) {
-            self.log_exception(py, message, Some(err), None, None);
+        if let Err(err) = f() {
+            self.log_exception(message, Some(err), None, None);
         }
     }
 
-    pub fn log_error(&self, py: Python, err: PyErr, message: &str) -> PyErr {
-        self.log_exception(py, message, Some(err.clone_ref(py)), None, None);
+    pub fn log_error(&self, err: PyErr, message: &str) -> PyErr {
+        self.log_exception(message, Some(err.clone_ref(self.py())), None, None);
         err
     }
 
-    pub fn log_exception(&self, py: Python, message: &str,
+    pub fn log_exception(&self, message: &str,
                          exception: Option<PyErr>,
                          source_traceback: Option<PyObject>,
                          kwargs: Option<&[(PyObject, PyObject)]>) {
         let _: PyResult<()> = {
-            let context = PyDict::new(py);
+            let context = PyDict::new(self.py());
             let _ = context.set_item("message", "Future exception was never retrieved");
             source_traceback.map(
                 |tb| context.set_item("source_traceback", tb));
             exception.map(
-                |mut exc| context.set_item("exception", exc.instance(py)));
+                |mut exc| context.set_item("exception", exc.instance(self.py())));
 
             if let Some(kwargs) = kwargs {
                 for &(ref key, ref val) in kwargs {
-                    let _ = context.set_item(key.clone_ref(py), val.clone_ref(py));
+                    let _ = context.set_item(key.clone_ref(self.py()), val.clone_ref(self.py()));
                 }
             }
-            let _ = self.call_exception_handler(py, context);
+            let _ = self.call_exception_handler(self.py(), context);
 
             Ok(())
         };
@@ -2389,7 +2393,6 @@ impl TokioEventLoop {
 
 impl PartialEq for TokioEventLoop {
     fn eq(&self, other: &TokioEventLoop) -> bool {
-        let py = GIL::python();
         self.id == other.id
     }
 }
