@@ -424,30 +424,28 @@ impl _PyFuture {
         }
 
         // schedule rust callbacks
-        let result = self.result(py, false);
-        let mut rcallbacks = self.rcallbacks.take();
-        let send_rresults = move || {
-            if let Some(ref mut rcallbacks) = rcallbacks {
-                with_py(move |py| {
-                    loop {
-                        match rcallbacks.pop() {
-                            Some(cb) => {
-                                match result {
-                                    Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
-                                    Err(ref err) => cb.call(Err(err.clone_ref(py))),
-                                }
+        if let Some(rcallbacks) = self.rcallbacks.take() {
+            let result = self.result(py, false);
+            if inplace {
+                for cb in rcallbacks {
+                    match result {
+                        Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
+                        Err(ref err) => cb.call(Err(err.clone_ref(py))),
+                    }
+                }
+            } else {
+                evloop.href().spawn_fn(move || {
+                    with_py(move |py| {
+                        for cb in rcallbacks {
+                            match result {
+                                Ok(ref res) => cb.call(Ok(res.clone_ref(py))),
+                                Err(ref err) => cb.call(Err(err.clone_ref(py))),
                             }
-                            None => break
-                        };
-                                            }
+                        }
+                    });
+                    future::ok(())
                 });
             }
-            future::ok(())
-        };
-        if inplace {
-            let _ = send_rresults();
-        } else {
-            evloop.href().spawn_fn(|| send_rresults());
         }
 
         // schedule python callbacks
@@ -761,7 +759,7 @@ impl PyFuture {
             if Classes.Exception.as_ref(py).is_instance(tp)? {
                 PyErr::from_instance(py, tp).restore(py);
             } else {
-                if let Ok(tp) = PyType::downcast_from(tp) {
+                if let Some(tp) = PyType::try_downcast_from(tp) {
                     PyErr::new_lazy_init(tp, val).restore(py);
                 } else {
                     PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
@@ -870,6 +868,7 @@ impl PyFuture {
 
         Ok(f)
     }
+
     pub fn get(&self, py: Python) -> PyResult<PyObject> {
         self.fut.get(py)
     }

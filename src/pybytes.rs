@@ -151,16 +151,20 @@ impl PyBytes {
 
     fn decode(&self, encoding: Option<&str>, errors: Option<&str>) -> PyResult<PyObject>
     {
-        let bytes = self.as_ref();
+        let bytes: PyObject = self.into();
         match (encoding, errors) {
             (Some(enc), Some(err)) =>
-                Ok(pyo3::PyString::from_object(bytes, enc, err)?.into()),
+                Ok(pyo3::PyString::from_object(
+                    bytes.as_ref(self.py()), enc, err)?.into()),
             (Some(enc), None) =>
-                Ok(pyo3::PyString::from_object(bytes, enc, "strict")?.into()),
+                Ok(pyo3::PyString::from_object(
+                    bytes.as_ref(self.py()), enc, "strict")?.into()),
             (None, Some(err)) =>
-                Ok(pyo3::PyString::from_object(bytes, "utf-8", err)?.into()),
+                Ok(pyo3::PyString::from_object(
+                    bytes.as_ref(self.py()), "utf-8", err)?.into()),
             (None, None) =>
-                Ok(pyo3::PyString::from_object(bytes, "utf-8", "strict")?.into()),
+                Ok(pyo3::PyString::from_object(
+                    bytes.as_ref(self.py()), "utf-8", "strict")?.into()),
         }
     }
 }

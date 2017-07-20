@@ -391,14 +391,11 @@ const INPLACE_RETRY: usize = 5;
 // wakeup task from future
 //
 fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
-    let gil = Python::acquire_gil();
-    let py = gil.python();
-
+    let py = GIL::python();
     match result {
         Ok(_) => task_step(py, fut.as_mut(py), coro, None, 0),
         Err(mut err) => task_step(py, fut.as_mut(py), coro, Some(err.instance(py)), 0),
     }
-
     py.release(fut);
 }
 
