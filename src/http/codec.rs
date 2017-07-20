@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use tokio_io::codec::{Encoder, Decoder};
 
 use http;
-use pyunsafe::GIL;
+// use pyunsafe::GIL;
 
 
 pub enum EncoderMessage {

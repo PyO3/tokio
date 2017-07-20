@@ -24,13 +24,13 @@ pub struct PyTask {
 #[py::methods]
 impl PyTask {
 
-    //
-    // Cancel the future and schedule callbacks.
-    //
-    // If the future is already done or cancelled, return False.  Otherwise,
-    // change the future's state to cancelled, schedule the callbacks and
-    // return True.
-    //
+    ///
+    /// Cancel the future and schedule callbacks.
+    ///
+    /// If the future is already done or cancelled, return False.  Otherwise,
+    /// change the future's state to cancelled, schedule the callbacks and
+    /// return True.
+    ///
     fn cancel(&mut self, py: Python) -> PyResult<bool> {
         if !self.fut.done() {
             if let Some(ref waiter) = self.waiter {
@@ -44,49 +44,47 @@ impl PyTask {
         }
     }
 
-    //
-    // Return True if the future was cancelled
-    //
+    ///
+    /// Return True if the future was cancelled
+    ///
     fn cancelled(&self, _py: Python) -> PyResult<bool> {
         Ok(self.fut.cancelled())
     }
 
-    // Return True if the future is done.
-    //
-    // Done means either that a result / exception are available, or that the
-    // future was cancelled.
-    //
+    /// Return True if the future is done.
+    ///
+    /// Done means either that a result / exception are available, or that the
+    /// future was cancelled.
+    ///
     fn done(&self, _py: Python) -> PyResult<bool> {
         Ok(self.fut.done())
     }
 
-    //
-    // Return the result this future represents.
-    //
-    // If the future has been cancelled, raises CancelledError.  If the
-    // future's result isn't yet available, raises InvalidStateError.  If
-    // the future is done and has an exception set, this exception is raised.
-    //
+    ///
+    /// Return the result this future represents.
+    ///
+    /// If the future has been cancelled, raises CancelledError.  If the
+    /// future's result isn't yet available, raises InvalidStateError.  If
+    /// the future is done and has an exception set, this exception is raised.
+    ///
     fn result(&self, py: Python) -> PyResult<PyObject> {
         self.fut.result(py, true)
     }
 
-    //
-    // asyncio.gather() uses attribute
-    //
+    ///
+    /// asyncio.gather() uses attribute
+    ///
     #[getter(_result)]
     fn get_result(&self) -> PyResult<PyObject> {
         self.fut.get_result(self.py())
     }
 
-    //
-    // Return the exception that was set on this future.
-    //
-    // The exception (or None if no exception was set) is returned only if
-    // the future is done.  If the future has been cancelled, raises
-    // CancelledError.  If the future isn't done yet, raises
-    // InvalidStateError.
-    //
+    /// Return the exception that was set on this future.
+    ///
+    /// The exception (or None if no exception was set) is returned only if
+    /// the future is done.  If the future has been cancelled, raises
+    /// CancelledError.  If the future isn't done yet, raises InvalidStateError.
+    ///
     fn exception(&self, py: Python) -> PyResult<PyObject> {
         self.fut.exception(py)
     }
@@ -99,44 +97,40 @@ impl PyTask {
         self.fut.get_exception(self.py())
     }
 
-    //
-    // Add a callback to be run when the future becomes done.
-    //
-    // The callback is called with a single argument - the future object. If
-    // the future is already done when this is called, the callback is
-    // scheduled with call_soon.
-    //
+    /// Add a callback to be run when the future becomes done.
+    ///
+    /// The callback is called with a single argument - the future object. If
+    /// the future is already done when this is called, the callback is
+    /// scheduled with call_soon.
+    ///
     fn add_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<PyObject> {
         let ob: PyObject = self.into();
         self.fut.add_done_callback(py, f, ob)
     }
 
-    //
-    // Remove all instances of a callback from the "call when done" list.
-    //
-    // Returns the number of callbacks removed.
-    //
+    /// Remove all instances of a callback from the "call when done" list.
+    ///
+    /// Returns the number of callbacks removed.
+    ///
     fn remove_done_callback(&mut self, py: Python, f: PyObject) -> PyResult<u32> {
         self.fut.remove_done_callback(py, f)
     }
 
-    //
-    // Mark the future done and set its result.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
+    /// Mark the future done and set its result.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
     fn set_result(&mut self, py: Python, result: PyObject) -> PyResult<()> {
         let ob = self.into();
         self.fut.set_result(py, result, ob)
     }
 
-    //
-    // Mark the future done and set an exception.
-    //
-    // If the future is already done when this method is called, raises
-    // InvalidStateError.
-    //
+    /// Mark the future done and set an exception.
+    ///
+    /// If the future is already done when this method is called, raises
+    /// InvalidStateError.
+    ///
     fn set_exception(&mut self, py: Python, exception: &PyObjectRef) -> PyResult<()> {
         let ob = self.into();
         self.fut.set_exception(py, exception, ob)
@@ -224,15 +218,13 @@ impl PyTask {
         self.fut.get(py)
     }
 
-    //
-    // Add future completion callback
-    //
+    /// Add future completion callback
+    ///
     pub fn add_callback(&mut self, py: Python, cb: Callback) {
         self.fut.add_callback(py, cb);
     }
 
-    //
-    // bloking
+    // blocking
     //
     pub fn is_blocking(&self) -> bool {
         self.blocking
@@ -383,9 +375,9 @@ impl PyIterProtocol for PyTaskIter {
 
 const INPLACE_RETRY: usize = 5;
 
-//
-// wakeup task from future
-//
+///
+/// wakeup task from future
+///
 fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
     let py = GIL::python();
     match result {
@@ -396,9 +388,9 @@ fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
 }
 
 
-//
-// execute task step
-//
+///
+/// execute task step
+///
 fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject>, retry: usize) {
     // cancel if needed
     let exc = if task.must_cancel {

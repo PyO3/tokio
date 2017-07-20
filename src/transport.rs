@@ -1,9 +1,10 @@
-#![allow(unused_variables)]
+// Copyright (c) 2017-present PyO3 Project and Contributors
 
 use std::io;
 use std::net::SocketAddr;
 use std::collections::HashMap;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::AsRawFd;
+
 use pyo3::*;
 use futures::unsync::mpsc;
 use futures::{unsync, Async, AsyncSink, Stream, Future, Poll, Sink};
@@ -388,7 +389,6 @@ impl<T> TcpTransport<T>
            transport: PyTcpTransportPtr) -> TcpTransport<T> {
 
         TcpTransport {
-            fd: socket.as_raw_fd(),
             framed: socket.framed(TcpTransportCodec),
             intake: intake,
             transport: transport,
