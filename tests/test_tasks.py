@@ -272,6 +272,7 @@ def test_task_step_result_future(loop, create_future, create_task):
     res = object()
     fut.set_result(res)
     test_utils.run_briefly(loop)
+    test_utils.run_briefly(loop)
     assert res is result
     assert t.done()
     assert t.result() is None
@@ -404,5 +405,6 @@ def test_task_yield_wait_does_not_shield_cancel(
         loop.run_until_complete(f)
 
     waiter.set_result(None)
+    test_utils.run_briefly(loop)
     test_utils.run_briefly(loop)
     assert proof == 1

@@ -338,7 +338,7 @@ impl PyTcpTransportPtr {
             tr.evloop.as_ref(py).with(
                 "data_received error", || {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
-                    //let bytes = PyBytes::new(py, bytes.as_ref());
+                    // let bytes = PyBytes::new(py, bytes.as_ref());
                     tr.data_received.call(py, (bytes,), None)
                         .log_error(py, "data_received error")
                 });
@@ -369,7 +369,6 @@ enum TransportState {
 }
 
 struct TcpTransport<T> {
-    fd: RawFd,
     framed: Framed<T, TcpTransportCodec>,
     intake: unsync::mpsc::UnboundedReceiver<TcpTransportMessage>,
     transport: PyTcpTransportPtr,
