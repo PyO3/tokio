@@ -394,7 +394,7 @@ def test_future_callbacks_invoked_on_set_result(
 
     run_briefly(loop)
 
-    assert sorted(bag) == [17, 42]
+    assert bag == [42, 17]
     assert f.result() == 'foo'
 
 

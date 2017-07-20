@@ -203,12 +203,11 @@ impl PyTask {
             blocking: false,
             token: t})?;
 
-        let fut = task.clone_ref(py);
-
         // execute one step
+        let fut = task.clone_ref(py);
         evloop.schedule_callback(SendBoxFnOnce::from(move || {
             let py = GIL::python();
-            task_step(py, fut.as_mut(py), coro, None, 0);
+            task_step(py, fut.as_mut(py), coro, None, 10);
         }));
 
         Ok(task)

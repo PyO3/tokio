@@ -1,6 +1,8 @@
 // Copyright (c) 2017-present PyO3 Project and Contributors
 
 use std;
+use std::collections::VecDeque;
+
 use pyo3::Python;
 use boxfnonce::SendBoxFnOnce;
 use futures::{Async, Future, Poll, task};
@@ -8,8 +10,8 @@ use futures::{Async, Future, Poll, task};
 pub type Callback = SendBoxFnOnce<()>;
 
 pub struct Callbacks {
-    callbacks: Vec<Callback>,
-    callbacks2: Option<Vec<Callback>>,
+    callbacks: VecDeque<Callback>,
+    callbacks2: Option<VecDeque<Callback>>,
     scheduled: bool,
     task: Option<task::Task>,
 }
@@ -17,13 +19,13 @@ pub struct Callbacks {
 impl Callbacks {
 
     pub fn new() -> Callbacks {
-        Callbacks{ callbacks: Vec::with_capacity(100),
-                   callbacks2: Some(Vec::with_capacity(100)),
+        Callbacks{ callbacks: VecDeque::with_capacity(25),
+                   callbacks2: Some(VecDeque::with_capacity(25)),
                    scheduled: false, task: None}
     }
 
     pub fn call_soon(&mut self, cb: Callback) {
-        self.callbacks.push(cb);
+        self.callbacks.push_back(cb);
 
         if !self.scheduled {
             self.scheduled = true;
@@ -52,14 +54,21 @@ impl Future for Callbacks {
 
                 let _gil = Python::acquire_gil();
                 loop {
-                    match callbacks.pop() {
+                    match callbacks.pop_front() {
                         Some(cb) => cb.call(),
                         None => break
                     }
                 }
-
-                unsafe {callbacks.set_len(0)};
                 self.callbacks2 = Some(callbacks);
+                if self.callbacks.len() < 5 {
+                    for _ in 0..5 {
+                        if let Some(cb) = self.callbacks.pop_front() {
+                            cb.call()
+                        } else {
+                            break
+                        }
+                    }
+                }
             }
         }
 

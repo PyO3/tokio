@@ -58,7 +58,7 @@ def test_call_soon(loop):
     loop.call_soon(cb, 1)
     loop.run_forever()
 
-    assert sorted(calls) == [1, 10]
+    assert calls == [10, 1]
 
 
 def test_call_soon_base_exc(loop):
