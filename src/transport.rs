@@ -540,11 +540,15 @@ impl Decoder for TcpTransportCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if !src.is_empty() {
+        let res = if !src.is_empty() {
             Ok(Some(src.take().freeze()))
         } else {
             Ok(None)
+        };
+        if src.capacity() <= 1024 {
+            src.reserve(32768);
         }
+        res
     }
 }
 
