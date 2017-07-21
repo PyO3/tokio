@@ -21,7 +21,7 @@ impl Callbacks {
     pub fn new() -> Callbacks {
         Callbacks{ callbacks: VecDeque::with_capacity(25),
                    callbacks2: Some(VecDeque::with_capacity(25)),
-                   scheduled: false, task: None}
+                   scheduled: true, task: None}
     }
 
     pub fn call_soon(&mut self, cb: Callback) {
@@ -45,37 +45,35 @@ impl Future for Callbacks {
             self.task = Some(task::current());
         }
 
-        if self.scheduled {
-            self.scheduled = false;
+        if !self.callbacks.is_empty() {
+            let mut callbacks = std::mem::replace(
+                &mut self.callbacks, self.callbacks2.take().unwrap());
 
-            if !self.callbacks.is_empty() {
-                let mut callbacks = std::mem::replace(
-                    &mut self.callbacks, self.callbacks2.take().unwrap());
-
-                let _gil = Python::acquire_gil();
-                loop {
-                    match callbacks.pop_front() {
-                        Some(cb) => cb.call(),
-                        None => break
-                    }
+            let _gil = Python::acquire_gil();
+            loop {
+                match callbacks.pop_front() {
+                    Some(cb) => cb.call(),
+                    None => break
                 }
-                self.callbacks2 = Some(callbacks);
-                if self.callbacks.len() < 5 {
-                    for _ in 0..5 {
-                        if let Some(cb) = self.callbacks.pop_front() {
-                            cb.call()
-                        } else {
-                            break
-                        }
+            }
+            self.callbacks2 = Some(callbacks);
+            if self.callbacks.len() < 5 {
+                for _ in 0..5 {
+                    if let Some(cb) = self.callbacks.pop_front() {
+                        cb.call()
+                    } else {
+                        break
                     }
                 }
             }
         }
 
-        if self.scheduled {
+        if !self.callbacks.is_empty() {
             if let Some(ref task) = self.task {
                 task.notify();
             }
+        } else {
+            self.scheduled = false;
         }
 
         Ok(Async::NotReady)
