@@ -744,7 +744,7 @@ impl PyIterProtocol for PyFuture {
             self.blocking = true;
             Ok(Some(self.into()))
         } else {
-            let res = self.result(self.py())?;
+            let res = self.fut.result(self.py(), true)?;
             Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
         }
     }

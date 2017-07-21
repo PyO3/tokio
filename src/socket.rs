@@ -9,7 +9,7 @@ use addrinfo::AddrInfo;
 use utils::Classes;
 
 
-#[py::class]
+#[py::class(freelist=50)]
 pub struct Socket {
     fd: Option<RawFd>,
     family: i32,

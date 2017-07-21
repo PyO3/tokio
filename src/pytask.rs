@@ -190,6 +190,29 @@ impl PyTask {
         self.blocking = value;
         Ok(())
     }
+
+    // generator support
+    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
+        self.__next__()
+    }
+
+    fn throw(&mut self, py: Python, tp: &PyObjectRef,
+             val: Option<PyObject>, _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
+    {
+        if Classes.Exception.as_ref(py).is_instance(tp)? {
+            let val = tp;
+            let tp = val.get_type();
+            PyErr::new_lazy_init(tp, Some(val.into())).restore(py);
+        } else {
+            if let Ok(tp) = PyType::downcast_from(tp) {
+                PyErr::new_lazy_init(tp, val).restore(py);
+            } else {
+                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
+            }
+        }
+
+        self.__next__()
+    }
 }
 
 
@@ -274,19 +297,31 @@ impl PyObjectProtocol for PyTask {
 #[py::proto]
 impl PyAsyncProtocol for PyTask {
 
-    fn __await__(&self) -> PyResult<Py<PyTaskIter>> {
-        self.py().init(|t| PyTaskIter{fut: self.into(), token: t})
+    fn __await__(&self) -> PyResult<PyObject> {
+        Ok(self.into())
     }
 }
 
 #[py::proto]
 impl PyIterProtocol for PyTask {
 
-    fn __iter__(&mut self) -> PyResult<Py<PyTaskIter>> {
-        let fut = self.into();
-        self.py().init(|t| PyTaskIter{fut: fut, token: t})
+    fn __iter__(&mut self) -> PyResult<PyObject> {
+        Ok(self.into())
+    }
+
+    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
+        let done = self.fut.done();
+
+        if !done {
+            self.blocking = true;
+            Ok(Some(self.into()))
+        } else {
+            let res = self.fut.result(self.py(), true)?;
+            Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
+        }
     }
 }
+
 
 pub struct PyTaskFut{
     fut: Py<PyTask>,
@@ -333,59 +368,6 @@ impl future::Future for PyTaskFut {
             },
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(err) => Err(err),
-        }
-    }
-}
-
-#[py::class]
-pub struct PyTaskIter {
-    fut: Py<PyTask>,
-    token: PyToken,
-}
-
-
-#[py::methods]
-impl PyTaskIter {
-
-    fn send(&mut self, _unused: PyObject) -> PyResult<Option<PyObject>> {
-        self.__next__()
-    }
-
-    fn throw(&mut self, py: Python, tp: &PyObjectRef,
-             val: Option<PyObject>, _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
-    {
-        if Classes.Exception.as_ref(py).is_instance(tp)? {
-            let val = tp;
-            let tp = val.get_type();
-            PyErr::new_lazy_init(tp, Some(val.into())).restore(py);
-        } else {
-            if let Ok(tp) = PyType::downcast_from(tp) {
-                PyErr::new_lazy_init(tp, val).restore(py);
-            } else {
-                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
-            }
-        }
-
-        self.__next__()
-    }
-}
-
-#[py::proto]
-impl PyIterProtocol for PyTaskIter {
-
-    fn __iter__(&mut self) -> PyResult<Py<PyTaskIter>> {
-        Ok(self.into())
-    }
-
-    fn __next__(&mut self) -> PyResult<Option<PyObject>> {
-        let fut = self.fut.as_mut(self.py());
-
-        if !fut.fut.done() {
-            fut.blocking = true;
-            Ok(Some(self.fut.clone_ref(self.py()).into()))
-        } else {
-            let res = fut.result(self.py())?;
-            Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
         }
     }
 }

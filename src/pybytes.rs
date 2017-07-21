@@ -10,7 +10,7 @@ use pyo3::{self, class, exc, Python, PyToken, Py, AsPyRef,
            PySlice, PyErr, PyDowncastFrom, ToPyObject, PyObjectWithToken};
 use bytes::{Bytes, BytesMut, BufMut};
 
-#[py::class]
+#[py::class(freelist=100)]
 ///
 /// Buffer interface for Bytes
 ///

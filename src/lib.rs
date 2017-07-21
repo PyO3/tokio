@@ -64,7 +64,6 @@ fn init_async_tokio(py: Python, m: &PyModule) -> PyResult<()> {
 pub fn register_classes(_py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult<()> {
     m.add_class::<event_loop::TokioEventLoop>()?;
     m.add_class::<pytask::PyTask>()?;
-    m.add_class::<pytask::PyTaskIter>()?;
     m.add_class::<pyfuture::PyFuture>()?;
     m.add_class::<pybytes::PyBytes>()?;
     m.add_class::<handle::PyHandle>()?;
