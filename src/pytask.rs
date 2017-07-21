@@ -2,12 +2,12 @@
 
 use std;
 use pyo3::*;
-use futures::{future, unsync, Poll};
+use futures::{future, unsync, Async, Poll};
 use boxfnonce::SendBoxFnOnce;
 
 use TokioEventLoop;
 use utils::{Classes, PyLogger};
-use pyunsafe::GIL;
+use pyunsafe::{GIL, OneshotSender, OneshotReceiver};
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
@@ -233,7 +233,6 @@ impl PyTask {
         self.blocking = value
     }
 
-    //
     // helpers methods
     //
     pub fn is_same_loop(&self, evloop: &TokioEventLoop) -> bool {
@@ -289,23 +288,36 @@ impl PyIterProtocol for PyTask {
     }
 }
 
-pub struct PyTaskFut(Py<PyTask>);
-
-impl PyTaskFut {
-    #[inline]
-    fn as_mut(&self) -> &mut PyTask {
-        return self.0.as_mut(GIL::python())
-    }
+pub struct PyTaskFut{
+    fut: Py<PyTask>,
+    rx: OneshotReceiver<PyResult<PyObject>>,
 }
 
 impl std::convert::From<Py<PyTask>> for PyTaskFut {
     fn from(ob: Py<PyTask>) -> Self {
-        PyTaskFut(ob)
+        let (tx, rx) = unsync::oneshot::channel();
+
+        let py = GIL::python();
+        let tx = OneshotSender::new(tx);
+        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+            let _ = tx.send(result);
+        }));
+
+        PyTaskFut{fut: ob, rx: OneshotReceiver::new(rx)}
     }
 }
 impl<'a> std::convert::From<&'a PyTask> for PyTaskFut {
     fn from(ob: &'a PyTask) -> Self {
-        PyTaskFut(ob.into())
+        let (tx, rx) = unsync::oneshot::channel();
+
+        let ob: Py<PyTask> = ob.into();
+        let py = GIL::python();
+        let tx = OneshotSender::new(tx);
+        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+            let _ = tx.send(result);
+        }));
+
+        PyTaskFut{fut: ob, rx: OneshotReceiver::new(rx)}
     }
 }
 
@@ -314,7 +326,14 @@ impl future::Future for PyTaskFut {
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.as_mut().fut.poll()
+        match self.rx.poll() {
+            Ok(Async::Ready(result)) => {
+                self.fut.as_mut(GIL::python()).fut.log_exc_tb.set(false);
+                Ok(Async::Ready(result))
+            },
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(err) => Err(err),
+        }
     }
 }
 

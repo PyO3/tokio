@@ -4,12 +4,11 @@ use std;
 use std::cell;
 use pyo3::*;
 use futures::{future, unsync, Async, Poll};
-use futures::unsync::oneshot;
 use boxfnonce::SendBoxFnOnce;
 
 use TokioEventLoop;
-use utils::{Classes, PyLogger, with_py};
-use pyunsafe::GIL;
+use utils::{Classes, PyLogger};
+use pyunsafe::{GIL, OneshotSender, OneshotReceiver};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum State {
@@ -22,13 +21,11 @@ pub type Callback = SendBoxFnOnce<(PyResult<PyObject>,)>;
 
 pub struct _PyFuture {
     pub evloop: Py<TokioEventLoop>,
-    sender: Option<oneshot::Sender<PyResult<PyObject>>>,
-    receiver: Option<oneshot::Receiver<PyResult<PyObject>>>,
     state: State,
     result: Option<PyObject>,
     exception: Option<PyObject>,
-    log_exc_tb: cell::Cell<bool>,
     source_tb: Option<PyObject>,
+    pub log_exc_tb: cell::Cell<bool>,
     pub callbacks: Option<Vec<PyObject>>,
 
     // rust callbacks
@@ -41,12 +38,9 @@ impl _PyFuture {
 
     pub fn new(py: Python, ev: Py<TokioEventLoop>) -> _PyFuture {
         let tb = _PyFuture::extract_tb(py, &ev);
-        let (tx, rx) = unsync::oneshot::channel();
 
         _PyFuture {
             evloop: ev,
-            sender: Some(tx),
-            receiver: Some(rx),
             state: State::Pending,
             result: None,
             exception: None,
@@ -62,8 +56,6 @@ impl _PyFuture {
 
         _PyFuture {
             evloop: ev,
-            sender: None,
-            receiver: None,
             state: State::Finished,
             result: Some(result),
             exception: None,
@@ -83,8 +75,6 @@ impl _PyFuture {
 
                 _PyFuture {
                     evloop: ev,
-                    sender: None,
-                    receiver: None,
                     state: State::Finished,
                     result: None,
                     exception: Some(err.instance(py)),
@@ -408,13 +398,6 @@ impl _PyFuture {
 
         self.state = state;
 
-        // complete oneshot channel
-        if let Some(sender) = self.sender.take() {
-            if state != State::Cancelled {
-                let _ = sender.send(self.result(py, false));
-            }
-        }
-
         // schedule rust callbacks
         if let Some(rcallbacks) = self.rcallbacks.take() {
             let result = self.result(py, false);
@@ -467,31 +450,9 @@ impl Drop for _PyFuture {
             }
             let _ = self.evloop.as_ref(py).call_exception_handler(py, context);
         };
-        py.release(self.result.take());
-        py.release(self.exception.take());
-        py.release(self.source_tb.take());
     }
 }
 
-impl future::Future for _PyFuture {
-    type Item = PyResult<PyObject>;
-    type Error = unsync::oneshot::Canceled;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(ref mut rx) = self.receiver {
-            match rx.poll() {
-                Ok(Async::Ready(result)) => {
-                    self.log_exc_tb.set(false);
-                    Ok(Async::Ready(result))
-                },
-                Ok(Async::NotReady) => Ok(Async::NotReady),
-                Err(err) => Err(err),
-            }
-        } else {
-            Ok(Async::Ready(with_py(|py| self.get(py))))
-        }
-    }
-}
 
 #[py::class(freelist=500)]
 pub struct PyFuture {
@@ -899,25 +860,37 @@ impl PyFuture {
 }
 
 
-#[derive(Debug)]
-pub struct PyFut(Py<PyFuture>);
-
-impl PyFut {
-    #[inline]
-    fn as_mut(&self) -> &mut PyFuture {
-        return self.0.as_mut(GIL::python())
-    }
+pub struct PyFut {
+    fut: Py<PyFuture>,
+    rx: OneshotReceiver<PyResult<PyObject>>,
 }
 
 impl std::convert::From<Py<PyFuture>> for PyFut {
     fn from(ob: Py<PyFuture>) -> Self {
-        PyFut(ob)
+        let (tx, rx) = unsync::oneshot::channel();
+
+        let py = GIL::python();
+        let tx = OneshotSender::new(tx);
+        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+            let _ = tx.send(result);
+        }));
+
+        PyFut{fut: ob, rx: OneshotReceiver::new(rx)}
     }
 }
 
 impl<'a> std::convert::From<&'a PyFuture> for PyFut {
     fn from(ob: &'a PyFuture) -> Self {
-        PyFut(ob.into())
+        let (tx, rx) = unsync::oneshot::channel();
+
+        let ob: Py<PyFuture> = ob.into();
+        let py = GIL::python();
+        let tx = OneshotSender::new(tx);
+        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+            let _ = tx.send(result);
+        }));
+
+        PyFut{fut: ob, rx: OneshotReceiver::new(rx)}
     }
 }
 
@@ -926,6 +899,13 @@ impl future::Future for PyFut {
     type Error = unsync::oneshot::Canceled;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.as_mut().fut.poll()
+        match self.rx.poll() {
+            Ok(Async::Ready(result)) => {
+                self.fut.as_mut(GIL::python()).fut.log_exc_tb.set(false);
+                Ok(Async::Ready(result))
+            },
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(err) => Err(err),
+        }
     }
 }
