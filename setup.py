@@ -55,7 +55,7 @@ def read(f):
 setup(name='tokio',
       version=version,
       description='Asyncio event loop written in Rust language',
-      long_description='\n\n'.join((read('README.rst'), read('CHANGES.txt'))),
+      long_description='\n\n'.join((read('README.rst'), read('CHANGES.rst'))),
       license='Apache 2',
       classifiers=[
           'License :: OSI Approved :: Apache Software License',
