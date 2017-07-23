@@ -59,7 +59,7 @@ pub fn new_event_loop(py: Python) -> PyResult<Py<TokioEventLoop>> {
         handle: Handle::new(handle),
         remote: remote,
         instant: Instant::now(),
-        lookup: addrinfo::start_workers(3),
+        lookup: Some(addrinfo::start_workers(3)),
         runner: None,
         executor: None,
         exception_handler: py.None(),
@@ -111,7 +111,7 @@ pub struct TokioEventLoop {
     handle: Handle,
     remote: Remote,
     instant: Instant,
-    lookup: addrinfo::LookupWorkerSender,
+    lookup: Option<addrinfo::LookupWorkerSender>,
     runner: Option<oneshot::Sender<PyResult<()>>>,
     executor: Option<PyObject>,
     exception_handler: PyObject,
@@ -883,6 +883,10 @@ impl TokioEventLoop {
                 }
             });
         }
+
+        // drop address lookup workers
+        self.lookup.take();
+
         Ok(())
     }
 
@@ -1010,7 +1014,8 @@ impl TokioEventLoop {
 
         // lookup process future
         let lookup = addrinfo::lookup(
-            &self.lookup, host, port, family, flags, addrinfo::SocketType::from_int(socktype));
+            self.lookup.as_ref().unwrap(), host, port, family, flags,
+            addrinfo::SocketType::from_int(socktype));
 
         // convert addr info to python comaptible  values
         let process = lookup.and_then(move |result| {
@@ -1572,7 +1577,7 @@ impl TokioEventLoop {
             let waiter = PyFuture::new(py, self.into())?;
 
             // resolve addresses and connect
-            let fut = addrinfo::lookup(&self.lookup,
+            let fut = addrinfo::lookup(self.lookup.as_ref().unwrap(),
                                        host, port,
                                        family, flags, addrinfo::SocketType::Stream)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err.description()))
@@ -2241,7 +2246,7 @@ impl TokioEventLoop {
         let evloop: Py<TokioEventLoop> = self.into();
 
         // resolve addresses and start listening
-        let conn = addrinfo::lookup(&self.lookup,
+        let conn = addrinfo::lookup(self.lookup.as_ref().unwrap(),
                                     host, port.map(|p| p.to_string()),
                                     family, flags, addrinfo::SocketType::Stream)
             .map_err(|err| with_py(
