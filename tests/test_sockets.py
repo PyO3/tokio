@@ -8,8 +8,8 @@ import socket
 import sys
 
 import pytest
-import _testbase as tb
 
+import _testbase as tb
 
 _SIZE = 1024 * 1024
 

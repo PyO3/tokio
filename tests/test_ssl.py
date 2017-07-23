@@ -9,7 +9,6 @@ import ssl
 
 import _testbase as tb
 
-
 ONLYCERT = tb._cert_fullname('ssl_cert.pem')
 ONLYKEY = tb._cert_fullname('ssl_key.pem')
 

@@ -6,9 +6,7 @@
 import asyncio
 import io
 import os
-
 from asyncio import test_utils
-
 
 # All tests are copied from asyncio (mostly as-is)
 

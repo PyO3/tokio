@@ -9,8 +9,8 @@ import socket
 import tempfile
 
 import pytest
-import _testbase as tb
 
+import _testbase as tb
 from test_ssl import (ONLYCERT, ONLYKEY, create_client_ssl_context,
                       create_server_ssl_context)
 
