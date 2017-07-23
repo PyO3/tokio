@@ -3,6 +3,10 @@ name = "async-tokio"
 version = "0.1.0"
 license = "Apache-2.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+readme = "README.md"
+homepage = "https://github.com/pyo3/tokio"
+repository = "https://github.com/pyo3/tokio.git"
+exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -42,7 +46,8 @@ tokio-uds = "0.1"
 
 [dependencies.pyo3]
 #path = "../pyo3"
-git = "https://github.com/PyO3/pyo3.git"
+#git = "https://github.com/PyO3/pyo3.git"
+version = "0.1"
 features = ["python3"]
 
 [dev-dependencies]

@@ -39,7 +39,7 @@ with codecs.open(os.path.join(os.path.abspath(os.path.dirname(
         raise RuntimeError('Unable to determine version.')
 
 
-setup_requires = ['setuptools-rust>=0.6']
+setup_requires = ['setuptools-rust>=0.6.1']
 install_requires = []
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
@@ -55,7 +55,7 @@ def read(f):
 setup(name='tokio',
       version=version,
       description='Asyncio event loop written in Rust language',
-      long_description=read('README.rst'),
+      long_description='\n\n'.join((read('README.rst'), read('CHANGES.txt'))),
       license='Apache 2',
       classifiers=[
           'License :: OSI Approved :: Apache Software License',
