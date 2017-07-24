@@ -1,6 +1,6 @@
 language: python
 python:
-  # - "3.5"
+  - "3.5"
   - "3.6"
 env:
   - RUST_VERSION=nightly
@@ -17,7 +17,7 @@ install:
   - export LIBRARY_PATH="$LIBRARY_PATH:$PYTHON_LIB"
   - export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$PYTHON_LIB:$HOME/rust/lib"
   - rustc -V
-  - python -m pip install -U https://github.com/PyO3/setuptools-rust/archive/master.zip
+  - python -m pip install --upgrade setuptools
   - pip install -r requirements-ci.txt
 script:
   - make test

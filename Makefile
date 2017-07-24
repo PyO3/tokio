@@ -1,7 +1,6 @@
 # Some simple testing tasks (sorry, UNIX only).
 
 .install-deps: requirements-dev.txt requirements-ci.txt
-	@pip install --upgrade virtualenv
 	@pip install -U -r requirements-dev.txt
         @touch .install-deps
 
