@@ -19,10 +19,9 @@ install:
   - rustc -V
   - pip install --upgrade setuptools
   - pip install -U -r requirements-dev.txt
-  - git clone https://github.com/aio-libs/aiohttp.git
-  - pip install -U -r aiohttp/requirements/dev.txt
-  - pip install -U -r aiohttp/requirements/wheel.txt
-  - python aiohttp/setup.py develop
+  # - git clone https://github.com/aio-libs/aiohttp.git
+  # - pip install -U -r aiohttp/requirements/dev.txt
+  # - cd aiohttp; python setup.py develop
 script:
   - make test
-  - python -m pytest --loop tokio ./aiohttp/tests/
+  # - python -m pytest --loop tokio ./aiohttp/tests/
