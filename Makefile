@@ -2,7 +2,7 @@
 
 .install-deps: requirements-dev.txt requirements-ci.txt
 	@pip install -U -r requirements-dev.txt
-        @touch .install-deps
+	@touch .install-deps
 
 isort:
 # isort -rc tokio

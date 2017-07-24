@@ -44,8 +44,8 @@ install_requires = []
 tests_require = install_requires + ['pytest', 'pytest-timeout']
 
 
-if sys.version_info < (3, 6, 0):
-    raise RuntimeError("tokio requires Python 3.6+")
+if sys.version_info < (3, 5, 3):
+    raise RuntimeError("tokio requires Python 3.5.3+")
 
 
 def read(f):
