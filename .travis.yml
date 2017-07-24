@@ -21,6 +21,7 @@ install:
   - pip install -U -r requirements-dev.txt
   - git clone https://github.com/aio-libs/aiohttp.git
   - pip install -U -r aiohttp/requirements/dev.txt
+  - pip install -U -r aiohttp/requirements/wheel.txt
   - python aiohttp/setup.py develop
 script:
   - make test
