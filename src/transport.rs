@@ -135,7 +135,7 @@ pub fn tcp_transport_factory<T>(
 }
 
 
-#[py::class(freelist=100)]
+#[py::class(weakref, freelist=100)]
 pub struct PyTcpTransport {
     evloop: Py<TokioEventLoop>,
     connection_lost: PyObject,

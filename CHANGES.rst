@@ -2,6 +2,12 @@ CHANGES
 -------
 
 
+0.x.0 (xx-xx-2017)
+^^^^^^^^^^^^^^^^^^
+
+* Added weakref support to all exposed python classes #13
+
+
 0.2.0 (07-23-2017)
 ^^^^^^^^^^^^^^^^^^
 

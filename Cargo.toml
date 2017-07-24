@@ -45,8 +45,8 @@ tokio-uds = "0.1"
 
 [dependencies.pyo3]
 #path = "../pyo3"
-#git = "https://github.com/PyO3/pyo3.git"
-version = "0.1"
+git = "https://github.com/PyO3/pyo3.git"
+#version = "0.1"
 features = ["python3"]
 
 [dev-dependencies]

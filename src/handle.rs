@@ -11,7 +11,7 @@ use boxfnonce::SendBoxFnOnce;
 use {TokioEventLoop, Classes};
 use pyunsafe::GIL;
 
-#[py::class(freelist=250)]
+#[py::class(weakref, freelist=250)]
 pub struct PyHandle {
     evloop: Py<TokioEventLoop>,
     cancelled: bool,

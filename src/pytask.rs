@@ -11,7 +11,7 @@ use pyunsafe::{GIL, OneshotSender, OneshotReceiver};
 use pyfuture::{_PyFuture, PyFuture, Callback, State};
 
 
-#[py::class(freelist=250)]
+#[py::class(weakref, freelist=250)]
 pub struct PyTask {
     fut: _PyFuture,
     waiter: Option<PyObject>,

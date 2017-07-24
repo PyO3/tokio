@@ -141,7 +141,7 @@ pub fn create_uds_server(py: Python, evloop: &TokioEventLoop,
 }
 
 
-#[py::class]
+#[py::class(weakref)]
 pub struct TokioServer {
     evloop: Py<TokioEventLoop>,
     sockets: Py<PyTuple>,

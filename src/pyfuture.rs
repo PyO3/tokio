@@ -454,7 +454,7 @@ impl Drop for _PyFuture {
 }
 
 
-#[py::class(freelist=500)]
+#[py::class(weakref, freelist=500)]
 pub struct PyFuture {
     fut: _PyFuture,
     blocking: bool,

@@ -103,7 +103,7 @@ enum RunStatus {
 }
 
 
-#[py::class]
+#[py::class(weakref)]
 pub struct TokioEventLoop {
     token: PyToken,
     id: Option<CoreId>,

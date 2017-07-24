@@ -34,7 +34,6 @@ def test_close(loop):
         loop.run_until_complete(f)
 
 
-@pytest.mark.skip
 def test_handle_weakref(loop):
     wd = weakref.WeakValueDictionary()
     h = loop.call_soon(lambda: None)
@@ -307,7 +306,7 @@ def test_run_until_complete_error(loop):
         loop.run_until_complete(foo())
 
 
-@pytest.mark.skip(reason='tokio is not support this')
+@pytest.mark.skip(reason='tokio does not support this')
 def test_debug_slow_callbacks(loop):
     logger = logging.getLogger('asyncio')
     loop.set_debug(True)
@@ -326,7 +325,7 @@ def test_debug_slow_callbacks(loop):
     assert 'test_debug_slow_callbacks' in msg
 
 
-@pytest.mark.skip(reason='tokio is not support this')
+@pytest.mark.skip(reason='tokio does not support this')
 def test_debug_slow_timer_callbacks(loop):
     logger = logging.getLogger('asyncio')
     loop.set_debug(True)
@@ -345,7 +344,7 @@ def test_debug_slow_timer_callbacks(loop):
     # self.assertIn('test_debug_slow_callbacks', msg)
 
 
-@pytest.mark.skip(reason='tokio is not support this')
+@pytest.mark.skip(reason='tokio does not support this')
 def test_default_exc_handler_callback(loop, mock_pattern):
     loop._process_events = mock.Mock()
 
