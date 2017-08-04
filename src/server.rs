@@ -45,27 +45,17 @@ pub fn create_server(py: Python, evloop: &TokioEventLoop,
 
         let _ = builder.reuse_address(reuse_address);
         let _ = builder.reuse_port(reuse_port);
+        builder.bind(info.sockaddr)?;
 
-        if let Err(err) = builder.bind(info.sockaddr) {
-            return Err(err.to_pyerr(py));
-        }
+        let listener = builder.listen(backlog)?;
+        let lst = TcpListener::from_listener(listener, &info.sockaddr, &handle.h)?;
 
-        match builder.listen(backlog) {
-            Ok(listener) => {
-                match TcpListener::from_listener(listener, &info.sockaddr, &handle.h) {
-                    Ok(lst) => {
-                        info!("Started listening on {:?}", info.sockaddr);
-                        let mut addr = info.clone();
-                        addr.sockaddr = lst.local_addr().expect("should not fail");
-                        let s = Socket::new(py, &addr)?;
-                        sockets.push(s);
-                        listeners.push((lst, addr));
-                    },
-                    Err(err) => return Err(err.to_pyerr(py)),
-                }
-            }
-            Err(err) => return Err(err.to_pyerr(py)),
-        }
+        info!("Started listening on {:?}", info.sockaddr);
+        let mut addr = info.clone();
+        addr.sockaddr = lst.local_addr().expect("should not fail");
+        let s = Socket::new(py, &addr)?;
+        sockets.push(s);
+        listeners.push((lst, addr));
     }
 
     // create tokio listeners
@@ -99,27 +89,24 @@ pub fn create_sock_server(py: Python, evloop: &TokioEventLoop,
                           ssl: Option<PyObject>, proto_factory: PyObject,
                           transport_factory: TransportFactory) -> PyResult<PyObject> {
 
-    match TcpListener::from_listener(listener, &info.sockaddr, evloop.href()) {
-        Ok(lst) => {
-            info!("Started listening on {:?}", info.sockaddr);
-            let mut addr = info.clone();
-            addr.sockaddr = lst.local_addr().expect("should not fail");
-            let sock = Socket::new(py, &addr)?;
+    let lst = TcpListener::from_listener(listener, &info.sockaddr, evloop.href())?;
 
-            let (tx, rx) = unsync::oneshot::channel::<()>();
-            let handles = vec![pyunsafe::OneshotSender::new(tx)];
+    info!("Started listening on {:?}", info.sockaddr);
+    let mut addr = info.clone();
+    addr.sockaddr = lst.local_addr().expect("should not fail");
+    let sock = Socket::new(py, &addr)?;
 
-            Server::serve(evloop, addr, lst.incoming(),
-                          transport_factory, proto_factory, ssl, rx);
+    let (tx, rx) = unsync::oneshot::channel::<()>();
+    let handles = vec![pyunsafe::OneshotSender::new(tx)];
 
-            py.init(|token| TokioServer {
-                evloop: evloop.into(),
-                sockets: PyTuple::new(py, &[sock]),
-                stop_handle: Some(handles),
-                token: token}).map(|ptr| ptr.into())
-        },
-        Err(err) => Err(err.to_pyerr(py)),
-    }
+    Server::serve(evloop, addr, lst.incoming(),
+                  transport_factory, proto_factory, ssl, rx);
+
+    py.init(|token| TokioServer {
+        evloop: evloop.into(),
+        sockets: PyTuple::new(py, &[sock]),
+        stop_handle: Some(handles),
+        token: token}).map(|ptr| ptr.into())
 }
 
 

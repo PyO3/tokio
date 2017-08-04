@@ -261,7 +261,7 @@ def test_create_server_6(loop, port):
 
 def test_create_connection_1(loop):
     CNT = 0
-    TOTAL_CNT = 1
+    TOTAL_CNT = 100
 
     def server():
         data = yield tb.read(4)
@@ -273,16 +273,14 @@ def test_create_connection_1(loop):
         yield tb.write(b'SPAM')
 
     async def client(addr):
-        reader, writer = await asyncio.open_connection(
-            *addr,
-            loop=loop)
+        reader, writer = await asyncio.open_connection(*addr, loop=loop)
 
         writer.write(b'AAAA')
         assert (await reader.readexactly(2)) == b'OK'
 
-        # with pytest.raises(TypeError) as excinfo:
-        #    writer.write('AAAA')
-        # excinfo.match(r'(a bytes-like object)|(must be byte-ish)')
+        with pytest.raises(TypeError) as excinfo:
+            writer.write('AAAA')
+        excinfo.match(r'(a bytes-like object)|(must be byte-ish)')
 
         writer.write(b'BBBB')
         assert (await reader.readexactly(4)) == b'SPAM'

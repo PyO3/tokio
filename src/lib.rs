@@ -78,8 +78,5 @@ pub fn register_classes(_py: pyo3::Python, m: &pyo3::PyModule) -> pyo3::PyResult
     //m.add_class::<http::PayloadWriter>(py)?;
     //m.add_class::<http::pytransport::PyHttpTransport>(py)?;
 
-    // touch classes
-    let _ = Classes.Exception;
-
     Ok(())
 }

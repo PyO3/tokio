@@ -6,7 +6,7 @@ use pyo3::*;
 use futures::future::{self, Future};
 use futures::sync::oneshot;
 use tokio_core::reactor::Timeout;
-use boxfnonce::SendBoxFnOnce;
+use boxfnonce::BoxFnOnce;
 
 use {TokioEventLoop, Classes};
 use pyunsafe::GIL;
@@ -51,8 +51,8 @@ impl PyHandle {
                callback: PyObject, args: Py<PyTuple>) -> PyResult<PyHandlePtr> {
 
         let tb = if evloop.is_debug() {
-            let frame = Classes.Sys.as_ref(py).call("_getframe", (0,), None)?;
-            Some(Classes.ExtractStack.as_ref(py).call((frame,), None)?.into())
+            let frame = Classes.Sys.as_ref(py).call("_getframe", (0,), NoArgs)?;
+            Some(Classes.ExtractStack.as_ref(py).call((frame,), NoArgs)?.into())
         } else {
             None
         };
@@ -73,17 +73,17 @@ impl PyHandle {
             return
         }
 
-        let result = self.callback.call(py, self.args.clone_ref(py), None);
+        let result = self.callback.call(py, self.args.clone_ref(py), NoArgs);
 
         // handle python exception
         if let Err(err) = result {
-            if err.matches(py, &Classes.Exception) {
+            if err.is_instance::<exc::Exception>(py) {
                 let context = PyDict::new(py);
                 let _ = context.set_item(
                     "message", format!("Exception in callback {:?} {:?}",
                                        self.callback, self.args));
                 let _ = context.set_item("handle", format!("{:?}", self));
-                let _ = context.set_item("exception", err.clone_ref(py).instance(py));
+                let _ = context.set_item("exception", err);
 
                 if let Some(ref tb) = self.source_traceback {
                     let _ = context.set_item("source_traceback", tb.clone_ref(py));
@@ -111,7 +111,7 @@ impl PyHandlePtr {
         let h = self.0.clone_ref(py);
 
         // schedule work
-        evloop.schedule_callback(SendBoxFnOnce::from(move || {
+        evloop.schedule_callback(BoxFnOnce::from(move || {
             let py = GIL::python();
             h.as_ref(py).run(py);
             py.release(h);

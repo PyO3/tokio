@@ -1,10 +1,11 @@
 #![allow(non_upper_case_globals)]
 
+use std;
 use pyo3;
 use pyo3::*;
 use std::os::raw::c_long;
 use std::time::Duration;
-use std::fmt::Write;
+// use std::fmt::Write;
 
 use pyfuture::PyFuture;
 use addrinfo::LookupError;
@@ -15,22 +16,13 @@ pub struct WorkingClasses {
     pub Future: Py<PyType>,
 
     pub Asyncio: Py<PyModule>,
-    pub CancelledError: Py<PyType>,
-    pub InvalidStateError: Py<PyType>,
-    pub TimeoutError: Py<PyType>,
     pub SSLProto: Py<PyType>,
     pub Coroutines: Py<PyModule>,
     pub UnixEvents: Py<PyModule>,
 
     pub Helpers: Py<PyModule>,
 
-    pub Exception: Py<PyType>,
-    pub BaseException: Py<PyType>,
-    pub StopIteration: Py<PyType>,
-
     pub Socket: Py<PyModule>,
-    pub GaiError: Py<PyType>,
-    pub SocketTimeout: Py<PyType>,
     pub GetNameInfo: PyObject,
 
     pub Sys: Py<PyModule>,
@@ -40,7 +32,7 @@ pub struct WorkingClasses {
 
 impl WorkingClasses {
     pub fn print_stack(&self, py: Python) {
-        let _ = Classes.Traceback.as_ref(py).call("print_stack", NoArgs, None);
+        let _ = Classes.Traceback.as_ref(py).call("print_stack", NoArgs, NoArgs);
     }
 }
 
@@ -48,7 +40,6 @@ lazy_static! {
     pub static ref Classes: WorkingClasses = {
         let gil = Python::acquire_gil();
         let py = gil.python();
-        let builtins = py.import("builtins").unwrap();
         let socket = py.import("socket").unwrap();
         let tb = py.import("traceback").unwrap();
         let asyncio = py.import("asyncio").unwrap();
@@ -59,13 +50,7 @@ lazy_static! {
             Future: py.get_type::<PyFuture>().into(),
 
             Asyncio: asyncio.into(),
-            CancelledError: PyType::downcast_from(
-                asyncio.get("CancelledError").unwrap()).unwrap().into(),
-            InvalidStateError: PyType::downcast_from(
-                asyncio.get("InvalidStateError").unwrap()).unwrap().into(),
-            TimeoutError: PyType::downcast_from(
-                asyncio.get("TimeoutError").unwrap()).unwrap().into(),
-            SSLProto: PyType::downcast_from(
+            SSLProto: PyType::try_from(
                 &sslproto.get("SSLProtocol").unwrap()).unwrap().into(),
             Coroutines: py.import("asyncio.coroutines").unwrap().into(),
             UnixEvents: py.import("asyncio.unix_events").unwrap().into(),
@@ -73,17 +58,6 @@ lazy_static! {
             Helpers: py.import("tokio.helpers").unwrap().into(),
 
             // general purpose types
-            StopIteration: PyType::downcast_from(
-                builtins.get("StopIteration").unwrap()).unwrap().into(),
-            Exception: PyType::downcast_from(
-                builtins.get("Exception").unwrap()).unwrap().into(),
-            BaseException: PyType::downcast_from(
-                builtins.get("BaseException").unwrap()).unwrap().into(),
-
-            SocketTimeout: PyType::downcast_from(
-                socket.get("timeout").unwrap()).unwrap().into(),
-            GaiError: PyType::downcast_from(
-                socket.get("gaierror").unwrap()).unwrap().into(),
             GetNameInfo: socket.get("getnameinfo").unwrap().into(),
             Socket: socket.into(),
 
@@ -189,17 +163,24 @@ impl PyLogger for PyErr {
 }
 
 
-impl ToPyErr for LookupError {
+impl PyErrArguments for LookupError {
 
-    fn to_pyerr(&self, py: Python) -> PyErr {
+    fn arguments(&self, py: Python) -> PyObject {
         match self {
-            &LookupError::IOError(ref err) => err.to_pyerr(py),
-            &LookupError::Other(ref err_str) =>
-                PyErr::new_err(py, Classes.GaiError.as_ref(py), (err_str.to_object(py),)),
-            &LookupError::NulError(_) =>
-                PyErr::new_err(py, Classes.GaiError.as_ref(py), ("nil pointer",)),
-            &LookupError::Generic =>
-                PyErr::new_err(py, Classes.GaiError.as_ref(py), ("generic error",)),
+            &LookupError::IOError(ref err) => err.arguments(py),
+            &LookupError::Other(ref err_str) => (err_str,).to_object(py),
+            &LookupError::NulError(_) => "nil pointer".to_object(py),
+            &LookupError::Generic => "generic error".to_object(py),
+        }
+    }
+}
+
+impl std::convert::From<LookupError> for PyErr {
+
+    fn from(err: LookupError) -> PyErr {
+        match err {
+            LookupError::IOError(err) => err.into(),
+            _ => PyErr::from_value::<exc::socket::gaierror>(PyErrValue::ToArgs(Box::new(err))),
         }
     }
 }
@@ -208,42 +189,37 @@ impl ToPyErr for LookupError {
 //
 // Format exception
 //
-pub fn print_exception(py: Python, w: &mut String, err: PyErr) {
-    let res = Classes.Traceback.as_ref(py).call(
-        "format_exception", (err.ptype, err.pvalue, err.ptraceback), None);
+pub fn print_exception(_py: Python, _w: &mut String, _err: PyErr) {
+    /*let res = Classes.Traceback.as_ref(py).call(
+        "format_exception", (err.ptype, err.pvalue, err.ptraceback), NoArgs);
     if let Ok(lines) = res {
         if let Ok(lines) = PyList::downcast_from(lines) {
             for idx in 0..lines.len() {
                 let _ = write!(w, "{}", lines.get_item(idx as isize));
             }
         }
-    }
+    }*/
 }
 
 //
 // convert PyFloat or PyInt into Duration
 //
-pub fn parse_seconds(py: Python, name: &str, value: &PyObjectRef) -> PyResult<Option<Duration>> {
-    if let Ok(f) = PyFloat::downcast_from(value) {
+pub fn parse_seconds(name: &str, value: &PyObjectRef) -> PyResult<Option<Duration>> {
+    if let Ok(f) = PyFloat::try_from(value) {
         let val = f.value();
         if val < 0.0 {
             Ok(None)
         } else {
             Ok(Some(Duration::new(val as u64, (val.fract() * 1_000_000_000.0) as u32)))
         }
-    } else if let Ok(i) = PyLong::downcast_from(value) {
-        if let Ok(val) = i.extract::<c_long>() {
-            if val < 0 {
-                Ok(None)
-            } else {
-                Ok(Some(Duration::new(val as u64, 0)))
-            }
-        } else {
+    } else if let Ok(val) = value.extract::<c_long>() {
+        if val < 0 {
             Ok(None)
+        } else {
+            Ok(Some(Duration::new(val as u64, 0)))
         }
     } else {
-        Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type", name)))
+        Err(exc::TypeError::new(format!("'{}' must be int of float type", name)))
     }
 }
 
@@ -251,15 +227,15 @@ pub fn parse_seconds(py: Python, name: &str, value: &PyObjectRef) -> PyResult<Op
 //
 // convert PyFloat or PyInt into u64 (milliseconds)
 //
-pub fn parse_millis(py: Python, name: &str, value: &PyObjectRef) -> PyResult<u64> {
-    if let Ok(f) = PyFloat::downcast_from(value) {
+pub fn parse_millis(name: &str, value: &PyObjectRef) -> PyResult<u64> {
+    if let Ok(f) = PyFloat::try_from(value) {
         let val = f.value();
         if val > 0.0 {
             Ok((val * 1000.0) as u64)
         } else {
             Ok(0)
         }
-    } else if let Ok(i) = PyLong::downcast_from(value) {
+    } else if let Ok(i) = PyLong::try_from(value) {
         if let Ok(val) = i.extract::<c_long>() {
             if val < 0 {
                 Ok(0)
@@ -270,7 +246,7 @@ pub fn parse_millis(py: Python, name: &str, value: &PyObjectRef) -> PyResult<u64
             Ok(0)
         }
     } else {
-        Err(PyErr::new::<exc::TypeError, _>(
-            py, format!("'{}' must be int of float type: {:?}", name, value.get_type())))
+        Err(exc::TypeError::new(
+            format!("'{}' must be int of float type: {:?}", name, value.get_type())))
     }
 }

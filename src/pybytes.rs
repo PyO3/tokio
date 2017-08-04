@@ -7,7 +7,7 @@ use pyo3::{ffi, py};
 use pyo3::buffer::PyBuffer;
 use pyo3::{self, class, exc, Python, PyToken, Py, AsPyRef,
            ObjectProtocol, ToPyPointer, PyResult, PyObject, PyObjectRef,
-           PySlice, PyErr, PyDowncastFrom, ToPyObject, PyObjectWithToken};
+           PySlice, ToPyObject, PyObjectWithToken, PyTryFrom};
 use bytes::{Bytes, BytesMut, BufMut};
 
 #[py::class(weakref, freelist=100)]
@@ -216,19 +216,19 @@ impl<'p> pyo3::class::PyObjectProtocol<'p> for PyBytes {
         let py = self.py();
         match op {
             pyo3::CompareOp::Eq => {
-                if let Ok(other) = PyBytes::downcast_from(other) {
+                if let Ok(other) = PyBytes::try_from(other) {
                     Ok((self.bytes.as_ref() == other.bytes.as_ref()).to_object(py))
                 }
-                else if let Ok(other) = pyo3::PyBytes::downcast_from(other) {
+                else if let Ok(other) = pyo3::PyBytes::try_from_exact(other) {
                     Ok((self.bytes.as_ref() == other.data().as_ref()).to_object(py))
                 }
                 else {
-                    Err(PyErr::new::<exc::TypeError, _>(
-                        py, format!("Can not compare PyBytes and {:?}", &other)))
+                    Err(exc::TypeError::new(
+                        format!("Can not compare PyBytes and {:?}", &other)))
                 }
             },
             _ =>
-                Err(PyErr::new::<exc::TypeError, _>(py, "Can not complete this operation")),
+                Err(exc::TypeError::new("Can not complete this operation")),
         }
     }
 }
@@ -264,8 +264,7 @@ impl<'p> pyo3::class::PyNumberProtocol<'p> for PyBytes {
 
                 Ok(PyBytes::new(py, buf.freeze())?.into())
             },
-            _ => Err(PyErr::new::<exc::TypeError, _>(
-                py, format!("Can not sum {:?} and {:?}", lhs, rhs)))
+            _ => Err(exc::TypeError::new(format!("Can not sum {:?} and {:?}", lhs, rhs)))
         }
     }
 }
@@ -279,7 +278,7 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
 
     fn __getitem__(&self, key: &PyObjectRef) -> PyResult<PyObject> {
         // access by slice
-        if let Ok(slice) = PySlice::downcast_from(key) {
+        if let Ok(slice) = PySlice::try_from(key) {
             let indices = slice.indices(self.bytes.len() as i64)?;
 
             let s = if indices.step == 1 {
@@ -301,18 +300,18 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
         // access by index
         else if let Ok(idx) = key.extract::<isize>() {
             if idx < 0 {
-                Err(PyErr::new::<exc::IndexError, _>(self.py(), "Index out of range"))
+                Err(exc::IndexError::new("Index out of range"))
             } else {
                 let idx = idx as usize;
 
                 if idx < self.bytes.len() {
                     Ok(self.bytes[idx].to_object(self.py()))
                 } else {
-                    Err(PyErr::new::<exc::IndexError, _>(self.py(), "Index out of range"))
+                    Err(exc::IndexError::new("Index out of range"))
                 }
             }
         } else {
-            Err(PyErr::new::<exc::TypeError, _>(self.py(), "Index is not supported"))
+            Err(exc::TypeError::new("Index is not supported"))
         }
     }
 }
@@ -321,10 +320,8 @@ impl pyo3::class::PyMappingProtocol for PyBytes {
 impl class::PyBufferProtocol for PyBytes {
 
     fn bf_getbuffer(&self, view: *mut ffi::Py_buffer, flags: c_int) -> PyResult<()> {
-        let py = self.py();
-
         if view == ptr::null_mut() {
-            return Err(PyErr::new::<exc::BufferError, _>(py, "View is null"))
+            return Err(exc::BufferError::new("View is null"))
         }
 
         unsafe {
@@ -332,7 +329,7 @@ impl class::PyBufferProtocol for PyBytes {
         }
 
         if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
-            return Err(PyErr::new::<exc::BufferError, _>(py, "Object is not writable"))
+            return Err(exc::BufferError::new("Object is not writable"))
         }
 
         unsafe {

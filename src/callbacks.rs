@@ -4,10 +4,10 @@ use std;
 use std::collections::VecDeque;
 
 use pyo3::Python;
-use boxfnonce::SendBoxFnOnce;
+use boxfnonce::BoxFnOnce;
 use futures::{Async, Future, Poll, task};
 
-pub type Callback = SendBoxFnOnce<()>;
+pub type Callback = BoxFnOnce<()>;
 
 pub struct Callbacks {
     callbacks: VecDeque<Callback>,

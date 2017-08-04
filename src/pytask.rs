@@ -3,7 +3,7 @@
 use std;
 use pyo3::*;
 use futures::{future, unsync, Async, Poll};
-use boxfnonce::SendBoxFnOnce;
+use boxfnonce::BoxFnOnce;
 
 use TokioEventLoop;
 use utils::{Classes, PyLogger};
@@ -34,7 +34,7 @@ impl PyTask {
     fn cancel(&mut self, py: Python) -> PyResult<bool> {
         if !self.fut.done() {
             if let Some(ref waiter) = self.waiter {
-                let _ = waiter.call_method(py, "cancel", NoArgs, None)?;
+                let _ = waiter.call_method(py, "cancel", NoArgs, NoArgs)?;
                 return Ok(true);
             }
             self.must_cancel = true;
@@ -47,7 +47,7 @@ impl PyTask {
     ///
     /// Return True if the future was cancelled
     ///
-    fn cancelled(&self, _py: Python) -> PyResult<bool> {
+    fn cancelled(&self) -> PyResult<bool> {
         Ok(self.fut.cancelled())
     }
 
@@ -56,7 +56,7 @@ impl PyTask {
     /// Done means either that a result / exception are available, or that the
     /// future was cancelled.
     ///
-    fn done(&self, _py: Python) -> PyResult<bool> {
+    fn done(&self) -> PyResult<bool> {
         Ok(self.fut.done())
     }
 
@@ -199,15 +199,13 @@ impl PyTask {
     fn throw(&mut self, py: Python, tp: &PyObjectRef,
              val: Option<PyObject>, _tb: Option<PyObject>) -> PyResult<Option<PyObject>>
     {
-        if Classes.Exception.as_ref(py).is_instance(tp)? {
-            let val = tp;
-            let tp = val.get_type();
-            PyErr::new_lazy_init(tp, Some(val.into())).restore(py);
+        if py.is_instance::<exc::Exception, _>(tp)? {
+            PyErr::from_instance(tp).restore(py);
         } else {
-            if let Ok(tp) = PyType::downcast_from(tp) {
-                PyErr::new_lazy_init(tp, val).restore(py);
+            if let Ok(tp) = PyType::try_from_exact(tp) {
+                PyErr::from_type(tp.into(), val).restore(py);
             } else {
-                PyErr::new::<exc::TypeError, _>(py, NoArgs).restore(py);
+                exc::TypeError::new(NoArgs).restore(py);
             }
         }
 
@@ -228,7 +226,7 @@ impl PyTask {
 
         // execute one step
         let fut = task.clone_ref(py);
-        evloop.schedule_callback(SendBoxFnOnce::from(move || {
+        evloop.schedule_callback(BoxFnOnce::from(move || {
             let py = GIL::python();
             task_step(py, fut.as_mut(py), coro, None, 10);
         }));
@@ -290,7 +288,7 @@ impl PyGCProtocol for PyTask {
 impl PyObjectProtocol for PyTask {
     fn __repr__(&self) -> PyResult<PyObject> {
         let ob: PyObject = self.into();
-        Ok(Classes.Helpers.as_ref(self.py()).call("future_repr", ("Task", ob,), None)?.into())
+        Ok(Classes.Helpers.as_ref(self.py()).call("future_repr", ("Task", ob,), NoArgs)?.into())
     }
 }
 
@@ -317,7 +315,7 @@ impl PyIterProtocol for PyTask {
             Ok(Some(self.into()))
         } else {
             let res = self.fut.result(self.py(), true)?;
-            Err(PyErr::new::<exc::StopIteration, _>(self.py(), (res,)))
+            Err(exc::StopIteration::new((res,)))
         }
     }
 }
@@ -334,7 +332,7 @@ impl std::convert::From<Py<PyTask>> for PyTaskFut {
 
         let py = GIL::python();
         let tx = OneshotSender::new(tx);
-        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+        let _ = ob.as_mut(py).add_callback(py, BoxFnOnce::from(move |result| {
             let _ = tx.send(result);
         }));
 
@@ -348,7 +346,7 @@ impl<'a> std::convert::From<&'a PyTask> for PyTaskFut {
         let ob: Py<PyTask> = ob.into();
         let py = GIL::python();
         let tx = OneshotSender::new(tx);
-        let _ = ob.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+        let _ = ob.as_mut(py).add_callback(py, BoxFnOnce::from(move |result| {
             let _ = tx.send(result);
         }));
 
@@ -382,7 +380,7 @@ fn wakeup_task(fut: Py<PyTask>, coro: PyObject, result: PyResult<PyObject>) {
     let py = GIL::python();
     match result {
         Ok(_) => task_step(py, fut.as_mut(py), coro, None, 0),
-        Err(mut err) => task_step(py, fut.as_mut(py), coro, Some(err.instance(py)), 0),
+        Err(err) => task_step(py, fut.as_mut(py), coro, Some(err.into_object(py)), 0),
     }
     py.release(fut);
 }
@@ -395,13 +393,13 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
     // cancel if needed
     let exc = if task.must_cancel {
         if let Some(exc) = exc {
-            if Classes.CancelledError.as_ref(py).is_instance(exc.as_ref(py)).unwrap() {
+            if py.is_instance::<exc::asyncio::CancelledError, _>(&exc).unwrap() {
                 Some(exc)
             } else {
-                Some(Classes.CancelledError.as_ref(py).call(NoArgs, None).unwrap().into())
+                Some(exc::asyncio::CancelledError::new(NoArgs).into_object(py))
             }
         } else {
-            Some(Classes.CancelledError.as_ref(py).call(NoArgs, None).unwrap().into())
+            Some(exc::asyncio::CancelledError::new(NoArgs).into_object(py))
         }
     } else {
         exc
@@ -416,24 +414,24 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
-        None => coro.call_method(py, "send", (py.None(),), None),
-        Some(exc) => coro.call_method(py, "throw", (exc,), None),
+        None => coro.call_method(py, "send", (py.None(),), NoArgs),
+        Some(exc) => coro.call_method(py, "throw", (exc,), NoArgs),
     };
 
     // handle coroutine result
     match res {
-        Err(mut err) => {
-            if err.matches(py, &Classes.StopIteration) {
+        Err(err) => {
+            if err.is_instance::<exc::StopIteration>(py) {
                 let ob = task.into();
                 let _ = task.fut.set_result(
-                    py, err.instance(py).getattr(py, "value").unwrap(), ob);
+                    py, err.into_object(py).getattr(py, "value").unwrap(), ob);
             }
-            else if err.matches(py, &Classes.CancelledError) {
+            else if err.is_instance::<exc::asyncio::CancelledError>(py) {
                 let ob = task.into();
                 let _ = task.fut.cancel(py, ob);
             }
-            else if err.matches(py, &Classes.BaseException) {
-                task.set_exception(py, err.instance(py).as_ref(py))
+            else if err.is_instance::<exc::BaseException>(py) {
+                task.set_exception(py, err.into_object(py).as_ref(py))
                     .into_log(py, "can not set task exception");
             }
             else {
@@ -443,12 +441,12 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
         },
         Ok(res) => {
             let mut result = res.as_mut(py);
-            if let Some(fut) = PyFuture::try_mut_exact_downcast_from(&mut result) {
+            if let Ok(fut) = PyFuture::try_from_mut_exact(&mut result) {
                 if !fut.is_blocking() {
-                    let mut err = PyErr::new::<exc::RuntimeError, _>(
-                        py, format!("yield was used instead of yield from \
-                                     in task {:?} with {:?}", task, fut));
-                    task_step(py, task, coro, Some(err.instance(py)), 0);
+                    let err = exc::RuntimeError::new(
+                        format!("yield was used instead of yield from \
+                                 in task {:?} with {:?}", task, fut));
+                    task_step(py, task, coro, Some(err.into_object(py)), 0);
                     return
                 }
                 fut.set_blocking(false);
@@ -463,7 +461,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
                 if fut.state() != State::Pending && retry < INPLACE_RETRY {
                     let exc = match fut.get(py) {
                         Ok(_) => None,
-                        Err(ref mut err) => Some(err.instance(py)),
+                        Err(err) => Some(err.into_object(py)),
                     };
 
                     task_step(py, task, coro, exc, retry+1);
@@ -475,18 +473,18 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
                 // schedule wakeup on done
                 let waiter_task = task.into();
-                let _ = fut.add_callback(py, SendBoxFnOnce::from(move |result| {
+                let _ = fut.add_callback(py, BoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
                 return
             }
 
-            if let Some(res) = PyTask::try_mut_exact_downcast_from(&mut result) {
+            if let Ok(res) = PyTask::try_from_mut_exact(&mut result) {
                 if !res.is_blocking() {
-                    let mut err = PyErr::new::<exc::RuntimeError, _>(
-                        py, format!("yield was used instead of yield from \
-                                     in task {:?} with {:?}", task, res));
-                    task_step(py, task, coro, Some(err.instance(py)), 0);
+                    let err = exc::RuntimeError::new(
+                        format!("yield was used instead of yield from \
+                                 in task {:?} with {:?}", task, res));
+                    task_step(py, task, coro, Some(err.into_object(py)), 0);
                     return
                 }
                 res.set_blocking(false);
@@ -496,7 +494,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
                 // schedule wakeup on done
                 let waiter_task = task.into();
-                let _ = res.add_callback(py, SendBoxFnOnce::from(move |result| {
+                let _ = res.add_callback(py, BoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
 
@@ -511,16 +509,16 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             if let Ok(true) = result.hasattr("_asyncio_future_blocking") {
                 if let Ok(blocking) = result.getattr("_asyncio_future_blocking") {
                     if !blocking.is_true().unwrap() {
-                        let mut err = PyErr::new::<exc::RuntimeError, _>(
-                            py, format!("yield was used instead of yield from \
-                                         in task {:?} with {:?}", task, result));
+                        let err = exc::RuntimeError::new(
+                            format!("yield was used instead of yield from \
+                                     in task {:?} with {:?}", task, result));
 
                         // wakeup task
                         let waiter_task: Py<PyTask> = task.into();
-                        task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                        task.fut.evloop.as_ref(py).schedule_callback(BoxFnOnce::from(move || {
                             let py = GIL::python();
                             task_step(py, waiter_task.as_mut(py),
-                                      coro, Some(err.instance(py)), 0);
+                                      coro, Some(err.into_object(py)), 0);
                         }));
                         return
                     }
@@ -536,7 +534,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
                 // schedule wakeup on done
                 let waiter_task = task.into();
-                let _ = fut.as_mut(py).add_callback(py, SendBoxFnOnce::from(move |result| {
+                let _ = fut.as_mut(py).add_callback(py, BoxFnOnce::from(move |result| {
                     wakeup_task(waiter_task, coro, result);
                 }));
 
@@ -551,7 +549,7 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             if result.is_none() {
                 // call soon
                 let task2: Py<PyTask> = task.into();
-                task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+                task.fut.evloop.as_ref(py).schedule_callback(BoxFnOnce::from(move || {
                     let py = GIL::python();
                     task_step(py, task2.as_mut(py), coro, None, 0);
                     py.release(task2);
@@ -562,13 +560,12 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
             // Yielding something else is an error.
             let task2: Py<PyTask> = task.into();
             let result: PyObject = result.into();
-            task.fut.evloop.as_ref(py).schedule_callback(SendBoxFnOnce::from(move || {
+            task.fut.evloop.as_ref(py).schedule_callback(BoxFnOnce::from(move || {
                 let py = GIL::python();
-                let mut exc = PyErr::new::<exc::RuntimeError, _>(
-                    py, format!("Task got bad yield: {:?}", result));
+                let exc = exc::RuntimeError::new(format!("Task got bad yield: {:?}", result));
 
                 // wakeup task
-                task_step(py, task2.as_mut(py), coro, Some(exc.instance(py)), 0);
+                task_step(py, task2.as_mut(py), coro, Some(exc.into_object(py)), 0);
                 py.release(task2);
             }));
         },

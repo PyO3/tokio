@@ -71,43 +71,43 @@ impl Socket {
     }
 
     fn accept(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "accept method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("accept method is not supported."))
     }
 
     fn bind(&self, py: Python, address: PyObject) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "bind method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("bind method is not supported."))
     }
 
     fn close(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "close method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("close method is not supported."))
     }
 
     fn connect(&self, py: Python, address: PyObject) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "connect method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("connect method is not supported."))
     }
 
     fn connect_ex(&self, py: Python, address: PyObject) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "connect_ex method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("connect_ex method is not supported."))
     }
 
     fn detach(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "detach method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("detach method is not supported."))
     }
 
     fn dup(&mut self, py: Python) -> PyResult<PyObject> {
         if let Some(ref sock) = self.socket {
-            return sock.call_method(py, "dup", NoArgs, None)
+            return sock.call_method(py, "dup", NoArgs, NoArgs)
         }
 
         if let Some(fd) = self.fd {
             let sock = Classes.Socket.as_ref(py).call(
-                "socket", (self.family, self.socktype, self.proto, fd), None)?;
+                "socket", (self.family, self.socktype, self.proto, fd), NoArgs)?;
 
-            let res = sock.call_method("dup", NoArgs, None);
+            let res = sock.call_method("dup", NoArgs, NoArgs);
             self.socket = Some(sock.into());
             Ok(res?.into())
         } else {
-            Err(PyErr::new::<exc::RuntimeError, _>(py, "dup method is not supported."))
+            Err(PyErr::new::<exc::RuntimeError, _>("dup method is not supported."))
         }
     }
 
@@ -116,12 +116,12 @@ impl Socket {
     }
 
     fn get_inheritable(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("Method is not supported."))
     }
 
     pub fn getpeername(&self, py: Python) -> PyResult<PyObject> {
         match self.peername {
-            None => Err(PyErr::new::<exc::OSError, _>(py, "Socket is not connected")),
+            None => Err(PyErr::new::<exc::OSError, _>("Socket is not connected")),
             Some(ref addr) => match addr {
                 &SocketAddr::V4(addr) => {
                     Ok((format!("{}", addr.ip()), addr.port()).into_object(py))
@@ -147,84 +147,84 @@ impl Socket {
     }
 
     fn getsockopt(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "getsockopt method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("getsockopt method is not supported."))
     }
 
     fn gettimeout(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "gettimeout method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("gettimeout method is not supported."))
     }
 
     fn ioctl(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "ioctl method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("ioctl method is not supported."))
     }
 
     fn listen(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "listen method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("listen method is not supported."))
     }
 
     fn makefile(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "makefile method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("makefile method is not supported."))
     }
 
     fn recv(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "recv method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("recv method is not supported."))
     }
 
     fn recvfrom(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "recvfrom method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("recvfrom method is not supported."))
     }
 
     fn recvmsg(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "recvmsg method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("recvmsg method is not supported."))
     }
 
     fn recvmsg_into(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("Method is not supported."))
     }
 
     fn recvfrom_into(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("Method is not supported."))
     }
 
     fn recv_into(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("Method is not supported."))
     }
 
     fn send(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "send method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("send method is not supported."))
     }
 
     fn sendall(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "sendall method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("sendall method is not supported."))
     }
 
     fn sendto(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "sendto method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("sendto method is not supported."))
     }
 
     fn sendmsg(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "sendmsg method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("sendmsg method is not supported."))
     }
 
     fn sendmsg_afalg(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "sendmsg_afalg method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("sendmsg_afalg method is not supported."))
     }
 
     // we need to implement this
     fn sendfile(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "sendfile method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("sendfile method is not supported."))
     }
 
     fn set_inheritable(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "Method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("Method is not supported."))
     }
 
     fn setblocking(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "setblocking method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("setblocking method is not supported."))
     }
 
     fn settimeout(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "settimeout method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("settimeout method is not supported."))
     }
 
     #[args(args="*", kwargs="**")]
@@ -234,10 +234,10 @@ impl Socket {
     }
 
     fn shutdown(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "shutdown method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("shutdown method is not supported."))
     }
 
     fn share(&self, py: Python) -> PyResult<()> {
-        Err(PyErr::new::<exc::RuntimeError, _>(py, "share method is not supported."))
+        Err(PyErr::new::<exc::RuntimeError, _>("share method is not supported."))
     }
 }

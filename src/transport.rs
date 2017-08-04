@@ -85,7 +85,7 @@ pub fn tcp_transport_factory<T>(
     }
 
     // create protocol
-    let proto = factory.as_ref(py).call(NoArgs, None)
+    let proto = factory.as_ref(py).call(NoArgs, NoArgs)
         .log_error(py, "Protocol factory failure")?;
 
     // create py transport
@@ -100,8 +100,7 @@ pub fn tcp_transport_factory<T>(
             let _ = kwargs.set_item("server_hostname", hostname);
         }
         let ssl_proto = Classes.SSLProto.as_ref(py).call(
-            (evloop.clone_ref(py), proto, ssl.clone_ref(py), waiter),
-            Some(&kwargs))?;
+            (evloop.clone_ref(py), proto, ssl.clone_ref(py), waiter), kwargs)?;
 
         let tr = PyTcpTransportPtr::new(py, ev, Sender::new(tx), &ssl_proto, info)?;
         let wrp_tr = ssl_proto.getattr("_app_transport")?;
@@ -186,8 +185,7 @@ impl PyTcpTransport {
         let len = if let Some(slice) = data.as_slice::<u8>(py) {
             slice.len() as usize
         } else {
-            return Err(PyErr::new::<exc::TypeError, _>(
-                py, "data argument must be a bytes-like object"))
+            return Err(exc::TypeError::new("data argument must be a bytes-like object"))
         };
 
         self.drained = false;
@@ -291,7 +289,7 @@ impl PyTcpTransportPtr {
             token: token})?;
 
         // connection made
-        let _ = connection_made.call((transport.clone_ref(py),), None)
+        let _ = connection_made.call((transport.clone_ref(py),), NoArgs)
             .map_err(|err| {
                 transport.as_mut(py).closing = true;
                 let _ = transport.as_mut(py).transport.send(TcpTransportMessage::Close);
@@ -310,7 +308,7 @@ impl PyTcpTransportPtr {
         self.0.with(|py, transport| {
             transport.evloop.as_ref(py).with(
                 "Protocol.connection_made error",
-                || transport.connection_lost.call(py, (py.None(),), None))});
+                || transport.connection_lost.call(py, (py.None(),), NoArgs))});
     }
 
     pub fn connection_error(&self, err: io::Error) {
@@ -319,15 +317,15 @@ impl PyTcpTransportPtr {
             match err.kind() {
                 io::ErrorKind::TimedOut => {
                     trace!("socket.timeout");
-                    let e = Classes.SocketTimeout.as_ref(py).call(NoArgs, None).unwrap();
+                    let e: PyErr = exc::socket::timeout.into();
 
-                    tr.connection_lost.call(py, (e,), None)
+                    tr.connection_lost.call(py, (e,), NoArgs)
                         .into_log(py, "connection_lost error");
                 },
                 _ => {
                     trace!("Protocol.connection_lost(err): {:?}", err);
-                    let mut e = err.to_pyerr(py);
-                    tr.connection_lost.call(py, (e.instance(py),), None)
+                    let e: PyErr = err.into();
+                    tr.connection_lost.call(py, (e,), NoArgs)
                         .into_log(py, "connection_lost error");
                 }
             }
@@ -340,7 +338,7 @@ impl PyTcpTransportPtr {
                 "data_received error", || {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
                     // let bytes = PyBytes::new(py, bytes.as_ref());
-                    tr.data_received.call(py, (bytes,), None)
+                    tr.data_received.call(py, (bytes,), NoArgs)
                         .log_error(py, "data_received error")
                 });
             !tr.paused

@@ -29,7 +29,7 @@ fn test_pybytes() {
 
     let bytestp = py.get_type::<PyBytes>();
     // creating instances from python is not allowed
-    assert!(bytestp.call(NoArgs, None).is_err());
+    assert!(bytestp.call(NoArgs, NoArgs).is_err());
 
     let bytes = Bytes::from("{\"test\": \"value\"}");
     let pb = PyBytes::new(py, bytes).unwrap();

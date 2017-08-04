@@ -1,6 +1,6 @@
 [package]
 name = "async-tokio"
-version = "0.2.0"
+version = "0.3.0"
 license = "Apache-2.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 homepage = "https://github.com/pyo3/tokio"
@@ -46,7 +46,7 @@ tokio-uds = "0.1"
 [dependencies.pyo3]
 #path = "../pyo3"
 git = "https://github.com/PyO3/pyo3.git"
-#version = "0.1"
+#version = "0.2"
 features = ["python3"]
 
 [dev-dependencies]
