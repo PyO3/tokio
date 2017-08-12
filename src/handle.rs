@@ -51,8 +51,8 @@ impl PyHandle {
                callback: PyObject, args: Py<PyTuple>) -> PyResult<PyHandlePtr> {
 
         let tb = if evloop.is_debug() {
-            let frame = Classes.Sys.as_ref(py).call("_getframe", (0,), NoArgs)?;
-            Some(Classes.ExtractStack.as_ref(py).call((frame,), NoArgs)?.into())
+            let frame = Classes.Sys.as_ref(py).call1("_getframe", (0,))?;
+            Some(Classes.ExtractStack.as_ref(py).call1((frame,))?.into())
         } else {
             None
         };
@@ -73,7 +73,7 @@ impl PyHandle {
             return
         }
 
-        let result = self.callback.call(py, self.args.clone_ref(py), NoArgs);
+        let result = self.callback.call1(py, self.args.clone_ref(py));
 
         // handle python exception
         if let Err(err) = result {

@@ -32,7 +32,7 @@ pub struct WorkingClasses {
 
 impl WorkingClasses {
     pub fn print_stack(&self, py: Python) {
-        let _ = Classes.Traceback.as_ref(py).call("print_stack", NoArgs, NoArgs);
+        let _ = Classes.Traceback.as_ref(py).call0("print_stack");
     }
 }
 
@@ -190,8 +190,8 @@ impl std::convert::From<LookupError> for PyErr {
 // Format exception
 //
 pub fn print_exception(_py: Python, _w: &mut String, _err: PyErr) {
-    /*let res = Classes.Traceback.as_ref(py).call(
-        "format_exception", (err.ptype, err.pvalue, err.ptraceback), NoArgs);
+    /*let res = Classes.Traceback.as_ref(py).call1(
+        "format_exception", (err.ptype, err.pvalue, err.ptraceback));
     if let Ok(lines) = res {
         if let Ok(lines) = PyList::downcast_from(lines) {
             for idx in 0..lines.len() {

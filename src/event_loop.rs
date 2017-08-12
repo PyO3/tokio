@@ -103,7 +103,7 @@ enum RunStatus {
 }
 
 
-#[py::class(weakref)]
+#[py::class(gc, weakref, subclass)]
 pub struct TokioEventLoop {
     token: PyToken,
     id: Option<CoreId>,
@@ -126,6 +126,38 @@ pub struct TokioEventLoop {
 
 #[py::methods]
 impl TokioEventLoop {
+
+    #[new]
+    fn __new__(obj: &PyRawObject) -> PyResult<()>
+    {
+        let core = reactor::Core::new().unwrap();
+        let handle = core.handle();
+        let remote = core.remote();
+        let signals = signals::Signals::new(&handle);
+        let cbs = Box::new(callbacks::Callbacks::new());
+        let cbs_ptr: *mut callbacks::Callbacks = cbs.as_ref() as *const _ as *mut _;
+        handle.spawn(cbs);
+
+        obj.init(|t| TokioEventLoop{
+            token: t,
+            id: Some(core.id()),
+            core: Some(Core::new(core)),
+            handle: Handle::new(handle),
+            remote: remote,
+            instant: Instant::now(),
+            lookup: Some(addrinfo::start_workers(3)),
+            runner: None,
+            executor: None,
+            exception_handler: obj.py().None(),
+            slow_callback_duration: 100,
+            debug: false,
+            current_task: None,
+            signals: signals,
+            readers: HashMap::new(),
+            writers: HashMap::new(),
+            callbacks: cbs_ptr,
+        })
+    }
 
     ///
     /// Return the currently running task in an event loop or None.
@@ -354,10 +386,10 @@ impl TokioEventLoop {
             let callback: PyObject = args.get_item(1).into();
 
             // coroutines are not allowed as handlers
-            let iscoro: bool = Classes.Coroutines.as_ref(py).call(
-                "iscoroutine", (callback.clone_ref(py),), NoArgs)?.extract()?;
-            let iscorof: bool = Classes.Coroutines.as_ref(py).call(
-                "iscoroutinefunction", (callback.clone_ref(py),), NoArgs)?.extract()?;
+            let iscoro: bool = Classes.Coroutines.as_ref(py).call1(
+                "iscoroutine", (callback.clone_ref(py),))?.extract()?;
+            let iscorof: bool = Classes.Coroutines.as_ref(py).call1(
+                "iscoroutinefunction", (callback.clone_ref(py),))?.extract()?;
             if iscoro || iscorof {
                 return Err(exc::TypeError::new(
                     "coroutines cannot be used with add_signal_handler()"))
@@ -523,7 +555,7 @@ impl TokioEventLoop {
                 return future::ok(Some(()));
             }
 
-            let res = sock.as_ref(py).call_method("recv", (n.clone_ref(py),), NoArgs);
+            let res = sock.as_ref(py).call_method1("recv", (n.clone_ref(py),));
 
             match res {
                 Err(err) => {
@@ -603,7 +635,7 @@ impl TokioEventLoop {
             }
 
             let data = wrp_mut.get_item(0);
-            let res = sock.call_method(py, "send", (data.to_object(py),), NoArgs);
+            let res = sock.call_method1(py, "send", (data.to_object(py),));
 
             match res {
                 Err(err) => {
@@ -626,7 +658,7 @@ impl TokioEventLoop {
                         } else {
                             // some data got send
                             let slice = PySlice::new(py, n as isize, len as isize, 1);
-                            match data.call_method("__getitem__", (slice,), NoArgs) {
+                            match data.call_method1("__getitem__", (slice,)) {
                                 Ok(data) => {
                                     match wrp_mut.set_item(0, data) {
                                         Ok(_) => future::ok(None),
@@ -673,7 +705,7 @@ impl TokioEventLoop {
         //    _, _, _, _, address = resolved.result()[0]
 
         // try to connect
-        let res = sock.call_method("connect", (address,), NoArgs);
+        let res = sock.call_method1("connect", (address,));
 
         // if connect is blocking, create readiness stream
         let fd = match res {
@@ -710,8 +742,8 @@ impl TokioEventLoop {
                 return future::ok(Some(()))
             }
 
-            let res = sock.call_method(
-                py, "getsockopt", (libc::SOL_SOCKET, libc::SO_ERROR), NoArgs);
+            let res = sock.call_method1(
+                py, "getsockopt", (libc::SOL_SOCKET, libc::SO_ERROR));
 
             match res {
                 Err(err) => {
@@ -788,7 +820,7 @@ impl TokioEventLoop {
             if fut.is_cancelled() {
                 return future::ok(Some(()));
             }
-            let res = sock.call_method(py, "accept", NoArgs, NoArgs);
+            let res = sock.call_method0(py, "accept");
 
             match res {
                 Err(err) => {
@@ -803,7 +835,7 @@ impl TokioEventLoop {
                 }
                 Ok(result) => {
                     if let Ok(result) = PyTuple::try_from(result.as_ref(py)) {
-                        let _ = result.get_item(0).call_method("setblocking", (false,), NoArgs);
+                        let _ = result.get_item(0).call_method1("setblocking", (false,));
                     }
 
                     fut.set(py, Ok(result.into()));
@@ -914,14 +946,14 @@ impl TokioEventLoop {
             } else {
                 let concurrent = py.import("concurrent.futures")?;
                 self.executor = Some(
-                    concurrent.call("ThreadPoolExecutor", NoArgs, NoArgs)?.into());
+                    concurrent.call0("ThreadPoolExecutor")?.into());
                 self.executor.as_ref().unwrap().as_ref(py)
             };
             // submit function
-            executor.call_method("submit", args, NoArgs)?
+            executor.call_method1("submit", args)?
         } else {
             // submit function
-            executor.call_method("submit", args, NoArgs)?
+            executor.call_method1("submit", args)?
         };
 
         // wrap_future
@@ -1068,14 +1100,13 @@ impl TokioEventLoop {
 
     fn connect_read_pipe(&self, py: Python, protocol_factory: PyObject, pipe: PyObject)
                          -> PyResult<Py<PyFuture>> {
-        let protocol = protocol_factory.call(py, NoArgs, NoArgs)?;
+        let protocol = protocol_factory.call0(py)?;
         let waiter = PyFuture::new(py, self.into())?;
 
         // create unix transport
         let cls = Classes.UnixEvents.as_ref(py).get("_UnixReadPipeTransport")?;
-        let transport: PyObject = cls.call(
-            (self, pipe, protocol.clone_ref(py),
-             waiter.clone_ref(py), py.None()), NoArgs)?.into();
+        let transport: PyObject = cls.call1(
+            (self, pipe, protocol.clone_ref(py), waiter.clone_ref(py), py.None()))?.into();
 
         // wait for transport get ready
         let fut = PyFuture::new(py, self.into())?;
@@ -1092,7 +1123,7 @@ impl TokioEventLoop {
                     Ok(res) => match res {
                         Ok(res) => fut.set(py, Ok((transport, protocol).to_object(py))),
                         Err(err) => {
-                            let _ = transport.as_ref(py).call_method("close", NoArgs, NoArgs);
+                            let _ = transport.as_ref(py).call_method0("close");
                             fut.set(py, Err(err));
                         }
                     },
@@ -1108,14 +1139,13 @@ impl TokioEventLoop {
 
     fn connect_write_pipe(&self, py: Python, protocol_factory: &PyObjectRef, pipe: PyObject)
                           -> PyResult<Py<PyFuture>> {
-        let protocol: PyObject = protocol_factory.call(NoArgs, NoArgs)?.into();
+        let protocol: PyObject = protocol_factory.call0()?.into();
         let waiter = PyFuture::new(py, self.into())?;
 
         // create unix transport
         let cls = Classes.UnixEvents.as_ref(py).get("_UnixWritePipeTransport")?;
-        let transport: PyObject = cls.call(
-            (self, pipe, protocol.clone_ref(py),
-             waiter.clone_ref(py), py.None()), NoArgs)?.into();
+        let transport: PyObject = cls.call1(
+            (self, pipe, protocol.clone_ref(py), waiter.clone_ref(py), py.None()))?.into();
 
         // wait for transport get ready
         let fut = PyFuture::new(py, self.into())?;
@@ -1132,7 +1162,7 @@ impl TokioEventLoop {
                     Ok(res) => match res {
                         Ok(res) => fut.set(py, Ok((transport, protocol).to_object(py))),
                         Err(err) => {
-                            let _ = transport.as_ref(py).call_method("close", NoArgs, NoArgs);
+                            let _ = transport.as_ref(py).call_method0("close");
                             fut.set(py, Err(err));
                         }
                     },
@@ -1150,7 +1180,7 @@ impl TokioEventLoop {
     /// subprocess_shell
     ///
     fn _socketpair(&self, py: Python) -> PyResult<PyObject> {
-        Ok(Classes.Socket.as_ref(py).call("socketpair", NoArgs, NoArgs)?.into())
+        Ok(Classes.Socket.as_ref(py).call0("socketpair")?.into())
     }
 
     fn _child_watcher_callback(&self, py: Python, pid: PyObject,
@@ -1250,7 +1280,7 @@ impl TokioEventLoop {
             return Err(exc::ValueError::new("bufsize must be 0"))
         }
 
-        let protocol: PyObject = protocol_factory.call(NoArgs, NoArgs)?.into();
+        let protocol: PyObject = protocol_factory.call0()?.into();
 
         let ev = Classes.UnixEvents.as_ref(py).get("_UnixSelectorEventLoop")?;
         let coro = ev.call_method(
@@ -1376,7 +1406,7 @@ impl TokioEventLoop {
         }
 
         let popen_args = args.split_from(1);
-        let protocol: PyObject = protocol_factory.call(NoArgs, NoArgs)?.into();
+        let protocol: PyObject = protocol_factory.call0()?.into();
 
         let ev = Classes.UnixEvents.as_ref(py).get("_UnixSelectorEventLoop")?;
         let coro = ev.call_method(
@@ -1633,7 +1663,7 @@ impl TokioEventLoop {
             };
 
             // listen
-            sock.call_method("listen", (backlog,), NoArgs)?;
+            sock.call_method1("listen", (backlog,))?;
 
             let fileno = self.get_socket_fd(sock)?;
 
@@ -1844,8 +1874,7 @@ impl TokioEventLoop {
             }
             error!("{}", log);
         } else {
-            let res = self.exception_handler.call(
-                py, (self, context.to_object(py)), NoArgs);
+            let res = self.exception_handler.call1(py, (self, context.to_object(py)));
             if let Err(err) = res {
                 // Exception in the user set custom exception handler.
                 error!(
@@ -2076,7 +2105,7 @@ impl TokioEventLoop {
 
     /// opened sockets only
     fn get_socket_fd(&self, sock: &PyObjectRef) -> PyResult<c_int> {
-        let fileno: c_int = sock.call_method("fileno", NoArgs, NoArgs)?.extract()?;
+        let fileno: c_int = sock.call_method0("fileno")?.extract()?;
         if fileno == -1 {
             Err(exc::OSError::new("Bad file"))
         } else {
@@ -2100,7 +2129,7 @@ impl TokioEventLoop {
     /// check if socket is blocked
     fn is_socket_nonblocking(&self, sock: &PyObjectRef) -> PyResult<()> {
         if self.debug {
-            let timeout = sock.call_method("gettimeout", NoArgs, NoArgs)?;
+            let timeout = sock.call_method0("gettimeout")?;
             if let Ok(timeout) = timeout.extract::<c_int>() {
                 if timeout == 0 {
                     return Ok(())
@@ -2118,7 +2147,7 @@ impl TokioEventLoop {
         let socktype: i32 = sock.getattr("type")?.extract()?;
         let proto: i32 = sock.getattr("proto")?.extract()?;
 
-        let addr = PyTuple::try_from(sock.call_method("getsockname", NoArgs, NoArgs)?)?;
+        let addr = PyTuple::try_from(sock.call_method0("getsockname")?)?;
 
         let sockaddr = if addr.len() == 2 {
             // parse INET
@@ -2181,7 +2210,7 @@ impl TokioEventLoop {
                 }
 
                 // listen
-                sock.call_method("listen", (backlog,), NoArgs)?;
+                sock.call_method1("listen", (backlog,))?;
 
                 // opened sockets only
                 let fileno = self.get_socket_fd(sock)?;

@@ -96,14 +96,14 @@ impl Socket {
 
     fn dup(&mut self, py: Python) -> PyResult<PyObject> {
         if let Some(ref sock) = self.socket {
-            return sock.call_method(py, "dup", NoArgs, NoArgs)
+            return sock.call_method0(py, "dup")
         }
 
         if let Some(fd) = self.fd {
-            let sock = Classes.Socket.as_ref(py).call(
-                "socket", (self.family, self.socktype, self.proto, fd), NoArgs)?;
+            let sock = Classes.Socket.as_ref(py).call1(
+                "socket", (self.family, self.socktype, self.proto, fd))?;
 
-            let res = sock.call_method("dup", NoArgs, NoArgs);
+            let res = sock.call_method0("dup");
             self.socket = Some(sock.into());
             Ok(res?.into())
         } else {

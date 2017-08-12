@@ -437,7 +437,6 @@ def test_set_exc_handler_broken(loop, mock_pattern):
             exc_info=mock.ANY)
 
 
-@pytest.mark.skip(reason='need impl')
 def test_default_exc_handler_broken(loop, mock_pattern):
     logger = logging.getLogger('asyncio')
     _context = None

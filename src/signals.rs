@@ -54,7 +54,8 @@ impl Future for Signals {
                 match msg {
                     SignalsMessage::Add(sig, signal, handler) =>
                         self.add_signal_handler(sig, signal, handler),
-                    SignalsMessage::Remove(sig) => self.remove_signal_handler(sig),
+                    SignalsMessage::Remove(sig) =>
+                        self.remove_signal_handler(sig),
                 }
                 return self.poll()
             },

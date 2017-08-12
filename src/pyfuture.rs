@@ -89,7 +89,7 @@ impl _PyFuture {
 
     fn extract_tb(py: Python, ev: &Py<TokioEventLoop>) -> Option<PyObject> {
         if ev.as_ref(py).is_debug() {
-            match Classes.ExtractStack.call(py, NoArgs, NoArgs) {
+            match Classes.ExtractStack.call0(py) {
                 Ok(tb) => Some(tb),
                 Err(_) => None,
             }
@@ -225,7 +225,7 @@ impl _PyFuture {
             _ => {
                 self.evloop.as_ref(py).schedule_callback(BoxFnOnce::from(move || {
                     let py = GIL::python();
-                    f.call(py, (owner,), NoArgs).into_log(py, "future callback error");
+                    f.call1(py, (owner,)).into_log(py, "future callback error");
                 }));
             },
         }
@@ -343,7 +343,7 @@ impl _PyFuture {
                 // check if exception is a type object
                 let exc =
                     if let Ok(exception) = PyType::try_from_exact(exception) {
-                        Some(exception.call(NoArgs, NoArgs)?)
+                        Some(exception.call0()?)
                     } else {
                         None
                     };
@@ -417,7 +417,7 @@ impl _PyFuture {
                 let py = GIL::python();
                 // call python callback
                 for cb in callbacks.iter() {
-                    cb.call(py, (owner.clone_ref(py),), NoArgs)
+                    cb.call1(py, (owner.clone_ref(py),))
                         .into_log(py, "future done callback error");
                 }
                 py.release(owner);
@@ -470,7 +470,7 @@ impl PyFuture {
     fn __repr__(&self, py: Python) -> PyResult<PyObject> {
         let f: Py<PyFuture> = self.into();
         let repr = Classes.Helpers.as_ref(py)
-            .call("future_repr", ("Future", f), NoArgs)?;
+            .call1("future_repr", ("Future", f))?;
         Ok(repr.into())
     }
 
@@ -485,7 +485,7 @@ impl PyFuture {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
-            let _ = fut.call_method(py, "cancel", NoArgs, NoArgs);
+            let _ = fut.call_method0(py, "cancel");
             py.release(fut);
         }
 
@@ -579,7 +579,7 @@ impl PyFuture {
         // handle wrapped asyncio.Future object
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
-            let _ = fut.call_method(py, "set_result", (result.clone_ref(py),), NoArgs);
+            let _ = fut.call_method1(py, "set_result", (result.clone_ref(py),));
             py.release(fut);
         }
         let ob = self.into();
@@ -597,7 +597,7 @@ impl PyFuture {
         if let Some(fut) = self.pyfut.take() {
             // TODO: add logging for exceptions
             let exc: PyObject = exception.into();
-            let _ = fut.call_method(py, "set_exception", (exc,), NoArgs);
+            let _ = fut.call_method1(py, "set_exception", (exc,));
             py.release(fut);
         }
         let ob = self.into();
@@ -627,7 +627,7 @@ impl PyFuture {
         }
 
         // check fut is cancelled
-        if let Ok(cancelled) = fut.call_method(py, "cancelled", NoArgs, NoArgs) {
+        if let Ok(cancelled) = fut.call_method0(py, "cancelled") {
             if cancelled.is_true(py)? {
                 let ob = self.into();
                 let _ = self.fut.cancel(py, ob);
@@ -636,7 +636,7 @@ impl PyFuture {
         }
 
         // if fut completed with exception
-        if let Ok(exc) = fut.call_method(py, "exception", NoArgs, NoArgs) {
+        if let Ok(exc) = fut.call_method0(py, "exception") {
             if !exc.is_none() {
                 let ob = self.into();
                 return self.fut.set_exception(py, exc.as_ref(py), ob)
@@ -644,7 +644,7 @@ impl PyFuture {
         }
 
         // if fut completed with normal result
-        if let Ok(result) = fut.call_method(py, "result", NoArgs, NoArgs) {
+        if let Ok(result) = fut.call_method0(py, "result") {
             let ob = self.into();
             return self.fut.set_result(py, result, ob);
         }
@@ -790,7 +790,7 @@ impl PyFuture {
         // add done callback to fut
         let f_obj: PyObject = f.clone_ref(py).into();
         let meth = f_obj.getattr(py, "_fut_done")?;
-        fut.call_method("add_done_callback", (meth,), NoArgs)?;
+        fut.call_method1("add_done_callback", (meth,))?;
 
         Ok(f)
     }
@@ -805,10 +805,10 @@ impl PyFuture {
             // TODO: add logging for exceptions
             match result {
                 Ok(ref res) => {
-                    let _ = fut.call_method(py, "set_result", (res,), NoArgs);
+                    let _ = fut.call_method1(py, "set_result", (res,));
                 },
                 Err(ref exc) => {
-                    let _ = fut.call_method(py, "set_exception", (exc,), NoArgs);
+                    let _ = fut.call_method1(py, "set_exception", (exc,));
                 }
             }
         }

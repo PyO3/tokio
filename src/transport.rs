@@ -85,7 +85,7 @@ pub fn tcp_transport_factory<T>(
     }
 
     // create protocol
-    let proto = factory.as_ref(py).call(NoArgs, NoArgs)
+    let proto = factory.as_ref(py).call0()
         .log_error(py, "Protocol factory failure")?;
 
     // create py transport
@@ -289,7 +289,7 @@ impl PyTcpTransportPtr {
             token: token})?;
 
         // connection made
-        let _ = connection_made.call((transport.clone_ref(py),), NoArgs)
+        let _ = connection_made.call1((transport.clone_ref(py),))
             .map_err(|err| {
                 transport.as_mut(py).closing = true;
                 let _ = transport.as_mut(py).transport.send(TcpTransportMessage::Close);
@@ -308,7 +308,7 @@ impl PyTcpTransportPtr {
         self.0.with(|py, transport| {
             transport.evloop.as_ref(py).with(
                 "Protocol.connection_made error",
-                || transport.connection_lost.call(py, (py.None(),), NoArgs))});
+                || transport.connection_lost.call1(py, (py.None(),)))});
     }
 
     pub fn connection_error(&self, err: io::Error) {
@@ -319,13 +319,13 @@ impl PyTcpTransportPtr {
                     trace!("socket.timeout");
                     let e: PyErr = exc::socket::timeout.into();
 
-                    tr.connection_lost.call(py, (e,), NoArgs)
+                    tr.connection_lost.call1(py, (e,))
                         .into_log(py, "connection_lost error");
                 },
                 _ => {
                     trace!("Protocol.connection_lost(err): {:?}", err);
                     let e: PyErr = err.into();
-                    tr.connection_lost.call(py, (e,), NoArgs)
+                    tr.connection_lost.call1(py, (e,))
                         .into_log(py, "connection_lost error");
                 }
             }
@@ -338,7 +338,7 @@ impl PyTcpTransportPtr {
                 "data_received error", || {
                     let bytes = pybytes::PyBytes::new(py, bytes)?;
                     // let bytes = PyBytes::new(py, bytes.as_ref());
-                    tr.data_received.call(py, (bytes,), NoArgs)
+                    tr.data_received.call1(py, (bytes,))
                         .log_error(py, "data_received error")
                 });
             !tr.paused

@@ -34,7 +34,7 @@ impl PyTask {
     fn cancel(&mut self, py: Python) -> PyResult<bool> {
         if !self.fut.done() {
             if let Some(ref waiter) = self.waiter {
-                let _ = waiter.call_method(py, "cancel", NoArgs, NoArgs)?;
+                let _ = waiter.call_method0(py, "cancel")?;
                 return Ok(true);
             }
             self.must_cancel = true;
@@ -288,7 +288,7 @@ impl PyGCProtocol for PyTask {
 impl PyObjectProtocol for PyTask {
     fn __repr__(&self) -> PyResult<PyObject> {
         let ob: PyObject = self.into();
-        Ok(Classes.Helpers.as_ref(self.py()).call("future_repr", ("Task", ob,), NoArgs)?.into())
+        Ok(Classes.Helpers.as_ref(self.py()).call1("future_repr", ("Task", ob,))?.into())
     }
 }
 
@@ -414,8 +414,8 @@ fn task_step(py: Python, task: &mut PyTask, coro: PyObject, exc: Option<PyObject
 
     // call either coro.throw(exc) or coro.send(None).
     let res = match exc {
-        None => coro.call_method(py, "send", (py.None(),), NoArgs),
-        Some(exc) => coro.call_method(py, "throw", (exc,), NoArgs),
+        None => coro.call_method1(py, "send", (py.None(),)),
+        Some(exc) => coro.call_method1(py, "throw", (exc,)),
     };
 
     // handle coroutine result
