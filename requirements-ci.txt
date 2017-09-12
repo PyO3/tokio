@@ -11,5 +11,5 @@ pytest-cov==2.5.1
 pytest-mock==1.6.2
 pytest-timeout==1.2.0
 twine==1.9.1
-uvloop==0.8.0
+uvloop==0.8.1
 -e .
