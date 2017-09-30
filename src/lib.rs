@@ -1,4 +1,5 @@
-#![feature(const_fn, proc_macro, specialization)]
+#![feature(proc_macro, specialization)]
+#![feature(const_fn, const_align_of, const_size_of)]
 #![recursion_limit="1024"]
 
 extern crate mio;
