@@ -182,7 +182,7 @@ def test_create_connection_ssl_1(loop):
         try:
             writer.close()
             sock.close()
-        except:
+        except Exception:
             import traceback
             traceback.print_exc()
 

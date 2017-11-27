@@ -15,7 +15,7 @@ from .test_utils import loop_context, setup_test_loop, teardown_test_loop
 
 try:
     import uvloop
-except:  # pragma: no cover
+except ImportError:  # pragma: no cover
     uvloop = None
 
 
