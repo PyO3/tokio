@@ -24,29 +24,12 @@ mio = "0.6"
 futures = "0.1"
 
 tokio-io = "0.1"
-#tokio-io = { git = "https://github.com/tokio-rs/tokio-io" }
-
 tokio-core = "0.1"
-# tokio-core = { git = "https://github.com/tokio-rs/tokio-core.git" }
-
 tokio-signal = "0.1"
-# tokio-signal = { git = "https://github.com/alexcrichton/tokio-signal.git" }
-
 tokio-uds = "0.1"
-# tokio-uds = { git = "https://github.com/tokio-rs/tokio-uds.git" }
-
-# native-tls = "0.1"
-# tokio-tls = "0.1"
-# backtrace = "0.3"
-
-# [replace]
-# "mio:0.6.9" = { path = '../mio' }
-# "tokio-core:0.1.8" = { path = '../tokio-core' }
 
 [dependencies.pyo3]
-#path = "../pyo3"
-git = "https://github.com/PyO3/pyo3.git"
-#version = "0.2"
+version = "^0.2.3"
 features = ["python3"]
 
 [dev-dependencies]
