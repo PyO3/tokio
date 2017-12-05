@@ -81,54 +81,45 @@ def pytest_pyfunc_call(pyfuncitem):
 
 
 def pytest_configure(config):
-    LOOP_FACTORIES.clear()
-    LOOP_FACTORY_IDS.clear()
-
-    LOOP_FACTORIES.append(asyncio.DefaultEventLoopPolicy)
-    LOOP_FACTORY_IDS.append('pyloop')
-
-    LOOP_FACTORIES2.append(asyncio.DefaultEventLoopPolicy)
-    LOOP_FACTORY_IDS2.append('pyloop')
+    LOOP_FACTORIES = [
+        pytest.param(asyncio.DefaultEventLoopPolicy, id='pyloop'),
+    ]
+    LOOP_FACTORIES2 = [
+        pytest.param(asyncio.DefaultEventLoopPolicy, id='pyloop'),
+    ]
 
     if uvloop is not None:  # pragma: no cover
-        LOOP_FACTORIES.append(uvloop.EventLoopPolicy)
-        LOOP_FACTORY_IDS.append('uvloop')
+        LOOP_FACTORIES.append(
+            pytest.param(uvloop.EventLoopPolicy, id='uvloop'))
 
     if tokio is not None:
-        LOOP_FACTORIES.append(tokio.EventLoopPolicy)
-        LOOP_FACTORY_IDS.append('tokio')
-        LOOP_FACTORIES2.append(tokio.EventLoopPolicy)
-        LOOP_FACTORY_IDS2.append('tokio')
+        LOOP_FACTORIES.append(
+            pytest.param(tokio.EventLoopPolicy, id='tokio'))
+        LOOP_FACTORIES2.append(
+            pytest.param(tokio.EventLoopPolicy, id='tokio'))
 
     asyncio.set_event_loop(None)
 
+    class DynamicFixtures:
 
-LOOP_FACTORIES = []
-LOOP_FACTORY_IDS = []
+        @pytest.fixture(params=LOOP_FACTORIES)
+        def loop(self, request):
+            """Return an instance of the event loop."""
+            with loop_context(request.param, fast=False) as _loop:
+                yield _loop
 
-LOOP_FACTORIES2 = []
-LOOP_FACTORY_IDS2 = []
+        @pytest.fixture(params=LOOP_FACTORIES2)
+        def loop2(self, request):
+            """Return an instance of the event loop."""
+            with loop_context(request.param, fast=False) as _loop:
+                yield _loop
 
-
-@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
-def loop(request):
-    """Return an instance of the event loop."""
-    with loop_context(request.param, fast=False) as _loop:
-        yield _loop
-
-
-@pytest.fixture(params=LOOP_FACTORIES2, ids=LOOP_FACTORY_IDS2)
-def loop2(request):
-    """Return an instance of the event loop."""
-    with loop_context(request.param, fast=False) as _loop:
-        yield _loop
-
-
-@pytest.fixture(params=LOOP_FACTORIES, ids=LOOP_FACTORY_IDS)
-def other_loop(request):
-    """Return an instance of the event loop."""
-    with loop_context(request.param, fast=False) as _loop:
-        yield _loop
+        @pytest.fixture(params=LOOP_FACTORIES)
+        def other_loop(self, request):
+            """Return an instance of the event loop."""
+            with loop_context(request.param, fast=False) as _loop:
+                yield _loop
+    config.pluginmanager.register(DynamicFixtures(), 'event-loop-fixture')
 
 
 @pytest.fixture(params=['current', 'asyncio'])
