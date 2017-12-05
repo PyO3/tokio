@@ -1,5 +1,5 @@
 pip==9.0.1
-setuptools-rust==0.8.2
+setuptools-rust==0.8.3
 flake8==3.5.0
 pyflakes==1.6.0
 sphinx==1.6.5
