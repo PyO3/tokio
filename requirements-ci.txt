@@ -3,7 +3,7 @@ setuptools-rust==0.8.3
 flake8==3.5.0
 pyflakes==1.6.0
 sphinx==1.6.7
-isort==4.2.15
+isort==4.3.4
 sphinxcontrib-asyncio==0.2.0
 sphinxcontrib-newsfeed==0.1.4
 pytest==3.3.2
