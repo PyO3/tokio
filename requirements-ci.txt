@@ -10,6 +10,6 @@ pytest==3.4.1
 pytest-cov==2.5.1
 pytest-mock==1.7.0
 pytest-timeout==1.2.1
-twine==1.9.1
+twine==1.11.0
 uvloop==0.8.1
 -e .
