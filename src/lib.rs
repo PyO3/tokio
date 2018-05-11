@@ -49,7 +49,7 @@ pub use server::create_server;
 pub use client::create_connection;
 
 
-#[py::modinit(_tokio)]
+#[py::modinit("_tokio")]
 /// Asyncio event loop based on tokio-rs
 fn init_async_tokio(py: Python, m: &PyModule) -> PyResult<()> {
     let _ = env_logger::init();
