@@ -29,7 +29,7 @@ tokio-signal = "0.1"
 tokio-uds = "0.1"
 
 [dependencies.pyo3]
-version = "^0.2.3"
+version = "^0.2.6"
 features = ["python3"]
 
 [dev-dependencies]
